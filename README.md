@@ -304,14 +304,39 @@ N migrations found in prisma/migrations
 ✓ Ready in ...ms
 ```
 
-**7. Cargar los datos iniciales.** Sólo la primera vez, desde `panel` → Console:
+**7. Crear las cuentas de acceso.** Sin esto el panel arranca pero **nadie
+puede entrar**: el login responde `CredentialsSignin`, que es lo que devuelve
+el sistema cuando el correo no existe en la base.
+
+Desde `panel` → Console:
 
 ```bash
-node /opt/prisma-cli/node_modules/prisma/build/index.js db seed --schema backend/prisma/schema.prisma
+node scripts/crear-usuarios.mjs
 ```
 
-> El seed trae 30 pacientes y 600 citas de ejemplo. Para una clínica real
-> sáltatelo y crea sólo el usuario administrador.
+Crea las tres cuentas de la sección 1. Es **idempotente**: ejecutarlo otra vez
+no duplica nada — actualiza la contraseña, desbloquea la cuenta y cierra las
+sesiones abiertas. Sirve igual para el primer arranque que para recuperar el
+acceso cuando alguien olvide su clave.
+
+Para poner tus propias credenciales desde el principio:
+
+```bash
+ADMIN_EMAIL="tu@correo.com" \
+ADMIN_PASSWORD="una-contraseña-larga" \
+ADMIN_NAME="Tu Nombre" \
+  node scripts/crear-usuarios.mjs
+```
+
+Acepta lo mismo con los prefijos `ASSISTANT_` y `DENTIST_`, y `*_PHONE` para
+el WhatsApp del personal — es lo que permite al bot reconocer quién le
+escribe. Mínimo 12 caracteres; con menos, el script se niega.
+
+> **`npm run db:seed` no funciona en el servidor.** Ese seed está en
+> TypeScript y necesita `tsx`, que es dependencia de desarrollo y no viaja a
+> la imagen de producción. Además carga 30 pacientes y 600 citas de mentira,
+> que en un servidor real hay que limpiar después. Para datos de demostración,
+> úsalo en local.
 
 **8. Comprobar:**
 
@@ -327,6 +352,7 @@ Y entra al panel con las credenciales de la sección 1.
 |---|---|
 | El contenedor reinicia en bucle | Las migraciones fallan: falta `btree_gist`, o `DATABASE_URL` apunta mal |
 | `Variables de entorno inválidas` en los logs | Falta una variable, o un secreto tiene menos de 32 caracteres |
+| `CredentialsSignin` en los logs al iniciar sesión | La base no tiene usuarios. Ejecuta el paso 7 |
 | Entras al login, metes la clave y vuelve al login | Estás entrando por `http://`. En producción la cookie de sesión es `__Secure-` y **sólo viaja por HTTPS** — es a propósito. Activa el certificado |
 | n8n recibe `401` del panel | El `AUTOMATION_HMAC_SECRET` no es idéntico en los dos, o el reloj del servidor está desfasado más de 300 s |
 | El bot no responde a nadie | Mira el monitor: si el chat tiene la IA apagada, es correcto que calle |

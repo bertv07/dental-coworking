@@ -94,6 +94,11 @@ WORKDIR /app
 # El esquema y las migraciones: es lo que el CLI necesita leer.
 COPY --from=builder --chown=nextjs:nodejs /app/backend/prisma ./backend/prisma
 
+# Scripts de operación. Van en JavaScript plano a propósito: el seed original
+# es TypeScript y necesita `tsx`, que es dependencia de desarrollo y no está
+# en esta imagen. Éstos sólo usan lo que la aplicación ya lleva dentro.
+COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+
 USER nextjs
 EXPOSE 3000
 
