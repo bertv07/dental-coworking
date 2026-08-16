@@ -1,0 +1,23 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Secretos — jamás versionar
+.env
+.env.local
+.env.*.local
+
+# Prisma
+backend/prisma/*.db
+backend/prisma/*.db-journal
+
+# Tooling
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+npm-debug.log*
+yarn-error.log*
+.vercel
+coverage/

@@ -1,0 +1,6 @@
+Carpeta de archivos estáticos servidos tal cual desde la raíz del sitio
+(favicon, logotipos, robots.txt).
+
+Existe aunque esté vacía porque el Dockerfile la copia a la imagen: sin ella,
+el build falla en el `COPY`. Git no versiona carpetas vacías, de ahí este
+archivo.

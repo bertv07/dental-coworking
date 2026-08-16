@@ -1,0 +1,904 @@
+// ===========================================================================
+//  DENTAL COWORKING — Esquema de base de datos
+// ===========================================================================
+//  Convenciones de todo el esquema:
+//
+//  1. DINERO: todos los montos son `Int` en CENTAVOS DE DÓLAR (USD).
+//     Nunca Float/Double. Un precio de $25,50 se guarda como 2550.
+//
+//     ¿POR QUÉ USD Y NO BOLÍVARES?
+//     Venezuela tiene inflación alta y el tipo de cambio se mueve a diario.
+//     Si la lista de precios estuviera en Bs habría que reescribirla entera
+//     cada semana. Se guarda en USD (unidad estable) y se MUESTRA en Bs
+//     convertido a la tasa BCV del momento.
+//
+//     Cada `Payment` guarda además el monto en Bs Y LA TASA usada. Ese
+//     snapshot es lo que hace que la contabilidad histórica siga siendo
+//     correcta cuando la tasa cambie mañana.
+//     Ver `backend/src/domain/money.ts` y `services/exchange-rate.service.ts`.
+//
+//  2. TIEMPO: todo `DateTime` es `@db.Timestamptz(3)` (con zona horaria, ms).
+//     Se guarda SIEMPRE en UTC; la conversión a la zona de la clínica ocurre
+//     en la capa de presentación. Un servidor que cambia de región no debe
+//     poder mover las citas ya agendadas.
+//
+//  3. BORRADO: las entidades con valor clínico o contable NO se borran
+//     físicamente (`deletedAt`). Un paciente borrado arrastraría su historial
+//     de citas y pagos, y eso rompe la contabilidad y la historia clínica.
+//
+//  4. SNAPSHOT: `Payment` congela precio y porcentajes al momento del cobro.
+//     Si mañana subes el precio de la ortodoncia o cambias la comisión de un
+//     odontólogo, los pagos históricos NO deben recalcularse.
+// ===========================================================================
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================================================
+//  ENUMS
+// ===========================================================================
+
+/// Roles del sistema. La autorización se evalúa SIEMPRE en el servidor
+/// (ver `backend/src/auth/guards.ts`); el rol en el cliente es solo cosmético.
+enum UserRole {
+  SUPER_ADMIN // Acceso total: finanzas, personal, precios, monitor de WhatsApp
+  ASSISTANT   // Operativo: agenda y pacientes. Sin acceso a finanzas globales
+  DENTIST     // Solo su propia agenda y sus propias liquidaciones
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED // Bloqueado por el admin; conserva historial
+}
+
+enum AppointmentStatus {
+  PENDING     // Creada por el bot, aún sin confirmar por el paciente
+  CONFIRMED   // Confirmada
+  IN_PROGRESS // Paciente en el consultorio
+  COMPLETED   // Atendida → habilita el cobro
+  CANCELLED   // Cancelada con aviso
+  NO_SHOW     // El paciente no llegó
+}
+
+/// Quién originó la cita. Clave para medir el desempeño real del bot.
+enum AppointmentSource {
+  WHATSAPP_AI // Agendada automáticamente por la IA
+  ADMIN_PANEL // Creada a mano desde el panel
+  PHONE_CALL
+  WALK_IN
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  TRANSFER
+  INSURANCE
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+/// Estado de la liquidación al odontólogo (el 60%).
+enum PayoutStatus {
+  ACCRUED // Devengado: la clínica lo debe pero aún no lo ha pagado
+  PAID    // Ya transferido al odontólogo
+  ON_HOLD // Retenido (disputa, ajuste pendiente)
+}
+
+enum MessageDirection {
+  INBOUND  // Paciente → clínica
+  OUTBOUND // Clínica → paciente
+}
+
+/// Quién escribió un mensaje saliente. Permite auditar qué dijo la IA
+/// frente a qué dijo un humano.
+/// Estado de entrega de un mensaje saliente.
+enum WhatsAppDeliveryStatus {
+  PENDING /// Guardado, pendiente de que el proveedor lo entregue
+  SENT    /// Entregado al proveedor correctamente
+  FAILED  /// El proveedor lo rechazó; `deliveryError` explica por qué
+}
+
+enum MessageAuthor {
+  PATIENT
+  AI_BOT
+  HUMAN_AGENT
+  SYSTEM // Notificaciones automáticas (recordatorios, etc.)
+}
+
+// ===========================================================================
+//  IDENTIDAD Y ACCESO
+// ===========================================================================
+
+/// Cuenta de acceso al panel. Separada de `Dentist` a propósito: no todos los
+/// odontólogos necesitan login, y un admin no es un odontólogo.
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  /// Hash Argon2id. NUNCA la contraseña en claro.
+  /// El campo se excluye explícitamente en cada `select` de la capa de datos.
+  passwordHash String
+  fullName     String
+  role         UserRole   @default(ASSISTANT)
+
+  /// Teléfono de WhatsApp del personal, en E.164.
+  ///
+  /// Existe para que el bot sepa CON QUIÉN habla. Sin este dato, un mensaje
+  /// de la asistente preguntando "¿a qué hora entra mañana la Dra. Ferreira?"
+  /// se atendería como si fuera un paciente pidiendo cita.
+  ///
+  /// Único cuando está presente: dos cuentas con el mismo número harían
+  /// ambigua esa identificación.
+  phoneE164 String? @unique
+  status       UserStatus @default(ACTIVE)
+
+  // --- Controles anti fuerza bruta -----------------------------------------
+  /// Intentos fallidos consecutivos. Se resetea en cada login exitoso.
+  failedLoginAttempts Int       @default(0)
+  /// Si está en el futuro, el login se rechaza sin siquiera verificar el hash.
+  lockedUntil         DateTime? @db.Timestamptz(3)
+  lastLoginAt         DateTime? @db.Timestamptz(3)
+
+  /// Fuerza el cierre de todas las sesiones activas: si el JWT fue emitido
+  /// antes de esta marca, se considera inválido. Se actualiza al cambiar
+  /// contraseña o al suspender la cuenta.
+  sessionsValidFrom DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Perfil de odontólogo, si esta cuenta pertenece a uno.
+  dentist Dentist?
+
+  auditLogs AuditLog[]
+  /// Arqueos de caja firmados por esta persona.
+  cashClosings CashClosing[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([role, status])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+/// Registro inmutable de acciones sensibles (cambios de precio, borrados,
+/// apagado de la IA, liquidaciones). Solo INSERT: jamás UPDATE ni DELETE.
+model AuditLog {
+  id     String  @id @default(cuid())
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  /// Verbo en formato `recurso.accion`, ej: "treatment.price_updated".
+  action String
+  /// Tipo y id de la entidad afectada, ej: ("Treatment", "clx123").
+  entityType String
+  entityId   String
+
+  /// Estado antes y después del cambio. `Json` permite auditar cualquier
+  /// entidad sin una tabla por tipo.
+  before Json?
+  after  Json?
+
+  /// Contexto de la petición para investigación forense.
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([entityType, entityId])
+  @@index([userId, createdAt])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// Credencial para sistemas externos (n8n, bot de WhatsApp).
+/// Se guarda solo el HASH de la llave, igual que una contraseña.
+model AutomationApiKey {
+  id    String @id @default(cuid())
+  /// Nombre legible, ej: "n8n - flujo de agendamiento".
+  label String
+  /// Prefijo público (primeros 8 caracteres) para identificar la llave en
+  /// la UI y en logs sin exponer el secreto completo.
+  keyPrefix String @unique
+  /// SHA-256 del secreto completo. La llave en claro se muestra UNA sola vez.
+  keyHash   String
+
+  /// Permisos granulares, ej: ["availability:read", "appointment:create"].
+  /// Principio de menor privilegio: el flujo que consulta disponibilidad no
+  /// debería poder reportar pagos.
+  scopes String[]
+
+  revokedAt  DateTime? @db.Timestamptz(3)
+  expiresAt  DateTime? @db.Timestamptz(3)
+  lastUsedAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([revokedAt])
+  @@map("automation_api_keys")
+}
+
+// ===========================================================================
+//  ESTRUCTURA FÍSICA Y PERSONAL
+// ===========================================================================
+
+/// Consultorio físico. La clínica tiene 3.
+/// Es un recurso escaso: dos citas no pueden solaparse en el mismo consultorio.
+model Room {
+  id   String @id @default(cuid())
+  name String @unique // "Consultorio 1"
+  /// Código corto para la UI y para los mensajes del bot.
+  code String @unique // "C1"
+
+  /// Equipamiento disponible. Permite reglas del tipo "la ortodoncia requiere
+  /// panorámico" sin cambiar el esquema.
+  equipment String[]
+
+  isActive Boolean @default(true)
+  notes    String?
+
+  appointments Appointment[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([isActive])
+  @@map("rooms")
+}
+
+/// Odontólogo. La clínica tiene 12.
+model Dentist {
+  id String @id @default(cuid())
+
+  /// Cuenta de acceso opcional (1-a-1). Un odontólogo puede existir en el
+  /// sistema sin poder entrar al panel.
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  fullName String
+  /// Registro profesional / licencia. Único para evitar duplicados.
+  licenseNumber String  @unique
+  email         String  @unique
+  phone         String
+  photoUrl      String?
+
+  /// Especialidades, ej: ["ORTODONCIA", "ENDODONCIA"].
+  specialties String[]
+
+  // --- Reglas económicas ---------------------------------------------------
+  /// Porcentaje que se lleva la clínica de lo que produce este odontólogo.
+  /// Default 40 (→ el odontólogo recibe 60). Es por-odontólogo porque en la
+  /// práctica siempre acaba negociándose caso por caso.
+  /// Se valida 0..100 con un CHECK constraint (ver migración 0001).
+  clinicCommissionPercent Int @default(40)
+
+  isActive Boolean @default(true)
+
+  schedules     DentistSchedule[]
+  timeOff       TimeOff[]
+  appointments  Appointment[]
+  payouts       DentistPayout[]
+  treatments    DentistTreatment[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([isActive, deletedAt])
+  @@map("dentists")
+}
+
+/// Horario semanal recurrente de un odontólogo.
+/// El bot lo consulta para saber qué proponer al paciente.
+model DentistSchedule {
+  id        String  @id @default(cuid())
+  dentistId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+
+  /// 0 = domingo … 6 = sábado (compatible con `Date.getDay()` de JS).
+  weekday Int
+
+  /// Minutos desde medianoche en la zona horaria de la clínica.
+  /// Guardar minutos en vez de DateTime evita el infierno del horario de
+  /// verano en horarios recurrentes: "09:00" siempre significa 540.
+  startMinute Int // 540  → 09:00
+  endMinute   Int // 1080 → 18:00
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  /// Un odontólogo no puede tener dos bloques idénticos el mismo día.
+  @@unique([dentistId, weekday, startMinute])
+  @@index([dentistId, weekday])
+  @@map("dentist_schedules")
+}
+
+/// Ausencia puntual: vacaciones, congreso, incapacidad.
+/// Tiene prioridad sobre `DentistSchedule` al calcular disponibilidad.
+model TimeOff {
+  id        String  @id @default(cuid())
+  dentistId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt   DateTime @db.Timestamptz(3)
+  reason   String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([dentistId, startsAt, endsAt])
+  @@map("time_off")
+}
+
+// ===========================================================================
+//  PACIENTES
+// ===========================================================================
+
+model Patient {
+  id       String  @id @default(cuid())
+  fullName String
+
+  /// Teléfono en E.164 (+573001234567). ÚNICO y en formato normalizado:
+  /// es la llave natural con la que llega el bot de WhatsApp. Sin
+  /// normalización acabas con el mismo paciente duplicado 4 veces.
+  phoneE164 String @unique
+
+  email       String?
+  documentId  String? @unique // Cédula / identificación
+  birthDate   DateTime? @db.Date
+  notes       String?
+
+  /// Consentimiento explícito para mensajería automatizada (habeas data).
+  /// Sin esto, el bot no debe iniciar conversación.
+  marketingConsent   Boolean   @default(false)
+  consentGrantedAt   DateTime? @db.Timestamptz(3)
+
+  appointments  Appointment[]
+  conversations WhatsAppConversation[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  /// Borrado lógico: preserva el historial clínico y contable.
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([fullName])
+  @@index([deletedAt])
+  @@map("patients")
+}
+
+// ===========================================================================
+//  CATÁLOGO DE TRATAMIENTOS
+// ===========================================================================
+
+model Treatment {
+  id   String @id @default(cuid())
+  name String @unique // "Ortodoncia - control mensual"
+  /// Código estable para que las automatizaciones no dependan del nombre.
+  code String @unique // "ORTHO_CTRL"
+
+  description String?
+  category    String  // "ORTODONCIA" | "PREVENTIVO" | "ENDODONCIA" | ...
+
+  /// Precio de lista en CENTAVOS. Ver nota (1) al inicio del archivo.
+  basePriceCents Int
+
+  /// Duración estándar en minutos. El motor de disponibilidad la usa para
+  /// calcular el `endsAt` de la cita.
+  durationMinutes Int
+
+  /// Minutos de limpieza/preparación entre citas de este tipo.
+  /// Se suman al bloqueo del consultorio pero no se le cobran al paciente.
+  bufferMinutes Int @default(10)
+
+  isActive Boolean @default(true)
+
+  appointments     Appointment[]
+  priceHistory     TreatmentPriceHistory[]
+  dentistOverrides DentistTreatment[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([category, isActive])
+  @@map("treatments")
+}
+
+/// Historial de precios. Cada cambio desde el panel de "Configuración de
+/// Precios" inserta una fila. Permite responder "¿cuánto costaba la limpieza
+/// en marzo?" sin adivinar.
+model TreatmentPriceHistory {
+  id          String    @id @default(cuid())
+  treatmentId String
+  treatment   Treatment @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
+
+  oldPriceCents Int
+  newPriceCents Int
+  /// Quién lo cambió (id de User). Sin FK dura para no bloquear el borrado
+  /// de usuarios; la trazabilidad completa vive en `AuditLog`.
+  changedByUserId String?
+  reason          String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([treatmentId, createdAt])
+  @@map("treatment_price_history")
+}
+
+/// Tabla puente: qué tratamientos hace cada odontólogo, con precio y comisión
+/// opcionalmente distintos a los de la lista general.
+model DentistTreatment {
+  id          String    @id @default(cuid())
+  dentistId   String
+  dentist     Dentist   @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+  treatmentId String
+  treatment   Treatment @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
+
+  /// Si es null, se usa `Treatment.basePriceCents`.
+  customPriceCents Int?
+  /// Si es null, se usa `Dentist.clinicCommissionPercent`.
+  customCommissionPercent Int?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([dentistId, treatmentId])
+  @@map("dentist_treatments")
+}
+
+// ===========================================================================
+//  AGENDA
+// ===========================================================================
+
+/// Cita. Núcleo del sistema: la crea el bot de WhatsApp o el panel.
+///
+/// INTEGRIDAD CRÍTICA — doble reserva:
+/// Prisma no puede expresar constraints de exclusión, así que la garantía
+/// real vive en SQL (migración `0001_booking_constraints`):
+///   - EXCLUDE USING gist sobre (roomId, tstzrange(startsAt, endsAt))
+///   - EXCLUDE USING gist sobre (dentistId, tstzrange(startsAt, endsAt))
+/// La validación en la capa de servicio es la primera línea de defensa; el
+/// constraint de Postgres es la que de verdad no se puede burlar bajo
+/// concurrencia (dos requests simultáneos del bot pidiendo el mismo hueco).
+model Appointment {
+  id String @id @default(cuid())
+
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id])
+
+  dentistId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id])
+
+  roomId String
+  room   Room   @relation(fields: [roomId], references: [id])
+
+  treatmentId String
+  treatment   Treatment @relation(fields: [treatmentId], references: [id])
+
+  /// Inicio y fin en UTC. `endsAt` se calcula en el servidor a partir de
+  /// `Treatment.durationMinutes` — NUNCA se acepta del cliente, o el bot
+  /// podría agendar una cita de 5 minutos para un tratamiento de 60.
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt   DateTime @db.Timestamptz(3)
+
+  status AppointmentStatus @default(PENDING)
+  source AppointmentSource @default(WHATSAPP_AI)
+
+  /// Precio pactado en CENTAVOS, congelado al agendar. Si el admin sube el
+  /// precio mañana, esta cita mantiene el que se le prometió al paciente.
+  agreedPriceCents Int
+
+  notes           String?
+  cancellationReason String?
+
+  /// Idempotencia: n8n reintenta ante timeouts de red. Si el bot manda dos
+  /// veces la misma petición con la misma llave, la segunda devuelve la cita
+  /// ya creada en vez de duplicarla.
+  idempotencyKey String? @unique
+
+  payment Payment?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  /// Índices orientados a las consultas reales del sistema:
+  @@index([dentistId, startsAt]) // agenda de un odontólogo
+  @@index([roomId, startsAt])    // ocupación de un consultorio
+  @@index([patientId, startsAt]) // historial del paciente
+  @@index([status, startsAt])    // "citas de hoy pendientes"
+  @@index([startsAt])            // rango del dashboard financiero
+  @@map("appointments")
+}
+
+// ===========================================================================
+//  DINERO
+// ===========================================================================
+
+/// Pago de una cita. Aquí se congela el reparto 40/60.
+model Payment {
+  id String @id @default(cuid())
+
+  /// 1-a-1 con la cita: un pago por cita. Para planes de tratamiento en
+  /// cuotas, la evolución natural es un modelo `Installment` que apunte aquí.
+  appointmentId String      @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id])
+
+  /// Total cobrado al paciente, en CENTAVOS DE DÓLAR.
+  amountCents Int
+
+  // --- Snapshot cambiario ------------------------------------------------
+  /// Tasa Bs/USD aplicada en ESTE cobro. Se congela: si mañana el BCV
+  /// publica otra, este pago conserva la que se usó realmente.
+  exchangeRate Decimal @db.Decimal(18, 4)
+  /// Monto equivalente en bolívares al momento del cobro. Se guarda además
+  /// de calcularse porque el redondeo a Bs es el importe que de verdad
+  /// entró en caja, y recalcularlo después daría un número distinto.
+  amountBs Decimal @db.Decimal(18, 2)
+  /// Fuente de la tasa: "BCV" o "PARALELO".
+  exchangeRateSource String @default("BCV")
+
+  // --- Snapshot del reparto (ver nota 4 al inicio) -------------------------
+  /// Porcentaje aplicado en ESTE pago. Copiado del odontólogo al cobrar.
+  commissionPercentApplied Int
+  /// Parte de la clínica, en centavos. Calculado en el servidor.
+  clinicShareCents  Int
+  /// Parte del odontólogo, en centavos.
+  /// INVARIANTE: clinicShareCents + dentistShareCents == amountCents.
+  /// Garantizado por `splitCents()` y por un CHECK constraint en SQL.
+  dentistShareCents Int
+
+  method PaymentMethod
+
+  /// Etiqueta del medio concreto usado ("Pago móvil Banesco"), copiada del
+  /// catálogo en el momento del cobro.
+  ///
+  /// Se COPIA en vez de referenciar por id a propósito: si mañana la clínica
+  /// borra ese medio o le cambia el nombre, el cobro de ayer debe seguir
+  /// diciendo cómo se pagó. Mismo criterio que con el precio y la tasa.
+  methodLabel String?
+
+  status PaymentStatus @default(PENDING)
+
+  /// Referencia del proveedor externo (pasarela, voucher, transferencia).
+  externalReference String?
+
+  paidAt DateTime? @db.Timestamptz(3)
+
+  /// Idempotencia para el endpoint de reporte de pagos desde n8n.
+  idempotencyKey String? @unique
+
+  /// Liquidación en la que se incluyó la parte del odontólogo.
+  payoutId String?
+  payout   DentistPayout? @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([status, paidAt])
+  @@index([paidAt]) // agregaciones del dashboard financiero
+  @@index([payoutId])
+  @@map("payments")
+}
+
+/// Liquidación periódica al odontólogo: agrupa los `Payment` de un periodo
+/// y refleja lo que la clínica le debe (el 60%).
+model DentistPayout {
+  id        String  @id @default(cuid())
+  dentistId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id])
+
+  /// Periodo liquidado (normalmente quincenal o mensual).
+  periodStart DateTime @db.Timestamptz(3)
+  periodEnd   DateTime @db.Timestamptz(3)
+
+  /// Suma de `dentistShareCents` de los pagos incluidos. Se recalcula desde
+  /// los pagos: nunca se edita a mano.
+  totalCents Int
+
+  status PayoutStatus @default(ACCRUED)
+  paidAt DateTime?    @db.Timestamptz(3)
+  notes  String?
+
+  payments Payment[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([dentistId, periodStart, periodEnd])
+  @@index([status])
+  @@map("dentist_payouts")
+}
+
+// ===========================================================================
+//  WHATSAPP / IA
+// ===========================================================================
+
+/// Hilo de conversación con un número de WhatsApp.
+model WhatsAppConversation {
+  id String @id @default(cuid())
+
+  /// Número del contacto en E.164. Único: un hilo por número.
+  phoneE164 String @unique
+
+  /// El paciente puede no existir todavía (primer contacto anónimo).
+  patientId String?
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  /// Nombre que reporta WhatsApp, cuando aún no hay paciente creado.
+  displayName String?
+
+  // --- Control de la IA ----------------------------------------------------
+  /// EL TOGGLE. Cuando es false, la automatización debe callarse y dejar
+  /// que responda un humano. El webhook entrante consulta este campo ANTES
+  /// de generar cualquier respuesta.
+  aiEnabled Boolean @default(true)
+
+  /// Quién y cuándo apagó/encendió la IA. Sin esto, nadie sabe por qué el
+  /// bot lleva tres días mudo en un chat.
+  aiToggledByUserId String?
+  aiToggledAt       DateTime? @db.Timestamptz(3)
+  aiDisabledReason  String?
+
+  /// Contador de mensajes sin responder por un humano: alimenta el badge
+  /// "requiere atención" del monitor.
+  unreadCount Int @default(0)
+
+  /// Marca para escalamiento manual (la IA no supo qué contestar).
+  needsHumanAttention Boolean @default(false)
+
+  lastMessageAt DateTime? @db.Timestamptz(3)
+
+  messages WhatsAppMessage[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  /// Orden natural del monitor: lo más reciente arriba.
+  @@index([lastMessageAt(sort: Desc)])
+  @@index([needsHumanAttention, lastMessageAt])
+  @@index([aiEnabled])
+  @@map("whatsapp_conversations")
+}
+
+model WhatsAppMessage {
+  id             String               @id @default(cuid())
+  conversationId String
+  conversation   WhatsAppConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  direction MessageDirection
+  author    MessageAuthor
+
+  /// Cuerpo del mensaje. Se guarda EN CRUDO tal como llegó — el escapado es
+  /// responsabilidad de la capa de render (React escapa por defecto).
+  /// Sanitizar al guardar destruye evidencia y no aporta seguridad real.
+  body String
+
+  /// Adjuntos (imágenes de radiografías, notas de voz).
+  mediaUrl  String?
+  mediaType String?
+
+  /// ID del mensaje en la API de WhatsApp. Único → deduplica los reintentos
+  /// de webhook, que Meta hace agresivamente.
+  externalMessageId String? @unique
+
+  // --- Entrega de mensajes SALIENTES ---------------------------------------
+  /// Estado de envío hacia WhatsApp. Sólo aplica a OUTBOUND.
+  ///
+  /// Se guarda porque persistir el mensaje y entregarlo son dos cosas
+  /// distintas: el mensaje se registra siempre, pero la entrega depende de un
+  /// proveedor externo que puede fallar. Sin este campo, un fallo de entrega
+  /// sería invisible y el agente creería que respondió.
+  deliveryStatus WhatsAppDeliveryStatus @default(SENT)
+
+  /// Motivo del fallo, para diagnosticar sin abrir los logs.
+  deliveryError String?
+
+  /// Usuario que lo escribió, cuando lo envió un humano desde el panel.
+  sentByUserId String?
+
+  /// Metadatos de la IA: modelo usado, intención detectada, tokens.
+  /// `Json` para poder iterar el bot sin migrar la DB en cada cambio.
+  aiMetadata Json?
+
+  /// Momento real del mensaje según WhatsApp (puede diferir del insert).
+  sentAt DateTime @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([conversationId, sentAt])
+  @@map("whatsapp_messages")
+}
+
+
+// ===========================================================================
+//  TIPO DE CAMBIO
+// ===========================================================================
+
+/// Histórico de tasas Bs/USD consultadas a DolarAPI.
+///
+/// Se persiste en vez de pedirla en cada render por tres motivos:
+///  1. Si DolarAPI está caído, el sistema sigue operando con la última tasa
+///     conocida en lugar de quedarse sin poder cobrar.
+///  2. Permite auditar con qué tasa se cobró cada día.
+///  3. Evita golpear una API externa en cada carga de página.
+model ExchangeRate {
+  id String @id @default(cuid())
+
+  /// "BCV" (oficial) o "PARALELO". La clínica factura a BCV.
+  source String
+
+  /// Bolívares por dólar. `Decimal` y no `Float`: es un factor que
+  /// multiplica dinero y un error de coma flotante se propaga a cada importe.
+  rate Decimal @db.Decimal(18, 4)
+
+  /// Fecha de actualización que reporta la fuente (no la de nuestra consulta).
+  publishedAt DateTime @db.Timestamptz(3)
+
+  /// Cuándo lo trajimos nosotros.
+  fetchedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Marca la tasa vigente de cada fuente. Sólo una activa por fuente.
+  isCurrent Boolean @default(true)
+
+  @@index([source, isCurrent])
+  @@index([source, publishedAt(sort: Desc)])
+  @@map("exchange_rates")
+}
+
+// ===========================================================================
+//  AJUSTES DE LA CLÍNICA
+// ===========================================================================
+
+/// Configuración editable desde el panel.
+///
+/// Fila ÚNICA (`id` fijo = "singleton"). Se modela como tabla y no como
+/// variables de entorno porque son decisiones de NEGOCIO que el
+/// administrador debe poder cambiar sin desplegar: el horario, la comisión
+/// por defecto, los datos fiscales.
+///
+/// Lo que NO vive aquí y sigue en el entorno: secretos, cadenas de conexión
+/// y llaves de API. Eso es infraestructura, no negocio.
+model ClinicSettings {
+  id String @id @default("singleton")
+
+  /// Datos que aparecen en informes y comprobantes.
+  clinicName String @default("Dental Coworking")
+  taxId      String? // RIF
+  address    String?
+  phone      String?
+  email      String?
+
+  /// Comisión por defecto de la clínica (%). Cada odontólogo puede tener la
+  /// suya; ésta es la que se aplica a los nuevos.
+  defaultCommissionPercent Int @default(40)
+
+  /// Jornada, en minutos desde medianoche (hora local de la clínica).
+  openingMinute Int @default(480)  // 08:00
+  closingMinute Int @default(1080) // 18:00
+
+  /// Granularidad de la agenda en minutos.
+  slotMinutes Int @default(30)
+
+  /// Moneda en la que se MUESTRAN los importes por defecto: "USD" o "VES".
+  displayCurrency String @default("USD")
+
+  /// Fuente de tasa preferida para convertir a bolívares.
+  preferredRateSource String @default("BCV")
+
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+  updatedByUserId String?
+
+  @@map("clinic_settings")
+}
+
+/// ===========================================================================
+///  CIERRE DE CAJA
+/// ===========================================================================
+///  El arqueo del día: recepción cuenta el efectivo que hay en la gaveta y el
+///  sistema lo compara con lo que dicen los cobros registrados.
+///
+///  POR QUÉ EXISTE ESTA TABLA
+///  El desglose por medio de pago ya se puede calcular sumando `Payment`. Lo
+///  que NO se puede reconstruir después es lo que se contó a mano y la
+///  diferencia que hubo: si al final del martes faltaban 300 Bs, eso hay que
+///  guardarlo cuando ocurre. Un informe que se recalcula siempre da cuadrado
+///  por definición y no sirve para detectar un descuadre.
+///
+///  El día se guarda como texto 'YYYY-MM-DD' en hora de la clínica, no como
+///  `DateTime`: "el martes" es un concepto de calendario, y guardarlo como
+///  instante obliga a decidir qué hora es "el martes" y a reinterpretarlo en
+///  cada consulta.
+model CashClosing {
+  id String @id @default(cuid())
+
+  /// Día cerrado, 'YYYY-MM-DD' en la zona horaria de la clínica.
+  businessDate String @db.VarChar(10)
+
+  closedByUserId String
+  closedBy       User   @relation(fields: [closedByUserId], references: [id])
+  closedAt       DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Totales según los cobros registrados en ese día.
+  expectedCents Int
+  expectedBs    Decimal @db.Decimal(18, 2)
+  paymentCount  Int
+
+  /// Sólo la parte en efectivo: es la única que se puede contar físicamente.
+  /// Tarjeta y transferencia se concilian con el banco, no con la gaveta.
+  expectedCashBs Decimal @db.Decimal(18, 2)
+  countedCashBs  Decimal @db.Decimal(18, 2)
+  /// contado − esperado. Positivo = sobra dinero; negativo = falta.
+  differenceBs   Decimal @db.Decimal(18, 2)
+
+  notes String?
+
+  /// Un día se cierra UNA vez. Reabrir es una operación explícita del
+  /// administrador, no un segundo cierre que deje dos versiones del arqueo.
+  @@unique([businessDate])
+  @@index([closedAt])
+  @@map("cash_closings")
+}
+
+/// ===========================================================================
+///  MEDIOS DE PAGO CONFIGURABLES
+/// ===========================================================================
+///  Las formas concretas en que la clínica acepta dinero, con los datos que
+///  hay que darle al paciente: banco, teléfono de pago móvil, correo de Zelle.
+///
+///  POR QUÉ NO BASTA CON EL ENUM `PaymentMethod`
+///  Ese enum tiene cuatro valores y es CONTABLE: sirve para cuadrar la caja
+///  (efectivo se cuenta, tarjeta se concilia con el banco). Pero "TRANSFER" no
+///  le dice nada a un paciente que pregunta cómo pagar — necesita el número de
+///  cuenta. Y una clínica venezolana suele tener pago móvil de dos bancos,
+///  Zelle y efectivo en divisas, que contablemente son dos o tres categorías
+///  pero para el paciente son cuatro instrucciones distintas.
+///
+///  POR QUÉ ESTÁ EN LA BASE Y NO EN EL PROMPT DEL BOT
+///  Porque cambia. Si la clínica cambia de banco y el número está escrito en
+///  el flujo de n8n, el bot manda a los pacientes a una cuenta ajena hasta que
+///  alguien se acuerde de editarlo. Aquí lo cambia el administrador y el bot
+///  lo lee en la siguiente conversación.
+model PaymentMethodOption {
+  id String @id @default(cuid())
+
+  /// Lo que ve el paciente: "Pago móvil Banesco", "Zelle", "Efectivo".
+  label String
+
+  /// A qué categoría contable pertenece. Es lo que se guarda en el `Payment`
+  /// y lo que agrupa el cierre de caja.
+  kind PaymentMethod
+
+  /// Los datos que el bot le dicta al paciente. Texto libre a propósito: cada
+  /// medio necesita campos distintos y una tabla de columnas fijas obligaría a
+  /// dejar la mitad vacías.
+  instructions String?
+
+  /// "VES" o "USD". Un Zelle se paga en dólares aunque el precio se muestre
+  /// en bolívares, y decirlo evita la mitad de las preguntas.
+  currency String @default("VES")
+
+  /// Orden en el que se ofrecen. El primero es el que la clínica prefiere.
+  sortOrder Int @default(0)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([isActive, sortOrder])
+  @@map("payment_method_options")
+}

@@ -1,0 +1,14 @@
+# Todo lo que no debe entrar en la imagen — ni siquiera en la etapa de build,
+# porque `COPY . .` lo llevaría a una capa intermedia que queda registrada.
+
+node_modules
+.next
+.git
+.env
+.env.local
+.env.*.local
+docs
+*.md
+!README.md
+npm-debug.log*
+.DS_Store

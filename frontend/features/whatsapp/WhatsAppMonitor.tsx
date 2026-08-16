@@ -1,0 +1,466 @@
+'use client';
+
+import { useState, useTransition, useOptimistic } from 'react';
+import type { ConversationListItem, WhatsAppMessage } from '@/backend/domain/types';
+import {
+  toggleConversationAiAction,
+  sendWhatsAppMessageAction,
+} from '@/app/actions/whatsapp.actions';
+import { Badge, EmptyState, Notice } from '@/frontend/components/ui/primitives';
+
+/**
+ * ===========================================================================
+ *  Monitor de WhatsApp — interfaz
+ * ===========================================================================
+ *  Componente de CLIENTE: necesita estado local (chat seleccionado) e
+ *  interactividad (el toggle de la IA).
+ *
+ *  Es de los pocos componentes `'use client'` del proyecto. El resto del
+ *  panel se renderiza en el servidor; aquí el JavaScript se paga porque
+ *  aporta algo real.
+ * ===========================================================================
+ */
+
+interface WhatsAppMonitorProps {
+  conversations: ConversationListItem[];
+  initialConversationId: string | null;
+  initialMessages: WhatsAppMessage[];
+  /** `false` si falta WHATSAPP_OUTBOUND_WEBHOOK_URL: se avisa en la UI. */
+  outboundConfigured: boolean;
+}
+
+/** Límite de WhatsApp para mensajes de texto. */
+const MAX_MESSAGE_LENGTH = 4096;
+
+const AUTHOR_LABEL: Record<string, string> = {
+  PATIENT: 'Paciente',
+  AI_BOT: '🤖 IA',
+  HUMAN_AGENT: '👤 Agente',
+  SYSTEM: 'Sistema',
+};
+
+/** "hace 3 min", "hace 2 h", "hace 5 d". */
+function formatRelativeTime(date: Date | null): string {
+  if (!date) return '—';
+
+  const diffMinutes = Math.round((Date.now() - date.getTime()) / 60_000);
+  if (diffMinutes < 1) return 'ahora';
+  if (diffMinutes < 60) return `hace ${diffMinutes} min`;
+
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `hace ${diffHours} h`;
+
+  return `hace ${Math.round(diffHours / 24)} d`;
+}
+
+function formatTime(date: Date): string {
+  return new Intl.DateTimeFormat('es-VE', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'America/Caracas',
+  }).format(date);
+}
+
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('');
+}
+
+export function WhatsAppMonitor({
+  conversations,
+  initialConversationId,
+  initialMessages,
+  outboundConfigured,
+}: WhatsAppMonitorProps) {
+  const [selectedId, setSelectedId] = useState(initialConversationId);
+  const [messages, setMessages] = useState(initialMessages);
+  const [isPending, startTransition] = useTransition();
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // --- Estado del compositor ---------------------------------------------
+  const [draft, setDraft] = useState('');
+  const [isSending, setIsSending] = useState(false);
+  const [sendWarning, setSendWarning] = useState<string | null>(null);
+
+  /**
+   * Estado optimista del toggle.
+   *
+   * `useOptimistic` pinta el cambio de inmediato y React lo revierte solo si
+   * la Server Action falla. Sin esto, el interruptor se quedaría "pegado"
+   * durante el viaje al servidor y daría sensación de que no respondió.
+   */
+  const [optimisticConversations, setOptimisticAi] = useOptimistic(
+    conversations,
+    (current, update: { id: string; aiEnabled: boolean }) =>
+      current.map((conversation) =>
+        conversation.id === update.id
+          ? { ...conversation, aiEnabled: update.aiEnabled }
+          : conversation,
+      ),
+  );
+
+  const selected = optimisticConversations.find(
+    (conversation) => conversation.id === selectedId,
+  );
+
+  /** Carga los mensajes del chat elegido. */
+  function handleSelect(conversationId: string) {
+    setSelectedId(conversationId);
+    setErrorMessage(null);
+    // El borrador es de ESTE chat: arrastrarlo a otro provocaría enviarle a
+    // un paciente lo que se estaba escribiendo para otro.
+    setDraft('');
+    setSendWarning(null);
+
+    startTransition(async () => {
+      const response = await fetch(`/api/whatsapp/conversations/${conversationId}/messages`);
+      if (!response.ok) {
+        setErrorMessage('No se pudieron cargar los mensajes');
+        return;
+      }
+      const payload = await response.json();
+      // Las fechas viajan como string en JSON: hay que rehidratarlas a `Date`.
+      setMessages(
+        payload.data.messages.map((message: WhatsAppMessage) => ({
+          ...message,
+          sentAt: new Date(message.sentAt),
+        })),
+      );
+    });
+  }
+
+  /** EL TOGGLE: apaga o enciende la IA en el chat seleccionado. */
+  function handleToggleAi(conversation: ConversationListItem) {
+    const nextEnabled = !conversation.aiEnabled;
+    setErrorMessage(null);
+
+    // Al APAGAR se pide motivo. El servidor lo exige igualmente (`toggleAiSchema`);
+    // preguntarlo aquí es sólo para no provocar un error evitable.
+    let reason: string | undefined;
+    if (!nextEnabled) {
+      const input = window.prompt(
+        '¿Por qué desactivas la IA en este chat?\n(Queda registrado en la auditoría)',
+      );
+      // `null` = el usuario canceló el diálogo → no se hace nada.
+      if (input === null) return;
+      reason = input.trim() || 'Sin motivo especificado';
+    }
+
+    startTransition(async () => {
+      setOptimisticAi({ id: conversation.id, aiEnabled: nextEnabled });
+
+      const result = await toggleConversationAiAction({
+        conversationId: conversation.id,
+        aiEnabled: nextEnabled,
+        reason,
+      });
+
+      // Si falla, React revierte el estado optimista automáticamente al
+      // terminar la transición. Sólo hay que mostrar el motivo.
+      if (!result.ok) {
+        setErrorMessage(result.error ?? 'No se pudo cambiar el estado de la IA');
+      }
+    });
+  }
+
+  /**
+   * Envía el mensaje escrito por el agente.
+   *
+   * Tras enviar se RECARGA el hilo desde el servidor en vez de añadir el
+   * mensaje a mano al estado local: así se ve su estado de entrega real
+   * (entregado / falló) en lugar de una copia optimista que siempre parece
+   * correcta.
+   */
+  async function sendMessage() {
+    const body = draft.trim();
+    if (!body || !selectedId || isSending) return;
+
+    setIsSending(true);
+    setErrorMessage(null);
+    setSendWarning(null);
+
+    const result = await sendWhatsAppMessageAction({ conversationId: selectedId, body });
+
+    if (!result.ok) {
+      setErrorMessage(result.error ?? 'No se pudo enviar el mensaje');
+      setIsSending(false);
+      return;
+    }
+
+    // Se guardó: se limpia el borrador aunque la entrega haya fallado, porque
+    // el mensaje YA está en el historial y reenviarlo lo duplicaría.
+    setDraft('');
+    if (result.warning) setSendWarning(result.warning);
+
+    const response = await fetch(`/api/whatsapp/conversations/${selectedId}/messages`);
+    if (response.ok) {
+      const payload = await response.json();
+      setMessages(
+        payload.data.messages.map((message: WhatsAppMessage) => ({
+          ...message,
+          sentAt: new Date(message.sentAt),
+        })),
+      );
+    }
+
+    setIsSending(false);
+  }
+
+  /** Enter envía; Shift+Enter hace salto de línea, como en WhatsApp. */
+  function onComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      void sendMessage();
+    }
+  }
+
+  return (
+    <div className="whatsapp-layout">
+      {/* ---------------- Lista de conversaciones ---------------- */}
+      <div className="card">
+        <div className="card__header">
+          <div>
+            <h2 className="card__title">Conversaciones</h2>
+            <p className="card__subtitle">{optimisticConversations.length} activas</p>
+          </div>
+        </div>
+
+        <div className="conversation-list">
+          {optimisticConversations.length === 0 ? (
+            <EmptyState>No hay conversaciones.</EmptyState>
+          ) : (
+            optimisticConversations.map((conversation) => (
+              <button
+                key={conversation.id}
+                type="button"
+                className={`conversation-item ${
+                  conversation.id === selectedId ? 'conversation-item--active' : ''
+                }`}
+                onClick={() => handleSelect(conversation.id)}
+                aria-current={conversation.id === selectedId ? 'true' : undefined}
+              >
+                <div className="conversation-item__avatar" aria-hidden="true">
+                  {getInitials(conversation.patientName ?? conversation.phoneE164)}
+                </div>
+
+                <div className="conversation-item__content">
+                  <div className="conversation-item__top">
+                    <span className="conversation-item__name">
+                      {conversation.patientName ?? conversation.phoneE164}
+                    </span>
+                    <span className="conversation-item__time">
+                      {formatRelativeTime(conversation.lastMessageAt)}
+                    </span>
+                  </div>
+
+                  <p className="conversation-item__preview">
+                    {conversation.lastMessageAuthor === 'AI_BOT' && '🤖 '}
+                    {conversation.lastMessagePreview ?? 'Sin mensajes'}
+                  </p>
+
+                  <div className="conversation-item__tags">
+                    {/* El estado de la IA, visible sin abrir el chat. */}
+                    {conversation.aiEnabled ? (
+                      <Badge tone="success">IA activa</Badge>
+                    ) : (
+                      <Badge tone="danger">IA apagada</Badge>
+                    )}
+
+                    {conversation.needsHumanAttention && (
+                      <Badge tone="warning">Requiere atención</Badge>
+                    )}
+
+                    {conversation.unreadCount > 0 && (
+                      <Badge tone="info">{conversation.unreadCount} sin leer</Badge>
+                    )}
+                  </div>
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* ---------------- Hilo del chat ---------------- */}
+      <div className="card">
+        {!selected ? (
+          <EmptyState>Selecciona una conversación para ver el historial.</EmptyState>
+        ) : (
+          <div className="chat">
+            <div className="chat__header">
+              <div>
+                <h2 className="card__title">
+                  {selected.patientName ?? selected.phoneE164}
+                </h2>
+                <p className="card__subtitle mono">{selected.phoneE164}</p>
+              </div>
+
+              {/* ============================================================
+                  TOGGLE APAGAR / ENCENDER IA
+                  ============================================================
+                  Es un <input type="checkbox"> real, visualmente oculto pero
+                  presente en el DOM. Así el lector de pantalla lo anuncia
+                  como interruptor y el teclado lo alcanza con Tab — cosa que
+                  un <div onClick> no consigue.
+              */}
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  className="toggle__input"
+                  checked={selected.aiEnabled}
+                  disabled={isPending}
+                  onChange={() => handleToggleAi(selected)}
+                />
+                <span
+                  className={`toggle__track ${selected.aiEnabled ? 'toggle__track--on' : ''}`}
+                  aria-hidden="true"
+                >
+                  <span className="toggle__thumb" />
+                </span>
+                <span className="toggle__label">
+                  {selected.aiEnabled ? 'IA activa' : 'IA apagada'}
+                </span>
+              </label>
+            </div>
+
+            {/* Avisos contextuales */}
+            <div style={{ padding: '0 1.5rem', paddingTop: '1rem' }}>
+              {errorMessage && <Notice tone="warning">{errorMessage}</Notice>}
+
+              {!selected.aiEnabled && (
+                <Notice tone="warning">
+                  La IA está desactivada en este chat. Los mensajes del paciente NO
+                  reciben respuesta automática.
+                  {selected.aiDisabledReason && (
+                    <>
+                      {' '}
+                      Motivo: <strong>{selected.aiDisabledReason}</strong>
+                    </>
+                  )}
+                </Notice>
+              )}
+
+              {selected.needsHumanAttention && selected.aiEnabled && (
+                <Notice tone="info">
+                  La IA marcó esta conversación como pendiente de revisión humana.
+                </Notice>
+              )}
+            </div>
+
+            {/* Historial de mensajes */}
+            <div className="chat__messages">
+              {messages.length === 0 ? (
+                <EmptyState>Sin mensajes en esta conversación.</EmptyState>
+              ) : (
+                messages.map((message) => (
+                  <div
+                    key={message.id}
+                    className={`message message--${message.direction.toLowerCase()} ${
+                      message.author === 'SYSTEM' ? 'message--system' : ''
+                    }`}
+                  >
+                    {/*
+                      El cuerpo se interpola como texto: React lo escapa.
+                      NUNCA `dangerouslySetInnerHTML` aquí — el contenido viene
+                      de un tercero (el paciente) y es el vector de XSS más
+                      evidente de toda la aplicación.
+                      Los saltos de línea se conservan con `white-space: pre-wrap`.
+                    */}
+                    <div className="message__bubble">{message.body}</div>
+
+                    <div className="message__meta">
+                      <span>{AUTHOR_LABEL[message.author] ?? message.author}</span>
+                      <span>·</span>
+                      <span>{formatTime(message.sentAt)}</span>
+
+                      {/* Estado de entrega, sólo en los salientes. Un mensaje
+                          que no salió DEBE verse: si no, el agente cree que
+                          respondió y el paciente sigue esperando. */}
+                      {message.direction === 'OUTBOUND' &&
+                        message.deliveryStatus === 'FAILED' && (
+                          <>
+                            <span>·</span>
+                            <span style={{ color: 'var(--color-danger)', fontWeight: 600 }}>
+                              ⚠ no entregado
+                            </span>
+                          </>
+                        )}
+                      {message.direction === 'OUTBOUND' &&
+                        message.deliveryStatus === 'PENDING' && (
+                          <>
+                            <span>·</span>
+                            <span style={{ color: 'var(--color-warning)' }}>pendiente</span>
+                          </>
+                        )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* ============================================================
+                COMPOSITOR — responder desde el panel
+                ============================================================
+                Sin esto, apagar la IA dejaba el chat mudo: nadie podía
+                contestar. El toggle sólo tiene sentido si un humano puede
+                tomar el relevo.
+            */}
+            <div className="composer">
+              {sendWarning && <Notice tone="warning">{sendWarning}</Notice>}
+
+              {!outboundConfigured && (
+                <Notice tone="info">
+                  La salida a WhatsApp no está configurada
+                  (<code className="mono">WHATSAPP_OUTBOUND_WEBHOOK_URL</code>). Los mensajes
+                  se guardan en el historial pero no llegan al paciente.
+                </Notice>
+              )}
+
+              <div className="composer__row">
+                <textarea
+                  className="composer__input"
+                  placeholder={
+                    selected.aiEnabled
+                      ? 'Escribe para tomar la conversación (esto apagará la IA)…'
+                      : 'Escribe tu respuesta…'
+                  }
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value.slice(0, MAX_MESSAGE_LENGTH))}
+                  onKeyDown={onComposerKeyDown}
+                  disabled={isSending}
+                  rows={2}
+                  aria-label="Escribir mensaje"
+                />
+                <button
+                  type="button"
+                  className="btn btn--primary composer__send"
+                  onClick={() => void sendMessage()}
+                  disabled={isSending || draft.trim().length === 0}
+                >
+                  {isSending ? 'Enviando…' : 'Enviar'}
+                </button>
+              </div>
+
+              <div className="composer__hint">
+                <span>
+                  Enter envía · Shift+Enter salto de línea
+                  {selected.aiEnabled && ' · al escribir, la IA se apaga automáticamente'}
+                </span>
+                {draft.length > MAX_MESSAGE_LENGTH - 500 && (
+                  <span className={draft.length >= MAX_MESSAGE_LENGTH ? 'composer__count--limit' : ''}>
+                    {draft.length}/{MAX_MESSAGE_LENGTH}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

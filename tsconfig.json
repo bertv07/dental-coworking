@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": false,
+    "skipLibCheck": true,
+    "strict": true,
+    // `noUncheckedIndexedAccess` obliga a validar accesos por índice.
+    // En un sistema que maneja dinero y horarios, evita clases enteras de bugs.
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+    "incremental": true,
+    "plugins": [{ "name": "next" }],
+    // ------------------------------------------------------------------
+    // Alias de rutas: hacen explícita la frontera frontend / backend.
+    // Regla del proyecto: `@/frontend/*` NUNCA debe importar `@/backend/*`
+    // salvo tipos (`import type`). El código de servidor entra a la UI
+    // únicamente como props serializadas desde un Server Component.
+    // ------------------------------------------------------------------
+    "baseUrl": ".",
+    "paths": {
+      "@/backend/*": ["./backend/src/*"],
+      "@/frontend/*": ["./frontend/*"],
+      "@/app/*": ["./app/*"]
+    }
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
+  "exclude": ["node_modules"]
+}
