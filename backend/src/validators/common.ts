@@ -102,8 +102,43 @@ export const centsSchema = z
   .min(0, 'El monto no puede ser negativo')
   .max(1_000_000_000_00, 'Monto fuera de rango');
 
-/** Porcentaje de comisión. */
-export const percentSchema = z.number().int().min(0).max(100);
+/**
+ * Porcentaje de comisión (0-100).
+ *
+ * ---------------------------------------------------------------------------
+ *  POR QUÉ LLEVA `preprocess` Y NO ES UN `z.number()` A SECAS
+ * ---------------------------------------------------------------------------
+ *  Lo consumen formularios HTML, y un `<form>` manda TODO como texto: el
+ *  campo de comisión llega como `"40"`, nunca como `40`. Con `z.number()` a
+ *  secas, guardar un odontólogo fallaba siempre con
+ *  «Expected number, received string».
+ *
+ *  Tampoco vale `z.coerce.number()` sin más: un campo vacío se convierte en
+ *  `0`, y eso significaría guardar en silencio una comisión del 0 % — es
+ *  decir, regalar el 100 % al odontólogo sin que nadie viera un error.
+ *  Aquí el vacío se convierte en `undefined` para que salte «campo
+ *  obligatorio», que es lo que de verdad ocurrió.
+ *
+ *  Un número real pasa intacto, así que sirve igual si algún día lo consume
+ *  un endpoint JSON.
+ * ---------------------------------------------------------------------------
+ */
+export const percentSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== 'string') return value;
+    const trimmed = value.trim();
+    // Vacío → `undefined`: error de campo obligatorio, no un 0 silencioso.
+    return trimmed === '' ? undefined : Number(trimmed);
+  },
+  z
+    .number({
+      required_error: 'Indica el porcentaje de comisión',
+      invalid_type_error: 'El porcentaje debe ser un número',
+    })
+    .int('El porcentaje debe ser un número entero')
+    .min(0, 'El porcentaje no puede ser negativo')
+    .max(100, 'El porcentaje no puede pasar de 100'),
+);
 
 /**
  * Llave de idempotencia para las peticiones de la automatización.
