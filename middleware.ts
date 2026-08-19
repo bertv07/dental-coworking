@@ -110,17 +110,6 @@ export function middleware(request: NextRequest) {
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-request-id', crypto.randomUUID());
 
-  /*
-   * La ruta pedida, para que los layouts puedan saber dónde está el usuario.
-   *
-   * Un layout de App Router no recibe el pathname: se renderiza igual para
-   * todas sus rutas hijas. El layout del panel lo necesita para dejar pasar
-   * `/cambiar-clave` cuando obliga a cambiar la clave temporal — sin esto, la
-   * redirección se aplicaría también sobre la propia pantalla de cambio y
-   * daría un bucle.
-   */
-  requestHeaders.set('x-pathname', pathname);
-
   return NextResponse.next({ request: { headers: requestHeaders } });
 }
 

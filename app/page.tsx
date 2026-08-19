@@ -37,5 +37,15 @@ export default async function HomePage() {
   // esto cubre el caso de una cookie presente pero inválida.
   if (!user) redirect('/login');
 
+  /*
+   * Clave temporal sin cambiar: se aterriza en el cambio de contraseña, no en
+   * la pantalla del rol.
+   *
+   * Va AQUÍ y no en el layout del panel porque aquí es donde cae el login, y
+   * porque una redirección lanzada desde un layout durante esa misma
+   * navegación deja el árbol vacío — la pantalla se veía en blanco.
+   */
+  if (user.mustChangePassword) redirect('/cambiar-clave');
+
   redirect(LANDING_BY_ROLE[user.role]);
 }
