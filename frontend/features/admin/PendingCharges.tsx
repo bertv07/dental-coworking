@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import type { AppointmentWithRelations, PaymentMethodOption } from '@/backend/domain/types';
 import { formatCents } from '@/backend/domain/money';
+import { totalCitaCents } from '@/backend/domain/pricing';
 import { Card, Badge, EmptyState } from '@/frontend/components/ui/primitives';
 import { IconCurrency } from '@/frontend/components/ui/icons';
 import { PaymentModal } from '@/frontend/features/admin/PaymentModal';
@@ -88,7 +89,15 @@ export function PendingCharges({
                 </div>
 
                 <div className="row" style={{ gap: '0.75rem', alignItems: 'center' }}>
-                  <span className="mono text-sm">{formatCents(appointment.agreedPriceCents)}</span>
+                  {/*
+                    Lo que falta por cobrar es la cita MÁS lo que se le añadió
+                    en consulta. Enseñar sólo el precio agendado haría creer
+                    que quedan $30 por cobrar cuando en realidad son $40, y el
+                    arqueo no cuadraría al final del día.
+                  */}
+                  <span className="mono text-sm">
+                    {formatCents(totalCitaCents(appointment))}
+                  </span>
                   <button
                     type="button"
                     className="btn btn--primary btn--sm"

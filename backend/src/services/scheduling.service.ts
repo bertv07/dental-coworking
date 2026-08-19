@@ -131,6 +131,7 @@ export async function scheduleAppointment(
     startsAt,
     roomBlockedUntil,
     input.roomId,
+    dentist.id,
   );
   if (!room) {
     return {
@@ -179,16 +180,34 @@ async function findFirstAvailableDentist(
  * Primer consultorio libre. Si se pidió uno concreto, se comprueba sólo ese
  * — respetar la preferencia importa cuando el tratamiento requiere el
  * equipamiento de una sala específica.
+ *
+ * Con `dentistId`, el consultorio FIJO de esa persona se prueba primero.
+ * «Algunos consultorios son fijos y algunos no»: quien tiene el suyo deja
+ * ahí su instrumental y espera encontrarlo ahí.
+ *
+ * Es una preferencia, no un candado — si su sala está ocupada se le da otra.
+ * Bloquearlo dejaría el consultorio vacío los días que su dueño no viene,
+ * justo lo contrario de lo que quiere un coworking.
  */
 async function findFirstAvailableRoom(
   rooms: Room[],
   startsAt: Date,
   blockedUntil: Date,
   preferredRoomId?: string,
+  dentistId?: string,
 ): Promise<Room | undefined> {
   const candidates = preferredRoomId
     ? rooms.filter((room) => room.id === preferredRoomId)
-    : rooms;
+    : /*
+       * Su sala primero, el resto después. `sort` con un comparador que sólo
+       * distingue "es suya" de "no lo es" mantiene el orden relativo del
+       * resto, así que los rotativos se siguen repartiendo como antes.
+       */
+      [...rooms].sort((a, b) => {
+        const aEsSuya = dentistId != null && a.assignedDentistId === dentistId;
+        const bEsSuya = dentistId != null && b.assignedDentistId === dentistId;
+        return Number(bEsSuya) - Number(aEsSuya);
+      });
 
   for (const room of candidates) {
     const conflicts = await repository.findOverlappingAppointments({
@@ -307,6 +326,8 @@ export async function findAvailableSlots(params: {
         rooms,
         startsAt,
         new Date(startsAt.getTime() + blockMs),
+        undefined,
+        dentist.id,
       );
       if (!room) continue;
 

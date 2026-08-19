@@ -36,6 +36,18 @@ export default async function DentistsPage() {
   const earningsByDentist: Record<string, DentistEarnings | undefined> = {};
   for (const row of earnings) earningsByDentist[row.dentistId] = row;
 
+  /*
+   * Especialidades ya en uso, para sugerirlas al escribir.
+   *
+   * Salen de los datos y no de una lista fija: mañana entra un
+   * maxilofacial y nadie debería tener que tocar código. Lo que se evita es
+   * que convivan «CIRUGÍA ORAL» y «cirujano» como valores distintos, porque
+   * el bot enruta al especialista por este campo.
+   */
+  const knownSpecialties = [
+    ...new Set(dentists.flatMap((dentist) => dentist.specialties)),
+  ].sort();
+
   const activeCount = dentists.filter((dentist) => dentist.isActive).length;
   const totalOutstanding = earnings.reduce((sum, row) => sum + row.outstandingCents, 0);
   const totalProduction = earnings.reduce((sum, row) => sum + row.grossCents, 0);
@@ -100,7 +112,11 @@ export default async function DentistsPage() {
       </Stagger>
 
       <FadeIn delay={0.12}>
-        <DentistsManager dentists={dentists} earningsByDentist={earningsByDentist} />
+        <DentistsManager
+          dentists={dentists}
+          earningsByDentist={earningsByDentist}
+          knownSpecialties={knownSpecialties}
+        />
       </FadeIn>
     </div>
   );

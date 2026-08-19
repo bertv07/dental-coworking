@@ -10,6 +10,7 @@ import type {
   Treatment,
 } from '@/backend/domain/types';
 import { formatCents } from '@/backend/domain/money';
+import { totalCitaCents } from '@/backend/domain/pricing';
 import {
   createAppointmentAction,
   updateAppointmentAction,
@@ -31,8 +32,9 @@ import {
   AppointmentStatusBadge,
   SourceBadge,
 } from '@/frontend/components/ui/primitives';
-import { IconEdit, IconPlus, IconCurrency } from '@/frontend/components/ui/icons';
+import { IconEdit, IconPlus, IconCurrency, IconTooth } from '@/frontend/components/ui/icons';
 import { PaymentModal } from '@/frontend/features/admin/PaymentModal';
+import { AddonsModal } from '@/frontend/features/admin/AddonsModal';
 
 /**
  * ===========================================================================
@@ -122,6 +124,18 @@ export function AgendaManager({
   const [statusError, setStatusError] = useState<string | null>(null);
   /** Cita que se está cobrando, o `null` si el modal está cerrado. */
   const [payingFor, setPayingFor] = useState<AppointmentWithRelations | null>(null);
+  /**
+   * Cita a la que se le están añadiendo procedimientos, por ID.
+   *
+   * Se guarda el id y no el objeto a propósito: al añadir un procedimiento el
+   * servidor revalida `/agenda` y llegan `appointments` nuevos. Un objeto
+   * capturado en el estado seguiría siendo el de antes, así que el modal
+   * mostraría la lista sin lo que se acaba de añadir. Con el id se vuelve a
+   * leer de la fuente en cada render.
+   */
+  const [addonsForId, setAddonsForId] = useState<string | null>(null);
+  const editingAddonsFor =
+    appointments.find((appointment) => appointment.id === addonsForId) ?? null;
 
   // `Set` para que la comprobación por fila sea O(1) en vez de recorrer el
   // array completo en cada una de las 80 citas.
@@ -244,7 +258,19 @@ export function AgendaManager({
                           <AppointmentStatusBadge status={appointment.status} />
                         </td>
                         <td className="table__num mono" data-label="Valor">
-                          {formatCents(appointment.agreedPriceCents)}
+                          {formatCents(totalCitaCents(appointment))}
+                          {/*
+                            Si la consulta añadió cosas, el importe de la fila
+                            deja de ser el precio de la cita. Se dice de dónde
+                            sale: un número que no cuadra con lo agendado y no
+                            se explica parece un error de tarifa.
+                          */}
+                          {appointment.addons.length > 0 && (
+                            <div className="text-xs subtle">
+                              +{appointment.addons.length}{' '}
+                              {appointment.addons.length === 1 ? 'añadido' : 'añadidos'}
+                            </div>
+                          )}
                         </td>
                         <td data-label="Acciones">
                           <div className="table__actions">
@@ -298,6 +324,29 @@ export function AgendaManager({
                               <Badge tone="success">Cobrada</Badge>
                             )}
 
+                            {/*
+                              Añadir procedimientos: se ofrece en las citas que
+                              se están atendiendo o ya se atendieron, que es
+                              cuando aparece el trabajo extra. En una cita
+                              cancelada no hay nada que añadir.
+
+                              Sigue visible en las cobradas, en modo lectura:
+                              es la única forma de ver por qué el importe no
+                              coincide con lo que se agendó.
+                            */}
+                            {['CONFIRMED', 'IN_PROGRESS', 'COMPLETED'].includes(
+                              appointment.status,
+                            ) && (
+                              <button
+                                type="button"
+                                className="btn btn--ghost btn--sm"
+                                onClick={() => setAddonsForId(appointment.id)}
+                                aria-label={`Procedimientos de la cita de ${appointment.patient.fullName}`}
+                              >
+                                <IconTooth size={14} />
+                              </button>
+                            )}
+
                             <button
                               type="button"
                               className="btn btn--ghost btn--sm"
@@ -317,6 +366,13 @@ export function AgendaManager({
           </Card>
         ))
       )}
+
+      <AddonsModal
+        appointment={editingAddonsFor}
+        treatments={treatments}
+        isPaid={editingAddonsFor ? paidIds.has(editingAddonsFor.id) : false}
+        onClose={() => setAddonsForId(null)}
+      />
 
       <PaymentModal
         appointment={payingFor}

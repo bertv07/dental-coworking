@@ -1,6 +1,7 @@
 import 'server-only';
 import { redirect } from 'next/navigation';
 import { auth } from '@/backend/auth/auth.config';
+import { repository } from '@/backend/repositories';
 import type { UserRole } from '@/backend/domain/types';
 
 /**
@@ -20,6 +21,13 @@ export interface AuthenticatedUser {
   email: string;
   name: string;
   role: UserRole;
+  /**
+   * La cuenta entró con una clave temporal y todavía no la ha cambiado.
+   *
+   * El layout lo usa para mandar a `/cambiar-clave` y no dejar navegar a otro
+   * sitio hasta que se resuelva.
+   */
+  mustChangePassword: boolean;
 }
 
 /**
@@ -44,11 +52,43 @@ export async function getCurrentUser(): Promise<AuthenticatedUser | null> {
   const session = await auth();
   if (!session?.user?.id) return null;
 
+  /*
+   * El token está FIRMADO, no vigente.
+   *
+   * Que la firma cuadre sólo demuestra que este servidor emitió el token en
+   * algún momento; no dice nada de lo que ha pasado desde entonces. Una
+   * cuenta suspendida hace diez minutos, o una contraseña cambiada desde otro
+   * dispositivo, siguen teniendo un token perfectamente válido en el bolsillo
+   * de quien lo tenga.
+   *
+   * Por eso se contrasta contra la base en cada petición autenticada. Es una
+   * lectura por clave primaria: en un panel de clínica el coste es
+   * irrelevante al lado de dejar viva una sesión que se quiso cerrar.
+   */
+  const account = await repository.getAccountState(session.user.id);
+
+  // La cuenta ya no existe, se borró o se suspendió: la sesión deja de valer.
+  if (!account || account.deletedAt !== null || account.status !== 'ACTIVE') {
+    return null;
+  }
+
+  /*
+   * Revocación por marca de tiempo. `sessionsValidFrom` se adelanta al
+   * cambiar la contraseña, así que cualquier token emitido ANTES de ese
+   * instante queda invalidado de golpe — que es justo el punto de cambiarla.
+   *
+   * Se compara en milisegundos porque en el token viaja como número.
+   */
+  if (account.sessionsValidFrom.getTime() > session.user.sessionsValidFrom) {
+    return null;
+  }
+
   return {
     id: session.user.id,
     email: session.user.email,
     name: session.user.name,
     role: session.user.role,
+    mustChangePassword: account.mustChangePassword,
   };
 }
 

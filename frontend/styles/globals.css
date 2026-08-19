@@ -2478,3 +2478,413 @@ a {
     align-items: stretch;
   }
 }
+
+/* --------------------------------------------------------------------------
+   13. EXPEDIENTE CLÍNICO IMPRIMIBLE
+   --------------------------------------------------------------------------
+   La misma plantilla sirve para la pantalla y para el papel. Lo que cambia lo
+   resuelve `@media print` al final de la sección: no hay una segunda
+   plantilla que pueda desincronizarse de ésta.
+
+   Medidas pensadas en milímetros de A4, no en píxeles de pantalla: lo que se
+   diseña es una hoja.
+   -------------------------------------------------------------------------- */
+
+.expediente-body {
+  background: var(--color-canvas);
+}
+
+.exp__acciones {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.exp {
+  background: #fff;
+  color: #14161c;
+  max-width: 210mm;
+  margin: 0 auto;
+  padding: 14mm 15mm;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  font-size: 10.5pt;
+  line-height: 1.45;
+}
+
+.exp__cabecera {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: 3mm;
+  border-bottom: 2px solid #14161c;
+}
+
+.exp__titulo {
+  font-size: 16pt;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.exp__clinica {
+  font-size: 9pt;
+  color: #5a6470;
+  margin: 1mm 0 0;
+}
+
+.exp__fecha {
+  text-align: right;
+  font-size: 9pt;
+}
+
+.exp__fecha span {
+  display: block;
+  color: #5a6470;
+}
+
+.exp__seccion {
+  margin-top: 6mm;
+  /* Una sección no debe partirse entre dos hojas: un odontograma cortado por
+     la mitad no sirve de nada. */
+  break-inside: avoid;
+}
+
+.exp__h2 {
+  font-size: 9pt;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #5a6470;
+  margin: 0 0 2mm;
+  padding-bottom: 1mm;
+  border-bottom: 1px solid #c9ced6;
+}
+
+.exp__campos {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 3mm 4mm;
+}
+
+.exp__campo--ancho { grid-column: span 2; }
+
+.exp__campo span {
+  display: block;
+  font-size: 8pt;
+  color: #5a6470;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.exp__campo strong {
+  font-weight: 600;
+  border-bottom: 1px solid #c9ced6;
+  display: block;
+  padding-bottom: 1mm;
+  min-height: 6mm;
+}
+
+.exp__campo--bloque {
+  margin-top: 3mm;
+  grid-column: 1 / -1;
+}
+
+.exp__checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2mm 6mm;
+  margin-bottom: 3mm;
+}
+
+.exp__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 2mm;
+  font-size: 9.5pt;
+}
+
+/* Casilla cuadrada: se marca con bolígrafo en el impreso y lleva una ✕
+   cuando ya está transcrita. */
+.exp__box {
+  width: 4mm;
+  height: 4mm;
+  border: 1px solid #14161c;
+  display: inline-grid;
+  place-items: center;
+  font-size: 8pt;
+  font-style: normal;
+  line-height: 1;
+}
+
+.exp__box--on { font-weight: 700; }
+
+/* Renglones para escribir a mano. */
+.renglones {
+  display: flex;
+  flex-direction: column;
+  gap: 5mm;
+  padding-top: 2mm;
+}
+
+.renglon {
+  display: block;
+  border-bottom: 1px solid #c9ced6;
+}
+
+.renglon-texto {
+  padding: 1mm 0 1.5mm;
+  border-bottom: 1px solid #c9ced6;
+  min-height: 6mm;
+  white-space: pre-wrap;
+}
+
+/* --- Odontograma -------------------------------------------------------- */
+
+.odonto {
+  display: flex;
+  flex-direction: column;
+  gap: 3mm;
+  padding-top: 2mm;
+}
+
+.odonto__fila {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 3mm;
+}
+
+.odonto__cuadrante {
+  display: flex;
+  gap: 1mm;
+}
+
+/* La línea media separa los dos cuadrantes, como en el impreso clásico. */
+.odonto__media {
+  width: 1px;
+  align-self: stretch;
+  background: #14161c;
+}
+
+.odonto__pieza {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5mm;
+}
+
+.odonto__casilla {
+  width: 7mm;
+  height: 7mm;
+  border: 1px solid #8a929e;
+  display: grid;
+  place-items: center;
+  font-size: 10pt;
+  font-weight: 700;
+}
+
+.odonto__casilla--marcada { border-width: 1.5px; }
+
+.odonto__numero {
+  font-size: 7pt;
+  color: #5a6470;
+  font-family: var(--font-mono);
+}
+
+.odonto__leyenda {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 1mm 4mm;
+  font-size: 8pt;
+  color: #5a6470;
+  margin-top: 1mm;
+}
+
+.odonto__leyenda-item b {
+  font-family: var(--font-mono);
+  margin-right: 1mm;
+}
+
+/* --- Tabla de evolución ------------------------------------------------- */
+
+.exp__tabla {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 9.5pt;
+}
+
+.exp__tabla th {
+  text-align: left;
+  font-size: 8pt;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #5a6470;
+  font-weight: 600;
+  border-bottom: 1px solid #14161c;
+  padding-bottom: 1mm;
+}
+
+.exp__tabla td {
+  border-bottom: 1px solid #c9ced6;
+  /* 8 mm de alto: lo justo para escribir a mano sin apretar. */
+  height: 8mm;
+  padding: 1mm 2mm 1mm 0;
+  vertical-align: top;
+}
+
+.exp__nota {
+  font-size: 8.5pt;
+  color: #5a6470;
+}
+
+.exp__pie {
+  display: flex;
+  gap: 12mm;
+  margin-top: 12mm;
+  break-inside: avoid;
+}
+
+.exp__firma {
+  flex: 1;
+  text-align: center;
+}
+
+.exp__firma span {
+  display: block;
+  border-bottom: 1px solid #14161c;
+  height: 12mm;
+}
+
+.exp__firma small {
+  font-size: 8pt;
+  color: #5a6470;
+}
+
+/* --- Impresión ----------------------------------------------------------
+   Aquí es donde la pantalla se convierte en hoja: fuera el menú, la barra
+   superior y los botones; la hoja ocupa el papel entero sin sombra ni borde.
+   ----------------------------------------------------------------------- */
+
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+
+  .sidebar,
+  .admin-shell__nav,
+  .admin-shell__scrim,
+  .topbar,
+  .no-print {
+    display: none !important;
+  }
+
+  /* El armazón deja de ser una ventana con scroll interno: al imprimir, el
+     contenido tiene que fluir por todas las páginas que haga falta. */
+  .admin-shell {
+    display: block;
+    height: auto;
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .main-content,
+  .page-body {
+    display: block;
+    height: auto;
+    overflow: visible;
+    padding: 0;
+    background: #fff;
+  }
+
+  .exp {
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    box-shadow: none;
+  }
+
+  /* Los colores del odontograma tienen significado clínico: sin esto, muchos
+     navegadores los imprimen en gris para ahorrar tinta. */
+  * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
+/* --- Formulario de transcripción del expediente ------------------------- */
+
+.exp-form__checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+}
+
+.exp-form__check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+/* Rejilla de 16 piezas por fila, igual que el impreso: quien transcribe va
+   copiando de izquierda a derecha sin recolocar la vista. */
+.exp-form__odonto {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  align-items: center;
+  margin-bottom: var(--space-4);
+}
+
+.exp-form__pieza {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 34px;
+  padding: var(--space-1) 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-subtle);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.exp-form__pieza:hover {
+  background: var(--color-hover);
+  border-color: var(--color-primary);
+}
+
+.exp-form__abrev {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.1;
+}
+
+.exp-form__num {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--color-text-subtle);
+}
+
+/* Línea media entre cuadrantes. */
+.exp-form__media {
+  width: 1px;
+  align-self: stretch;
+  background: var(--color-border-strong);
+  margin: 0 var(--space-2);
+}
+
+/* Corta la fila para que arcada superior e inferior queden una sobre otra. */
+.exp-form__salto {
+  flex-basis: 100%;
+  height: var(--space-2);
+}

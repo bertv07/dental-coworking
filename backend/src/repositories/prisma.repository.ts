@@ -5,9 +5,15 @@ import {
   isOverlapViolation,
   PRISMA_ERROR,
 } from '@/backend/db/client';
+import { Prisma } from '@prisma/client';
 import type { DataRepository, DateRange, WriteResult } from '@/backend/repositories/types';
-import type { DentistEarnings, FinancialSummary } from '@/backend/domain/types';
+import type {
+  DentistEarnings,
+  FinancialSummary,
+  ScheduleBlock,
+} from '@/backend/domain/types';
 import { percentChange, splitCents } from '@/backend/domain/money';
+import { calcularComision, calcularPrecio, repartirCobro } from '@/backend/domain/pricing';
 import { MINUTES_PER_DAY, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
 
 /**
@@ -33,6 +39,65 @@ function toWriteFailure(error: unknown): Extract<WriteResult<never>, { ok: false
     }
   }
   throw error;
+}
+
+/**
+ * Relaciones que lleva una cita en la vista de recepción.
+ *
+ * Está extraído porque lo comparten tres consultas (agenda, detalle y
+ * pendientes de cobro) y las tres tienen que devolver exactamente la misma
+ * forma: si una se olvidara los añadidos, esa pantalla cobraría de menos sin
+ * avisar. Un solo sitio que cambiar es la diferencia entre añadir un campo y
+ * salir a buscar quién más lo necesitaba.
+ */
+const APPOINTMENT_RELATIONS = {
+  patient: { select: { id: true, fullName: true, phoneE164: true } },
+  dentist: { select: { id: true, fullName: true } },
+  room: { select: { id: true, name: true, code: true } },
+  treatment: { select: { id: true, name: true, durationMinutes: true } },
+  addons: {
+    select: {
+      id: true,
+      appointmentId: true,
+      treatmentId: true,
+      priceCents: true,
+      commissionPercent: true,
+      notes: true,
+      createdAt: true,
+      treatment: { select: { name: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+  },
+} as const;
+
+/** Aplana el nombre del tratamiento de cada añadido al contrato del dominio. */
+function toAppointmentWithRelations<
+  T extends {
+    addons: Array<{
+      id: string;
+      appointmentId: string;
+      treatmentId: string;
+      priceCents: number;
+      commissionPercent: number;
+      notes: string | null;
+      createdAt: Date;
+      treatment: { name: string };
+    }>;
+  },
+>(row: T) {
+  return {
+    ...row,
+    addons: row.addons.map((addon) => ({
+      id: addon.id,
+      appointmentId: addon.appointmentId,
+      treatmentId: addon.treatmentId,
+      treatmentName: addon.treatment.name,
+      priceCents: addon.priceCents,
+      commissionPercent: addon.commissionPercent,
+      notes: addon.notes,
+      createdAt: addon.createdAt,
+    })),
+  };
 }
 
 /**
@@ -117,6 +182,198 @@ export const prismaRepository: DataRepository = {
     });
 
     return user;
+  },
+
+  async getAccountState(userId) {
+    return prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        status: true,
+        sessionsValidFrom: true,
+        mustChangePassword: true,
+        deletedAt: true,
+      },
+    });
+  },
+
+  async resetPasswordAsAdmin({ dentistId, passwordHash, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const dentist = await tx.dentist.findUnique({
+          where: { id: dentistId },
+          select: { userId: true, fullName: true, email: true },
+        });
+
+        if (!dentist?.userId) {
+          // Sin cuenta vinculada no hay contraseña que restablecer. Es un caso
+          // real: un odontólogo puede existir sin acceso al panel.
+          return { ok: false as const, reason: 'NOT_FOUND' as const };
+        }
+
+        const user = await tx.user.update({
+          where: { id: dentist.userId },
+          data: {
+            passwordHash,
+            passwordChangedAt: new Date(),
+            // La clave nueva viaja por correo: no puede quedarse.
+            mustChangePassword: true,
+            // Cierra sus sesiones. Si se le restablece la clave es porque
+            // perdió el control de algo; dejar la sesión abierta no arregla
+            // nada.
+            sessionsValidFrom: new Date(),
+            failedLoginAttempts: 0,
+            lockedUntil: null,
+          },
+          select: { id: true, email: true, fullName: true },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'user.password_reset_by_admin',
+            entityType: 'User',
+            entityId: user.id,
+            // Nunca la clave: sólo a quién y cuándo.
+            after: { dentistId, targetEmail: user.email, at: new Date().toISOString() },
+          },
+        });
+
+        return {
+          ok: true as const,
+          data: { userId: user.id, email: user.email, fullName: user.fullName },
+        };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async createPasswordResetToken({ email, tokenHash, expiresAt, requestedIp }) {
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true, email: true, fullName: true, status: true, deletedAt: true },
+    });
+
+    // Cuenta inexistente, suspendida o borrada: no se emite nada. El llamador
+    // responde igual en todos los casos.
+    if (!user || user.deletedAt !== null || user.status !== 'ACTIVE') return null;
+
+    await prisma.$transaction(async (tx) => {
+      /*
+       * Los enlaces pendientes de esa cuenta se queman. Pedir uno nuevo tiene
+       * que dejar sin valor al anterior: si no, cada solicitud sumaría una
+       * llave viva más y bastaría con pedir veinte para tener veinte formas de
+       * entrar.
+       */
+      await tx.passwordResetToken.updateMany({
+        where: { userId: user.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+
+      await tx.passwordResetToken.create({
+        data: { userId: user.id, tokenHash, expiresAt, requestedIp },
+      });
+    });
+
+    return { email: user.email, fullName: user.fullName };
+  },
+
+  async redeemPasswordResetToken({ tokenHash, passwordHash }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const token = await tx.passwordResetToken.findUnique({
+          where: { tokenHash },
+          select: { id: true, userId: true, expiresAt: true, usedAt: true },
+        });
+
+        // Inexistente, ya usado o caducado: todos son "no vale".
+        if (!token || token.usedAt !== null || token.expiresAt < new Date()) {
+          return { ok: false as const, reason: 'NOT_FOUND' as const };
+        }
+
+        // Se quema ANTES de nada más: dos peticiones simultáneas con el mismo
+        // token compiten por este UPDATE y sólo una lo consigue.
+        const quemado = await tx.passwordResetToken.updateMany({
+          where: { id: token.id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+
+        if (quemado.count === 0) {
+          return { ok: false as const, reason: 'NOT_FOUND' as const };
+        }
+
+        await tx.user.update({
+          where: { id: token.userId },
+          data: {
+            passwordHash,
+            passwordChangedAt: new Date(),
+            // La puso ella misma: no hay nada que forzar después.
+            mustChangePassword: false,
+            // Cierra cualquier sesión abierta con la contraseña vieja.
+            sessionsValidFrom: new Date(),
+            failedLoginAttempts: 0,
+            lockedUntil: null,
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId: token.userId,
+            action: 'user.password_recovered',
+            entityType: 'User',
+            entityId: token.userId,
+            after: { at: new Date().toISOString() },
+          },
+        });
+
+        return { ok: true as const, data: { userId: token.userId } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async changePassword({ userId, passwordHash }) {
+    try {
+      const user = await prisma.user.update({
+        where: { id: userId },
+        data: {
+          passwordHash,
+          passwordChangedAt: new Date(),
+          // Ya cumplió: si entró con una clave temporal, deja de estar
+          // obligado a cambiarla.
+          mustChangePassword: false,
+          /*
+           * Invalida TODAS las sesiones, incluida la que está haciendo el
+           * cambio — la del propio navegador se renueva al terminar. Sin
+           * esto, quien tuviera la contraseña vieja seguiría dentro con su
+           * token todavía válido, que es exactamente de quien se está
+           * intentando proteger la cuenta.
+           */
+          sessionsValidFrom: new Date(),
+          // Un cambio de clave también limpia el bloqueo por intentos
+          // fallidos: la credencial que se estaba atacando ya no existe.
+          failedLoginAttempts: 0,
+          lockedUntil: null,
+        },
+        select: { id: true },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'user.password_changed',
+          entityType: 'User',
+          entityId: userId,
+          // Jamás el hash ni la contraseña: sólo que ocurrió y cuándo.
+          after: { changedAt: new Date().toISOString() },
+        },
+      });
+
+      return { ok: true, data: user };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
   },
 
   async registerLoginOutcome(userId, success) {
@@ -377,6 +634,51 @@ export const prismaRepository: DataRepository = {
     }
   },
 
+  async createDentistWithAccount({ dentist, passwordHash }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        /*
+         * La cuenta primero: si el correo ya está en uso, la transacción se
+         * corta aquí y no queda un odontólogo a medio crear.
+         *
+         * `mustChangePassword` en `true` porque la clave viaja por correo.
+         * Hasta que la cambie, el panel no le deja hacer nada más.
+         */
+        const user = await tx.user.create({
+          data: {
+            email: dentist.email,
+            passwordHash,
+            fullName: dentist.fullName,
+            role: 'DENTIST',
+            status: 'ACTIVE',
+            mustChangePassword: true,
+          },
+          select: { id: true },
+        });
+
+        const created = await tx.dentist.create({
+          data: { ...dentist, userId: user.id },
+          select: { id: true },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId: null,
+            action: 'dentist.created_with_account',
+            entityType: 'Dentist',
+            entityId: created.id,
+            // Jamás la contraseña ni su hash: sólo que se creó un acceso.
+            after: { email: dentist.email, userId: user.id, role: 'DENTIST' },
+          },
+        });
+
+        return { ok: true as const, data: { id: created.id, userId: user.id } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
   async updateDentist(id, data) {
     try {
       return { ok: true, data: await prisma.dentist.update({ where: { id }, data }) };
@@ -511,8 +813,12 @@ export const prismaRepository: DataRepository = {
         const appointment = await tx.appointment.findUnique({
           where: { id: data.appointmentId },
           include: {
-            dentist: { select: { clinicCommissionPercent: true } },
+            dentist: { select: { id: true, clinicCommissionPercent: true } },
+            treatment: { select: { id: true, clinicKeepsAll: true } },
             payment: { select: { id: true } },
+            // Los procedimientos añadidos durante la consulta: cada uno con su
+            // propio precio y su propia comisión.
+            addons: { select: { priceCents: true, commissionPercent: true } },
           },
         });
 
@@ -524,13 +830,56 @@ export const prismaRepository: DataRepository = {
           return { ok: false as const, reason: 'DUPLICATE' as const, field: 'appointmentId' };
         }
 
-        // 3. Reparto 40/60 calculado en el SERVIDOR con la misma función que
-        //    usa todo el sistema. Garantiza clinic + dentist === total.
-        const split = splitCents(data.amountCents, appointment.dentist.clinicCommissionPercent);
+        // 3. Reparto calculado en el SERVIDOR, línea a línea.
+        //
+        //    Se reparte cada concepto por separado porque cada uno puede tener
+        //    su propia comisión: si a una limpieza (40/60) se le añadió una
+        //    radiografía (100 % clínica), aplicar un solo porcentaje al total
+        //    le pagaría al odontólogo parte de un trabajo que no hizo.
+        //
+        //    Ver `domain/pricing.ts` para la cadena de precedencia completa.
+        const acuerdo = await tx.dentistTreatment.findUnique({
+          where: {
+            dentistId_treatmentId: {
+              dentistId: appointment.dentist.id,
+              treatmentId: appointment.treatment.id,
+            },
+          },
+          select: { customPriceCents: true, customCommissionPercent: true, status: true },
+        });
+
+        const comisionPrincipal = calcularComision({
+          tratamiento: appointment.treatment,
+          // Sólo cuentan los acuerdos APROBADOS: una propuesta pendiente no
+          // puede cambiar lo que se cobra.
+          acuerdo: acuerdo?.status === 'APPROVED' ? acuerdo : null,
+          comisionOdontologo: appointment.dentist.clinicCommissionPercent,
+          comisionPorDefecto: 40,
+          ajusteManual: data.commissionOverride ?? null,
+        }).clinicPercent;
+
+        /*
+         * El importe que teclea recepción cubre la cita PRINCIPAL. Los
+         * añadidos suman aparte, con su propio precio congelado.
+         *
+         * Por eso `amountCents` no se reparte entero con un porcentaje: sería
+         * mezclar conceptos que se reparten distinto.
+         */
+        const split = repartirCobro([
+          { cents: data.amountCents, clinicPercent: comisionPrincipal },
+          ...appointment.addons.map((addon) => ({
+            cents: addon.priceCents,
+            // El ajuste manual de recepción manda también sobre los añadidos:
+            // el 50/50 se pacta sobre la visita entera, no sobre una línea.
+            clinicPercent: data.commissionOverride ?? addon.commissionPercent,
+          })),
+        ]);
 
         // 4. Snapshot cambiario: importe en Bs y tasa aplicada quedan
         //    congelados. Mañana la tasa cambia; este cobro no.
-        const amountBs = Math.round((data.amountCents / 100) * exchangeRate * 100) / 100;
+        // Sobre el TOTAL, añadidos incluidos: es el dinero que de verdad
+        // entra en caja.
+        const amountBs = Math.round((split.totalCents / 100) * exchangeRate * 100) / 100;
 
         const payment = await tx.payment.create({
           data: {
@@ -569,6 +918,11 @@ export const prismaRepository: DataRepository = {
               exchangeRate,
               clinicShareCents: split.clinicShareCents,
               dentistShareCents: split.dentistShareCents,
+              // Un reparto distinto al habitual tiene que poder explicarse
+              // después. Sin esto, un 50/50 puntual es indistinguible de un
+              // error de cálculo.
+              commissionOverride: data.commissionOverride ?? null,
+              addonCount: appointment.addons.length,
             },
           },
         });
@@ -784,7 +1138,7 @@ export const prismaRepository: DataRepository = {
     const dayStart = clinicWallClockToInstant(businessDate, 0);
     const dayEnd = clinicWallClockToInstant(businessDate, MINUTES_PER_DAY);
 
-    return prisma.appointment.findMany({
+    const rows = await prisma.appointment.findMany({
       where: {
         deletedAt: null,
         startsAt: { gte: dayStart, lt: dayEnd },
@@ -794,14 +1148,11 @@ export const prismaRepository: DataRepository = {
         // esté devuelto o fallido — en ambos casos el dinero no ha entrado.
         NOT: { payment: { is: { status: 'PAID' } } },
       },
-      include: {
-        patient: { select: { id: true, fullName: true, phoneE164: true } },
-        dentist: { select: { id: true, fullName: true } },
-        room: { select: { id: true, name: true, code: true } },
-        treatment: { select: { id: true, name: true, durationMinutes: true } },
-      },
+      include: APPOINTMENT_RELATIONS,
       orderBy: { startsAt: 'asc' },
     });
+
+    return rows.map(toAppointmentWithRelations);
   },
 
   async getClinicSettings() {
@@ -892,15 +1243,12 @@ export const prismaRepository: DataRepository = {
   },
 
   async findAppointmentById(id) {
-    return prisma.appointment.findFirst({
+    const row = await prisma.appointment.findFirst({
       where: { id, deletedAt: null },
-      include: {
-        patient: { select: { id: true, fullName: true, phoneE164: true } },
-        dentist: { select: { id: true, fullName: true } },
-        room: { select: { id: true, name: true, code: true } },
-        treatment: { select: { id: true, name: true, durationMinutes: true } },
-      },
+      include: APPOINTMENT_RELATIONS,
     });
+
+    return row ? toAppointmentWithRelations(row) : null;
   },
 
   async createAppointmentFromPanel(data) {
@@ -976,7 +1324,7 @@ export const prismaRepository: DataRepository = {
   },
 
   async listAppointments({ range, dentistId, limit = 100 }) {
-    return prisma.appointment.findMany({
+    const rows = await prisma.appointment.findMany({
       where: {
         deletedAt: null,
         startsAt: { gte: range.from, lte: range.to },
@@ -984,15 +1332,698 @@ export const prismaRepository: DataRepository = {
       },
       // `include` con `select` anidado: una sola query con JOINs, sin N+1,
       // y devolviendo únicamente los campos que la UI necesita.
-      include: {
-        patient: { select: { id: true, fullName: true, phoneE164: true } },
-        dentist: { select: { id: true, fullName: true } },
-        room: { select: { id: true, name: true, code: true } },
-        treatment: { select: { id: true, name: true, durationMinutes: true } },
-      },
+      include: APPOINTMENT_RELATIONS,
       orderBy: { startsAt: 'asc' },
       take: limit,
     });
+
+    return rows.map(toAppointmentWithRelations);
+  },
+
+  async addAppointmentAddon({ appointmentId, treatmentId, priceCents, notes, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        // 1. La cita, con lo que hace falta para decidir precio y reparto.
+        const appointment = await tx.appointment.findUnique({
+          where: { id: appointmentId },
+          select: {
+            id: true,
+            dentistId: true,
+            dentist: { select: { clinicCommissionPercent: true } },
+            payment: { select: { id: true } },
+          },
+        });
+
+        if (!appointment) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+        /*
+         * 2. Una cita cobrada ya no admite líneas nuevas.
+         *
+         * El cobro congeló el reparto sumando los añadidos que existían en
+         * ese momento. Añadir uno después dejaría un pago cuyo importe no
+         * coincide con la suma de sus conceptos, y el descuadre no saldría
+         * hasta el arqueo.
+         */
+        if (appointment.payment) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'appointmentId' };
+        }
+
+        const treatment = await tx.treatment.findUnique({
+          where: { id: treatmentId },
+          select: {
+            id: true,
+            basePriceCents: true,
+            isPriceVariable: true,
+            clinicKeepsAll: true,
+          },
+        });
+
+        if (!treatment) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+        // 3. Acuerdo del odontólogo para ESE tratamiento. Sólo si está
+        //    aprobado: una propuesta pendiente no cambia lo que se cobra.
+        const acuerdo = await tx.dentistTreatment.findUnique({
+          where: {
+            dentistId_treatmentId: { dentistId: appointment.dentistId, treatmentId },
+          },
+          select: { customPriceCents: true, customCommissionPercent: true, status: true },
+        });
+
+        const acuerdoAprobado = acuerdo?.status === 'APPROVED' ? acuerdo : null;
+
+        /*
+         * 4. Precio y comisión se deciden EN EL SERVIDOR.
+         *
+         * `priceCents` del formulario sólo puede pisar el precio (recepción
+         * pacta el importe con el paciente delante), nunca el reparto. Ver la
+         * cadena de precedencia en `domain/pricing.ts`.
+         */
+        const precio =
+          priceCents ?? calcularPrecio(treatment, acuerdoAprobado).priceCents;
+
+        const comision = calcularComision({
+          tratamiento: treatment,
+          acuerdo: acuerdoAprobado,
+          comisionOdontologo: appointment.dentist.clinicCommissionPercent,
+          comisionPorDefecto: 40,
+        }).clinicPercent;
+
+        const addon = await tx.appointmentAddon.create({
+          data: {
+            appointmentId,
+            treatmentId,
+            priceCents: precio,
+            commissionPercent: comision,
+            notes,
+            addedByUserId: userId,
+          },
+          select: {
+            id: true,
+            appointmentId: true,
+            treatmentId: true,
+            priceCents: true,
+            commissionPercent: true,
+            notes: true,
+            createdAt: true,
+            treatment: { select: { name: true } },
+          },
+        });
+
+        // 5. Cambia lo que se le va a cobrar al paciente: deja rastro.
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'appointment.addon_added',
+            entityType: 'AppointmentAddon',
+            entityId: addon.id,
+            after: {
+              appointmentId,
+              treatmentId,
+              priceCents: precio,
+              commissionPercent: comision,
+              // Si el precio lo puso recepción a mano, el motivo tiene que
+              // poder reconstruirse después.
+              precioManual: priceCents != null,
+            },
+          },
+        });
+
+        return {
+          ok: true as const,
+          data: {
+            id: addon.id,
+            appointmentId: addon.appointmentId,
+            treatmentId: addon.treatmentId,
+            treatmentName: addon.treatment.name,
+            priceCents: addon.priceCents,
+            commissionPercent: addon.commissionPercent,
+            notes: addon.notes,
+            createdAt: addon.createdAt,
+          },
+        };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async listDentistTreatments(params) {
+    const rows = await prisma.dentistTreatment.findMany({
+      where: {
+        ...(params?.dentistId ? { dentistId: params.dentistId } : {}),
+        ...(params?.status ? { status: params.status } : {}),
+      },
+      select: {
+        id: true,
+        dentistId: true,
+        treatmentId: true,
+        customPriceCents: true,
+        customCommissionPercent: true,
+        status: true,
+        reviewNotes: true,
+        reviewedAt: true,
+        createdAt: true,
+        dentist: { select: { fullName: true } },
+        treatment: { select: { name: true, basePriceCents: true } },
+      },
+      /*
+       * Las pendientes primero: son las únicas que piden una acción. El resto
+       * es consulta. `PENDING` < `APPROVED` < `REJECTED` por orden alfabético
+       * del enum, que aquí resulta ser justo el orden útil.
+       */
+      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      dentistId: row.dentistId,
+      dentistName: row.dentist.fullName,
+      treatmentId: row.treatmentId,
+      treatmentName: row.treatment.name,
+      treatmentBasePriceCents: row.treatment.basePriceCents,
+      customPriceCents: row.customPriceCents,
+      customCommissionPercent: row.customCommissionPercent,
+      status: row.status,
+      reviewNotes: row.reviewNotes,
+      reviewedAt: row.reviewedAt,
+      createdAt: row.createdAt,
+    }));
+  },
+
+  async upsertDentistTreatment({
+    dentistId,
+    treatmentId,
+    customPriceCents,
+    customCommissionPercent,
+    status,
+    userId,
+  }) {
+    try {
+      const agreement = await prisma.dentistTreatment.upsert({
+        where: { dentistId_treatmentId: { dentistId, treatmentId } },
+        update: {
+          customPriceCents,
+          customCommissionPercent,
+          status,
+          proposedByUserId: userId,
+          /*
+           * Al reproponer se limpia la revisión anterior. Dejar el motivo del
+           * rechazo colgando de una propuesta nueva haría creer que ésta
+           * también se rechazó.
+           */
+          reviewedByUserId: status === 'APPROVED' ? userId : null,
+          reviewedAt: status === 'APPROVED' ? new Date() : null,
+          reviewNotes: null,
+        },
+        create: {
+          dentistId,
+          treatmentId,
+          customPriceCents,
+          customCommissionPercent,
+          status,
+          proposedByUserId: userId,
+          reviewedByUserId: status === 'APPROVED' ? userId : null,
+          reviewedAt: status === 'APPROVED' ? new Date() : null,
+        },
+        select: { id: true },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: status === 'APPROVED' ? 'tariff.set' : 'tariff.proposed',
+          entityType: 'DentistTreatment',
+          entityId: agreement.id,
+          after: { dentistId, treatmentId, customPriceCents, customCommissionPercent, status },
+        },
+      });
+
+      return { ok: true, data: agreement };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async reviewDentistTreatment({ id, status, reviewNotes, userId }) {
+    try {
+      const agreement = await prisma.dentistTreatment.update({
+        where: { id },
+        data: { status, reviewNotes, reviewedByUserId: userId, reviewedAt: new Date() },
+        select: { id: true, dentistId: true, treatmentId: true },
+      });
+
+      // Aprobar cambia lo que se le cobra al paciente: tiene que dejar rastro
+      // de quién lo autorizó.
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: status === 'APPROVED' ? 'tariff.approved' : 'tariff.rejected',
+          entityType: 'DentistTreatment',
+          entityId: agreement.id,
+          after: {
+            dentistId: agreement.dentistId,
+            treatmentId: agreement.treatmentId,
+            status,
+            reviewNotes,
+          },
+        },
+      });
+
+      return { ok: true, data: { id: agreement.id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deleteDentistTreatment({ id, userId }) {
+    try {
+      const agreement = await prisma.dentistTreatment.delete({
+        where: { id },
+        select: { id: true, dentistId: true, treatmentId: true },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'tariff.deleted',
+          entityType: 'DentistTreatment',
+          entityId: agreement.id,
+          before: { dentistId: agreement.dentistId, treatmentId: agreement.treatmentId },
+        },
+      });
+
+      return { ok: true, data: { id: agreement.id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  // --- Liquidación diaria --------------------------------------------------
+
+  async getDailySettlements(businessDate) {
+    const dayStart = clinicWallClockToInstant(businessDate, 0);
+    const dayEnd = clinicWallClockToInstant(businessDate, MINUTES_PER_DAY);
+
+    /*
+     * Se separa lo PENDIENTE de lo YA LIQUIDADO con `FILTER`, en una sola
+     * pasada. `payoutId IS NULL` es la marca de pendiente: al pagar, los
+     * cobros quedan enganchados a un payout y dejan de sumar aquí.
+     *
+     * Sin esa distinción, un odontólogo al que ya se le pagó volvería a
+     * aparecer con la misma deuda cada vez que se abriera la pantalla.
+     */
+    const rows = await prisma.$queryRaw<
+      Array<{
+        dentistId: string;
+        dentistName: string;
+        paymentCount: bigint;
+        grossCents: bigint;
+        clinicShareCents: bigint;
+        dentistShareCents: bigint;
+        settledCents: bigint;
+      }>
+    >`
+      SELECT
+        d.id         AS "dentistId",
+        d."fullName" AS "dentistName",
+        COUNT(p.id) FILTER (WHERE p."payoutId" IS NULL)  AS "paymentCount",
+        COALESCE(SUM(p."amountCents")       FILTER (WHERE p."payoutId" IS NULL), 0) AS "grossCents",
+        COALESCE(SUM(p."clinicShareCents")  FILTER (WHERE p."payoutId" IS NULL), 0) AS "clinicShareCents",
+        COALESCE(SUM(p."dentistShareCents") FILTER (WHERE p."payoutId" IS NULL), 0) AS "dentistShareCents",
+        COALESCE(SUM(p."dentistShareCents") FILTER (WHERE p."payoutId" IS NOT NULL), 0) AS "settledCents"
+      FROM dentists d
+      JOIN appointments a ON a."dentistId" = d.id AND a."deletedAt" IS NULL
+      JOIN payments p
+        ON p."appointmentId" = a.id
+       AND p.status = 'PAID'
+       AND p."paidAt" >= ${dayStart}
+       AND p."paidAt" <  ${dayEnd}
+      WHERE d."deletedAt" IS NULL
+      GROUP BY d.id, d."fullName"
+      ORDER BY "dentistShareCents" DESC
+    `;
+
+    return rows.map((row) => ({
+      dentistId: row.dentistId,
+      dentistName: row.dentistName,
+      paymentCount: Number(row.paymentCount),
+      grossCents: Number(row.grossCents),
+      clinicShareCents: Number(row.clinicShareCents),
+      dentistShareCents: Number(row.dentistShareCents),
+      settledCents: Number(row.settledCents),
+      // Ya liquidado del todo: no queda nada pendiente y sí hay algo pagado.
+      isSettled: Number(row.dentistShareCents) === 0 && Number(row.settledCents) > 0,
+    }));
+  },
+
+  async settleDentistDay({ dentistId, businessDate, userId }) {
+    const dayStart = clinicWallClockToInstant(businessDate, 0);
+    const dayEnd = clinicWallClockToInstant(businessDate, MINUTES_PER_DAY);
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        // Cobros del día de ESE odontólogo que aún no se han liquidado.
+        const pendientes = await tx.payment.findMany({
+          where: {
+            status: 'PAID',
+            payoutId: null,
+            paidAt: { gte: dayStart, lt: dayEnd },
+            appointment: { dentistId, deletedAt: null },
+          },
+          select: { id: true, dentistShareCents: true },
+        });
+
+        if (pendientes.length === 0) {
+          // Nada que pagar: o ya se liquidó, o no produjo hoy. No se crea un
+          // payout de $0, que sólo ensuciaría el historial.
+          return { ok: false as const, reason: 'NOT_FOUND' as const };
+        }
+
+        const totalCents = pendientes.reduce(
+          (suma, pago) => suma + pago.dentistShareCents,
+          0,
+        );
+
+        const payout = await tx.dentistPayout.create({
+          data: {
+            dentistId,
+            // El periodo es EL DÍA. El unique (dentistId, inicio, fin) impide
+            // pagar dos veces el mismo día al mismo odontólogo.
+            periodStart: dayStart,
+            periodEnd: dayEnd,
+            totalCents,
+            status: 'PAID',
+            paidAt: new Date(),
+            notes: `Liquidación diaria ${businessDate}`,
+          },
+          select: { id: true },
+        });
+
+        /*
+         * Enganchar los cobros es lo que hace que esto no se pueda pagar dos
+         * veces: a partir de aquí ya no salen como pendientes en
+         * `getDailySettlements`. El total del payout y la suma de sus pagos
+         * son el mismo número por construcción.
+         */
+        await tx.payment.updateMany({
+          where: { id: { in: pendientes.map((pago) => pago.id) } },
+          data: { payoutId: payout.id },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'payout.daily_settled',
+            entityType: 'DentistPayout',
+            entityId: payout.id,
+            after: {
+              dentistId,
+              businessDate,
+              totalCents,
+              paymentCount: pendientes.length,
+            },
+          },
+        });
+
+        return { ok: true as const, data: { id: payout.id, totalCents } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  // --- Instrumental --------------------------------------------------------
+
+  async listInstruments(params) {
+    return prisma.dentistInstrument.findMany({
+      where: {
+        deletedAt: null,
+        ...(params?.dentistId ? { dentistId: params.dentistId } : {}),
+      },
+      select: {
+        id: true,
+        dentistId: true,
+        name: true,
+        category: true,
+        quantity: true,
+        serialNumber: true,
+        condition: true,
+        location: true,
+        notes: true,
+        lastServicedOn: true,
+      },
+      // Lo que necesita atención primero: perdido y fuera de servicio arriba.
+      // `GOOD` es el último valor del enum, así que `desc` lo manda al final.
+      orderBy: [{ condition: 'desc' }, { name: 'asc' }],
+    });
+  },
+
+  async saveInstrument({ id, dentistId, data, userId }) {
+    try {
+      if (id) {
+        /*
+         * `updateMany` con el `dentistId` en el WHERE, no `update` por id.
+         *
+         * Así la comprobación de propiedad la hace Postgres en la misma
+         * sentencia: si el id existe pero es de otro odontólogo, no se
+         * actualiza ninguna fila y se devuelve NOT_FOUND. Con `update` por id
+         * habría que leer primero y comparar, y entre la lectura y la
+         * escritura cabe una carrera.
+         */
+        const result = await prisma.dentistInstrument.updateMany({
+          where: { id, dentistId, deletedAt: null },
+          data,
+        });
+
+        if (result.count === 0) return { ok: false, reason: 'NOT_FOUND' };
+        return { ok: true, data: { id } };
+      }
+
+      const created = await prisma.dentistInstrument.create({
+        data: { ...data, dentistId },
+        select: { id: true },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'instrument.created',
+          entityType: 'DentistInstrument',
+          entityId: created.id,
+          after: { dentistId, name: data.name, quantity: data.quantity },
+        },
+      });
+
+      return { ok: true, data: created };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deleteInstrument({ id, userId }) {
+    try {
+      // Borrado lógico: saber quién tenía qué sigue importando después de
+      // quitarlo de la lista.
+      await prisma.dentistInstrument.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'instrument.deleted',
+          entityType: 'DentistInstrument',
+          entityId: id,
+        },
+      });
+
+      return { ok: true, data: { id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  // --- Horarios ------------------------------------------------------------
+
+  async listSchedule(dentistId) {
+    return prisma.dentistSchedule.findMany({
+      where: { dentistId, isActive: true },
+      select: { weekday: true, startMinute: true, endMinute: true },
+      orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }],
+    });
+  },
+
+  async listScheduleRequests(params) {
+    const rows = await prisma.scheduleChangeRequest.findMany({
+      where: {
+        ...(params?.dentistId ? { dentistId: params.dentistId } : {}),
+        ...(params?.status ? { status: params.status } : {}),
+      },
+      select: {
+        id: true,
+        dentistId: true,
+        proposedBlocks: true,
+        reason: true,
+        status: true,
+        reviewNotes: true,
+        reviewedAt: true,
+        createdAt: true,
+        dentist: {
+          select: {
+            fullName: true,
+            // El horario vigente viaja con la solicitud: quien decide tiene
+            // que poder comparar, y pedirlo aparte sería una consulta por fila.
+            schedules: {
+              where: { isActive: true },
+              select: { weekday: true, startMinute: true, endMinute: true },
+              orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }],
+            },
+          },
+        },
+      },
+      orderBy: [{ status: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      dentistId: row.dentistId,
+      dentistName: row.dentist.fullName,
+      proposedBlocks: row.proposedBlocks as unknown as ScheduleBlock[],
+      currentBlocks: row.dentist.schedules,
+      reason: row.reason,
+      status: row.status,
+      reviewNotes: row.reviewNotes,
+      reviewedAt: row.reviewedAt,
+      createdAt: row.createdAt,
+    }));
+  },
+
+  async createScheduleRequest({ dentistId, proposedBlocks, reason, userId }) {
+    try {
+      const created = await prisma.scheduleChangeRequest.create({
+        data: {
+          dentistId,
+          proposedBlocks: proposedBlocks as unknown as Prisma.InputJsonValue,
+          reason,
+          requestedByUserId: userId,
+        },
+        select: { id: true },
+      });
+
+      return { ok: true, data: created };
+    } catch (error) {
+      /*
+       * El índice único parcial `one_pending_per_dentist` salta si ya hay una
+       * esperando. `toWriteFailure` lo traduce a DUPLICATE y la acción le
+       * pone el mensaje que describe lo que pasó de verdad.
+       */
+      return toWriteFailure(error);
+    }
+  },
+
+  async reviewScheduleRequest({ id, status, reviewNotes, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const request = await tx.scheduleChangeRequest.findUnique({
+          where: { id },
+          select: { id: true, dentistId: true, proposedBlocks: true, status: true },
+        });
+
+        if (!request) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+        // Revisar dos veces la misma solicitud reaplicaría un horario ya
+        // sustituido, pisando cambios posteriores.
+        if (request.status !== 'PENDING') {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
+        }
+
+        await tx.scheduleChangeRequest.update({
+          where: { id },
+          data: { status, reviewNotes, reviewedByUserId: userId, reviewedAt: new Date() },
+        });
+
+        /*
+         * Aprobar APLICA el horario, en la misma transacción.
+         *
+         * Separar las dos cosas dejaría al odontólogo con una solicitud
+         * aprobada y el bot ofreciendo todavía las horas viejas — y nadie
+         * mirando la pantalla podría notar la diferencia.
+         *
+         * Se reemplaza la semana entera porque eso es lo que se propuso: un
+         * merge dejaría bloques del horario anterior que él quiso quitar.
+         */
+        if (status === 'APPROVED') {
+          const blocks = request.proposedBlocks as unknown as ScheduleBlock[];
+
+          await tx.dentistSchedule.deleteMany({ where: { dentistId: request.dentistId } });
+
+          if (blocks.length > 0) {
+            await tx.dentistSchedule.createMany({
+              data: blocks.map((block) => ({
+                dentistId: request.dentistId,
+                weekday: block.weekday,
+                startMinute: block.startMinute,
+                endMinute: block.endMinute,
+              })),
+            });
+          }
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: status === 'APPROVED' ? 'schedule.approved' : 'schedule.rejected',
+            entityType: 'ScheduleChangeRequest',
+            entityId: id,
+            after: { dentistId: request.dentistId, status, reviewNotes },
+          },
+        });
+
+        return { ok: true as const, data: { id } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async removeAppointmentAddon({ id, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const addon = await tx.appointmentAddon.findUnique({
+          where: { id },
+          select: {
+            id: true,
+            appointmentId: true,
+            priceCents: true,
+            appointment: { select: { payment: { select: { id: true } } } },
+          },
+        });
+
+        if (!addon) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+        // Mismo motivo que al añadir: el cobro ya congeló este importe.
+        if (addon.appointment.payment) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'appointmentId' };
+        }
+
+        await tx.appointmentAddon.delete({ where: { id } });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'appointment.addon_removed',
+            entityType: 'AppointmentAddon',
+            entityId: id,
+            before: { appointmentId: addon.appointmentId, priceCents: addon.priceCents },
+          },
+        });
+
+        return { ok: true as const, data: { id } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
   },
 
   async listDentistAgenda({ dentistId, range, limit = 200 }) {

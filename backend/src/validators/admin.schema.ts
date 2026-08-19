@@ -8,6 +8,7 @@ import {
   centsSchema,
   percentSchema,
 } from '@/backend/validators/common';
+import { PASSWORD_POLICY } from '@/backend/auth/password';
 
 /**
  * ===========================================================================
@@ -107,6 +108,19 @@ export const dentistFormSchema = z.object({
   clinicCommissionPercent: percentSchema,
 
   isActive: z.coerce.boolean().default(true),
+
+  /**
+   * Crear también su cuenta de acceso al panel y enviarle las credenciales.
+   *
+   * Es opcional porque un odontólogo puede existir en el sistema sin entrar
+   * nunca: se le agendan citas y se le liquida igual. Forzar una cuenta a
+   * todos crearía accesos que nadie usa, y cada acceso vivo es superficie de
+   * ataque.
+   *
+   * La contraseña NO se pide aquí: la genera el servidor. Si la escribiera
+   * quien da de alta, la sabrían dos personas desde el primer día.
+   */
+  createAccount: z.coerce.boolean().default(false),
 });
 
 export type DentistFormInput = z.infer<typeof dentistFormSchema>;
@@ -176,6 +190,19 @@ export const roomFormSchema = z.object({
         .filter(Boolean),
     ),
 
+  /**
+   * Odontólogo dueño del consultorio. Vacío = ROTATIVO.
+   *
+   * Lo ajusta recepción, que es quien conoce la rotación real por
+   * especialidades. No bloquea la agenda: es una preferencia fuerte, no un
+   * candado — bloquearlo dejaría el consultorio vacío los días que su dueño
+   * no viene, justo lo contrario de lo que quiere un coworking.
+   */
+  assignedDentistId: z
+    .union([cuidSchema, z.literal('')])
+    .optional()
+    .transform((value) => (value ? value : null)),
+
   notes: z
     .union([safeTextSchema(300), z.literal('')])
     .optional()
@@ -241,6 +268,335 @@ export const appointmentStatusSchema = z
   .refine((data) => data.status !== 'CANCELLED' || Boolean(data.cancellationReason), {
     message: 'Indica el motivo de la cancelación',
     path: ['cancellationReason'],
+  });
+
+/**
+ * Procedimiento añadido a una cita durante la consulta.
+ *
+ * ⚠️  Igual que en el alta: NO se acepta `commissionPercent`. El reparto lo
+ *  decide el servidor a partir del tratamiento y del acuerdo aprobado con el
+ *  odontólogo. Si viajara en el formulario, cualquiera podría añadir una
+ *  radiografía marcándola como repartible y cobrar comisión por un trabajo
+ *  que hizo la clínica.
+ *
+ *  El precio SÍ se acepta, y vacío significa "el que corresponda". Es la
+ *  única forma de cotizar un conducto, que no tiene precio cerrado hasta ver
+ *  la radiografía.
+ */
+export const appointmentAddonSchema = z.object({
+  appointmentId: cuidSchema,
+  treatmentId: cuidSchema,
+
+  priceInPesos: z
+    .union([z.string(), z.number()])
+    .optional()
+    // Vacío → `null`: se aplica el precio de lista o el pactado. Distinto de
+    // un 0, que sería un procedimiento regalado y es una decisión explícita.
+    .transform((value) => (value === '' || value == null ? null : Number(value)))
+    .refine((value) => value === null || (Number.isFinite(value) && value >= 0), {
+      message: 'El precio no puede ser negativo',
+    })
+    .refine((value) => value === null || value <= 1_000_000, {
+      message: 'Precio fuera de rango',
+    })
+    .transform((value) => (value === null ? null : Math.round(value * 100))),
+
+  notes: z
+    .union([safeTextSchema(300), z.literal('')])
+    .optional()
+    .transform((value) => (value ? value : null)),
+});
+
+export type AppointmentAddonInput = z.infer<typeof appointmentAddonSchema>;
+
+// --- Cita agendada por el propio odontólogo ---------------------------------
+
+/**
+ * La doctora agenda desde su propia agenda.
+ *
+ * ⚠️  Lo que NO está aquí, y es el punto entero:
+ *
+ *  · `dentistId` — es ELLA. Sale de la sesión. Si viniera del formulario,
+ *    podría meterle una cita a una compañera en su horario.
+ *  · `roomId` — lo asigna el servidor, y desde que existen los consultorios
+ *    fijos prueba primero el suyo. Elegir sala a mano permitiría ocupar la
+ *    de otra persona.
+ *  · `endsAt` y el precio — los deriva el servidor del tratamiento. Es la
+ *    misma regla que aplica al bot: el cliente manda intención, el servidor
+ *    decide las consecuencias.
+ *
+ * El paciente se identifica por TELÉFONO, no por un selector: el odontólogo
+ * no tiene acceso al listado de pacientes de la clínica y no debe tenerlo.
+ * Si el número ya existe se reutiliza la ficha; si no, se crea. Es
+ * exactamente lo que hace el bot.
+ */
+export const ownAppointmentSchema = z.object({
+  patientPhone: phoneE164Schema,
+
+  patientName: z
+    .union([personNameSchema, z.literal('')])
+    .optional()
+    .transform((value) => (value ? value : undefined)),
+
+  treatmentCode: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .regex(/^[A-Z0-9_]{2,40}$/, 'Elige un tratamiento'),
+
+  /** `datetime-local` del navegador: "2026-08-20T14:00", sin zona. */
+  startsAt: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, 'Fecha y hora requeridas')
+    // -04:00 = America/Caracas. Igual que en el alta desde recepción.
+    .transform((value) => new Date(`${value}:00-04:00`)),
+
+  notes: z
+    .union([safeTextSchema(500), z.literal('')])
+    .optional()
+    .transform((value) => (value ? value : undefined)),
+});
+
+export type OwnAppointmentInput = z.infer<typeof ownAppointmentSchema>;
+
+// --- Instrumental del odontólogo --------------------------------------------
+
+/**
+ * Una pieza del instrumental. Es SUYA: el fórceps, la turbina, la cureta.
+ *
+ * ⚠️  No lleva `dentistId`: el dueño lo decide el servidor. Cuando lo edita el
+ *  propio odontólogo es él; cuando lo hace el administrador, el que eligió en
+ *  el desplegable. Aceptarlo del formulario dejaría meterle instrumental a
+ *  otro cambiando un id a mano.
+ */
+export const instrumentSchema = z.object({
+  name: safeTextSchema(120).pipe(z.string().min(2, 'Escribe el nombre del instrumento')),
+
+  category: z
+    .union([safeTextSchema(60), z.literal('')])
+    .optional()
+    .transform((value) => (value ? value.toUpperCase() : null)),
+
+  quantity: z.coerce
+    .number()
+    .int('Tiene que ser un número entero')
+    .min(0, 'No puede ser negativo')
+    .max(9999, 'Cantidad fuera de rango')
+    .default(1),
+
+  serialNumber: z
+    .union([safeTextSchema(80), z.literal('')])
+    .optional()
+    .transform((value) => (value ? value : null)),
+
+  condition: z
+    .enum(['GOOD', 'NEEDS_SERVICE', 'OUT_OF_SERVICE', 'LOST'])
+    .default('GOOD'),
+
+  location: z
+    .union([safeTextSchema(80), z.literal('')])
+    .optional()
+    .transform((value) => (value ? value : null)),
+
+  notes: z
+    .union([safeTextSchema(300), z.literal('')])
+    .optional()
+    .transform((value) => (value ? value : null)),
+
+  /** Fecha del último mantenimiento. 'YYYY-MM-DD' o vacío. */
+  lastServicedOn: z
+    .union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida'), z.literal('')])
+    .optional()
+    // Mediodía en hora de la clínica: es un DÍA, no un instante, y a mediodía
+    // ningún desfase horario lo mueve de fecha.
+    .transform((value) => (value ? new Date(`${value}T12:00:00-04:00`) : null)),
+});
+
+export type InstrumentFormInput = z.infer<typeof instrumentSchema>;
+
+// --- Solicitud de cambio de horario -----------------------------------------
+
+/** Un bloque de la semana propuesta. */
+const scheduleBlockSchema = z
+  .object({
+    weekday: z.coerce.number().int().min(0, 'Día inválido').max(6, 'Día inválido'),
+    startMinute: z.coerce.number().int().min(0).max(1440),
+    endMinute: z.coerce.number().int().min(0).max(1440),
+  })
+  .refine((block) => block.endMinute > block.startMinute, {
+    message: 'La hora de fin tiene que ser posterior a la de inicio',
+    path: ['endMinute'],
+  });
+
+/**
+ * Semana completa propuesta por un odontólogo.
+ *
+ * Se envía ENTERA, no como un delta, porque se aprueba o se rechaza entera:
+ * una aprobación parcial dejaría un horario que nadie propuso.
+ *
+ * `proposedBlocks` llega como JSON en un campo oculto: un formulario HTML no
+ * sabe mandar una lista de objetos, y montar `blocks[0][weekday]` sería más
+ * frágil que serializar una vez.
+ */
+export const scheduleRequestSchema = z.object({
+  proposedBlocks: z
+    .string()
+    .transform((value, ctx) => {
+      try {
+        return JSON.parse(value) as unknown;
+      } catch {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Horario mal formado' });
+        return z.NEVER;
+      }
+    })
+    .pipe(
+      z
+        .array(scheduleBlockSchema)
+        .min(1, 'Añade al menos un bloque horario')
+        .max(21, 'Demasiados bloques'),
+    )
+    // Dos bloques que se pisan el mismo día harían ambiguo el horario: el bot
+    // no sabría cuál de los dos ofrecer.
+    .refine(
+      (blocks) =>
+        !blocks.some((a, i) =>
+          blocks.some(
+            (b, j) =>
+              i !== j &&
+              a.weekday === b.weekday &&
+              a.startMinute < b.endMinute &&
+              b.startMinute < a.endMinute,
+          ),
+        ),
+      { message: 'Hay bloques que se solapan el mismo día' },
+    ),
+
+  reason: z
+    .union([safeTextSchema(300), z.literal('')])
+    .optional()
+    .transform((value) => (value ? value : null)),
+});
+
+/** Aprobación o rechazo de un cambio de horario. */
+export const scheduleReviewSchema = z
+  .object({
+    id: cuidSchema,
+    status: z.enum(['APPROVED', 'REJECTED']),
+    reviewNotes: z
+      .union([safeTextSchema(300), z.literal('')])
+      .optional()
+      .transform((value) => (value ? value : null)),
+  })
+  .refine((data) => data.status !== 'REJECTED' || Boolean(data.reviewNotes), {
+    message: 'Indica por qué se rechaza',
+    path: ['reviewNotes'],
+  });
+
+// --- Cambio de contraseña ---------------------------------------------------
+
+/**
+ * Cambio de contraseña de la propia cuenta.
+ *
+ * ⚠️  No lleva `userId`: la cuenta que se modifica es SIEMPRE la de la
+ *  sesión. Aceptarlo del formulario convertiría esto en «cambiar la
+ *  contraseña de cualquiera sabiendo su id».
+ *
+ * La política sigue a NIST SP 800-63B: manda la LONGITUD. No se exige
+ * mayúscula + número + símbolo porque esas reglas empujan a `Password1!`.
+ */
+export const passwordChangeSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Escribe tu contraseña actual'),
+
+    newPassword: z
+      .string()
+      .min(
+        PASSWORD_POLICY.minLength,
+        `La contraseña nueva debe tener al menos ${PASSWORD_POLICY.minLength} caracteres`,
+      )
+      .max(PASSWORD_POLICY.maxLength, 'La contraseña es demasiado larga'),
+
+    confirmPassword: z.string(),
+  })
+  .refine((data) => data.newPassword === data.confirmPassword, {
+    message: 'Las dos contraseñas no coinciden',
+    path: ['confirmPassword'],
+  })
+  // Cambiarla por la misma no cierra las sesiones de nadie: si el motivo era
+  // que alguien la conocía, seguiría conociéndola.
+  .refine((data) => data.newPassword !== data.currentPassword, {
+    message: 'La contraseña nueva tiene que ser distinta de la actual',
+    path: ['newPassword'],
+  });
+
+export type PasswordChangeInput = z.infer<typeof passwordChangeSchema>;
+
+// --- Tarifas pactadas por odontólogo ----------------------------------------
+
+/**
+ * Precio y reparto pactados para un odontólogo y un tratamiento.
+ *
+ * ⚠️  Nótese lo que NO está aquí: `status`. Lo decide el servidor a partir
+ *  del ROL de quien envía —el administrador guarda aprobado, el odontólogo
+ *  sólo puede proponer—. Si viajara en el formulario, un odontólogo podría
+ *  aprobarse su propia tarifa y cambiar lo que se le cobra a los pacientes.
+ *
+ * Los dos campos son opcionales por separado: se puede pactar sólo el precio
+ * (manteniendo la comisión general), sólo la comisión, o ambos.
+ */
+export const dentistTreatmentSchema = z
+  .object({
+    dentistId: cuidSchema,
+    treatmentId: cuidSchema,
+
+    customPriceInPesos: z
+      .union([z.string(), z.number()])
+      .optional()
+      .transform((value) => (value === '' || value == null ? null : Number(value)))
+      .refine((value) => value === null || (Number.isFinite(value) && value >= 0), {
+        message: 'El precio no puede ser negativo',
+      })
+      .refine((value) => value === null || value <= 1_000_000, {
+        message: 'Precio fuera de rango',
+      })
+      .transform((value) => (value === null ? null : Math.round(value * 100))),
+
+    customCommissionPercent: z
+      .union([z.string(), z.number()])
+      .optional()
+      .transform((value) => (value === '' || value == null ? null : Number(value)))
+      .refine(
+        (value) =>
+          value === null || (Number.isInteger(value) && value >= 0 && value <= 100),
+        { message: 'El porcentaje debe ser un entero entre 0 y 100' },
+      ),
+  })
+  // Un acuerdo que no cambia ni el precio ni el reparto no es un acuerdo:
+  // guardarlo sólo añadiría una fila que no hace nada.
+  .refine(
+    (data) => data.customPriceInPesos !== null || data.customCommissionPercent !== null,
+    {
+      message: 'Indica al menos un precio o una comisión distintos de los de lista',
+      path: ['customPriceInPesos'],
+    },
+  );
+
+export type DentistTreatmentFormInput = z.infer<typeof dentistTreatmentSchema>;
+
+/** Aprobación o rechazo de una propuesta de tarifa. */
+export const tariffReviewSchema = z
+  .object({
+    id: cuidSchema,
+    status: z.enum(['APPROVED', 'REJECTED']),
+    reviewNotes: z
+      .union([safeTextSchema(300), z.literal('')])
+      .optional()
+      .transform((value) => (value ? value : null)),
+  })
+  // Rechazar sin motivo garantiza que se vuelva a proponer lo mismo.
+  .refine((data) => data.status !== 'REJECTED' || Boolean(data.reviewNotes), {
+    message: 'Indica por qué se rechaza',
+    path: ['reviewNotes'],
   });
 
 // --- Ajustes de la clínica --------------------------------------------------
@@ -320,6 +676,19 @@ export const paymentFormSchema = z.object({
     .optional()
     .transform((value) => (value ? value : null)),
 
+  /**
+   * Reparto puntual distinto al habitual: el 50/50 que a veces se pacta.
+   *
+   * Vacío = reglas normales. Se acepta del formulario —a diferencia del
+   * reparto calculado, que jamás— porque es una decisión de negocio que toma
+   * recepción con el paciente delante. Queda registrada en la auditoría junto
+   * con quién la hizo.
+   */
+  commissionOverride: z
+    .union([percentSchema, z.literal('')])
+    .optional()
+    .transform((value) => (value === '' || value === undefined ? null : value)),
+
   externalReference: z
     .union([safeTextSchema(120), z.literal('')])
     .optional()
@@ -389,3 +758,87 @@ export const paymentMethodSchema = z.object({
 });
 
 export type PaymentMethodFormInput = z.infer<typeof paymentMethodSchema>;
+
+/**
+ * Expediente clínico transcrito por la asistente.
+ *
+ * Casi todo es opcional a propósito: el papel llega a medio llenar y hay que
+ * poder guardarlo igual. Un formulario que exigiera todos los campos obligaría
+ * a inventarse datos clínicos para poder guardar, que es peor que un
+ * expediente incompleto.
+ */
+export const clinicalRecordSchema = z.object({
+  patientId: cuidSchema,
+
+  // Banderas de riesgo. Van como casillas y no dentro del texto libre porque
+  // tienen que poder consultarse antes de un procedimiento.
+  hypertension: z.coerce.boolean().default(false),
+  diabetes: z.coerce.boolean().default(false),
+  heartDisease: z.coerce.boolean().default(false),
+  anticoagulants: z.coerce.boolean().default(false),
+  pregnant: z.coerce.boolean().default(false),
+
+  allergies: z.union([safeTextSchema(500), z.literal('')]).optional().transform((v) => v || null),
+  currentMedications: z.union([safeTextSchema(500), z.literal('')]).optional().transform((v) => v || null),
+  medicalNotes: z.union([safeTextSchema(1000), z.literal('')]).optional().transform((v) => v || null),
+  chiefComplaint: z.union([safeTextSchema(500), z.literal('')]).optional().transform((v) => v || null),
+  treatmentPlan: z.union([safeTextSchema(2000), z.literal('')]).optional().transform((v) => v || null),
+
+  /**
+   * Odontograma serializado desde el formulario.
+   *
+   * Llega como JSON en un campo oculto porque son 32 piezas: mandarlas como 32
+   * campos sueltos haría el formulario ilegible y el parseo frágil.
+   *
+   * Se valida la FORMA, no sólo que sea JSON: sin esto, cualquiera podría
+   * guardar un objeto arbitrario en una columna que luego se pinta.
+   */
+  odontogram: z
+    .string()
+    .optional()
+    .transform((raw) => {
+      if (!raw) return null;
+      try {
+        return JSON.parse(raw) as unknown;
+      } catch {
+        return null;
+      }
+    })
+    .pipe(
+      z
+        .record(
+          // Clave: notación FDI de dos dígitos.
+          z.string().regex(/^[1-8][1-8]$/),
+          z.object({
+            estado: z.enum([
+              'SANO', 'CARIES', 'OBTURADO', 'CORONA',
+              'AUSENTE', 'EXTRACCION', 'IMPLANTE', 'ENDODONCIA',
+            ]),
+            notas: safeTextSchema(120).optional(),
+          }),
+        )
+        .nullable(),
+    ),
+});
+
+export type ClinicalRecordFormInput = z.infer<typeof clinicalRecordSchema>;
+
+/** Una línea de la hoja de evolución. */
+export const clinicalEntrySchema = z.object({
+  patientId: cuidSchema,
+  /** Fecha del PAPEL, no la de hoy: se transcribe con días de retraso. */
+  performedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida'),
+  dentistId: z.union([cuidSchema, z.literal('')]).optional().transform((v) => v || null),
+  procedure: safeTextSchema(300).pipe(z.string().min(3, 'Describe el procedimiento')),
+  /** Piezas tratadas, separadas por coma o espacio: "16, 17". */
+  teeth: z
+    .string()
+    .optional()
+    .transform((raw) =>
+      (raw ?? '')
+        .split(/[\s,]+/)
+        .map((t) => t.trim())
+        .filter((t) => /^[1-8][1-8]$/.test(t)),
+    ),
+  notes: z.union([safeTextSchema(500), z.literal('')]).optional().transform((v) => v || null),
+});

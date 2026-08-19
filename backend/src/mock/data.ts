@@ -112,6 +112,7 @@ export const MOCK_ROOMS: Room[] = [
     name: 'Consultorio 1',
     code: 'C1',
     equipment: ['Unidad odontológica', 'Rayos X periapical', 'Lámpara LED'],
+    assignedDentistId: null,
     isActive: true,
     notes: 'Consultorio principal, equipado para ortodoncia',
   },
@@ -120,6 +121,8 @@ export const MOCK_ROOMS: Room[] = [
     name: 'Consultorio 2',
     code: 'C2',
     equipment: ['Unidad odontológica', 'Cavitrón', 'Lámpara LED'],
+    // Rotativo: se reparte según la especialidad del día.
+    assignedDentistId: null,
     isActive: true,
     notes: 'Preferente para higiene y preventivo',
   },
@@ -128,6 +131,7 @@ export const MOCK_ROOMS: Room[] = [
     name: 'Consultorio 3',
     code: 'C3',
     equipment: ['Unidad odontológica', 'Microscopio', 'Rayos X periapical'],
+    assignedDentistId: null,
     isActive: true,
     notes: 'Endodoncia y cirugía',
   },
@@ -268,6 +272,12 @@ export const MOCK_TREATMENTS: Treatment[] = TREATMENT_SEED.map((seed, index) => 
   name: seed.name,
   code: seed.code,
   description: null,
+  // El conducto se cotiza «desde»: depende de cuántos conductos tenga la pieza,
+  // y eso no se sabe hasta ver la radiografía.
+  isPriceVariable: seed.code.startsWith('ENDO'),
+  // La radiografía la hace el equipo de la clínica, no el odontólogo: no hay
+  // reparto que hacer.
+  clinicKeepsAll: seed.code === 'RX',
   category: seed.category,
   basePriceCents: seed.price * 100, // dólares → centavos de USD
   durationMinutes: seed.duration,

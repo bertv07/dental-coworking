@@ -15,6 +15,7 @@ import {
   IconRoom,
   IconSettings,
   IconTooth,
+  IconClock,
   IconCurrency,
   IconHome,
 } from '@/frontend/components/ui/icons';
@@ -40,6 +41,16 @@ interface NavLink {
   Icon: ComponentType<{ size?: number }>;
   /** Rol mínimo para ver el enlace. Debe coincidir con el guard de la página. */
   minimumRole: UserRole;
+  /**
+   * Roles que NO ven el enlace aunque superen el mínimo.
+   *
+   * Hace falta porque el acceso no siempre es una escalera. `/tarifas` es del
+   * odontólogo (propone las suyas) y del administrador (aprueba), pero no de
+   * recepción, que está justo en medio: no decide cuánto cobra nadie. Sin
+   * esto habría que elegir entre esconderle la página al odontólogo o
+   * enseñarle a recepción un enlace que la rebota.
+   */
+  hiddenForRoles?: UserRole[];
   badge?: number;
 }
 
@@ -52,6 +63,26 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // /dashboard es el panel FINANCIERO y su guard exige SUPER_ADMIN.
       { href: '/dashboard', label: 'Dashboard', Icon: IconDashboard, minimumRole: 'SUPER_ADMIN' },
       { href: '/agenda', label: 'Agenda', Icon: IconCalendar, minimumRole: 'DENTIST' },
+      // Dos vistas: el odontólogo propone las suyas, el administrador aprueba
+      // las de todos. Recepción queda fuera: no decide cuánto cobra nadie.
+      {
+        href: '/tarifas',
+        label: 'Tarifas',
+        Icon: IconTag,
+        minimumRole: 'DENTIST',
+        hiddenForRoles: ['ASSISTANT'],
+      },
+      // Quién trabaja cuándo SÍ es cosa de recepción, al revés que las
+      // tarifas: por eso este no esconde nada.
+      { href: '/horarios', label: 'Horarios', Icon: IconClock, minimumRole: 'DENTIST' },
+      // El instrumental es de cada odontólogo; recepción no lo gestiona.
+      {
+        href: '/instrumental',
+        label: 'Instrumental',
+        Icon: IconTooth,
+        minimumRole: 'DENTIST',
+        hiddenForRoles: ['ASSISTANT'],
+      },
       { href: '/caja', label: 'Caja', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
       { href: '/whatsapp', label: 'WhatsApp', Icon: IconChat, minimumRole: 'ASSISTANT' },
       { href: '/pacientes', label: 'Pacientes', Icon: IconUsers, minimumRole: 'ASSISTANT' },
@@ -107,7 +138,9 @@ export function Sidebar({
       <nav className="sidebar__nav" aria-label="Navegación principal">
         {NAV_SECTIONS.map((section) => {
           const visibleLinks = section.links.filter(
-            (link) => ROLE_LEVEL[userRole] >= ROLE_LEVEL[link.minimumRole],
+            (link) =>
+              ROLE_LEVEL[userRole] >= ROLE_LEVEL[link.minimumRole] &&
+              !link.hiddenForRoles?.includes(userRole),
           );
 
           // Sección sin enlaces visibles: no se deja el título huérfano.

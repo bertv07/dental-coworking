@@ -6,6 +6,10 @@
 > Antes de pegarlo, sustituye los marcadores del bloque «Variables»:
 > `PANEL_URL`, `HMAC_SECRET` y las credenciales de WhatsApp.
 >
+> El flujo D (correos al personal: alta, restablecimiento y recuperación de
+> contraseña) necesita además una credencial de **Gmail** conectada en n8n, y
+> que apuntes `STAFF_EMAIL_WEBHOOK_URL` del panel a la URL de ese webhook.
+>
 > Si el panel y n8n corren en el mismo servidor (EasyPanel), `PANEL_URL` es la
 > dirección **interna** — `http://panel:3000` — no el dominio público.
 
@@ -33,6 +37,12 @@ valores a mano dentro de un nodo):
 | `WA_PHONE_ID` | id del número de WhatsApp Business | Enviar mensajes |
 | `WA_TOKEN` | token de Meta | Enviar mensajes |
 | `OPENAI_KEY` | clave del modelo | Redacción, audio e imagen |
+| credencial de **Gmail** | cuenta de la clínica, por OAuth2 | Correos al personal (flujo D) |
+
+La credencial de Gmail se configura como **credencial de n8n**, no como
+variable: n8n la guarda cifrada y la renueva sola. Una contraseña de
+aplicación escrita en un nodo acaba en el JSON del workflow, y ese JSON se
+exporta y se comparte.
 
 ### Sobre `PANEL_URL`: la dirección interna
 
@@ -150,10 +160,24 @@ Cuerpo: `{}` (se firma igual, aunque vaya vacío).
     "treatments": [
       { "code": "LIMPIEZA", "name": "Limpieza dental (profilaxis)",
         "description": "...", "durationMinutes": 45,
-        "priceCents": 3000, "priceUsd": 30, "priceBs": 23132.14 }
+        "priceCents": 3000, "priceUsd": 30, "priceBs": 23132.14,
+        "isPriceVariable": false },
+      { "code": "ENDO", "name": "Tratamiento de conducto",
+        "durationMinutes": 90, "priceUsd": 120,
+        "isPriceVariable": true }
     ],
-    "dentists": [ { "id": "c...", "name": "Dra. Gabriela Ferreira",
-                    "specialties": ["ORTODONCIA"] } ],
+    "dentists": [
+      { "id": "c...", "name": "Dra. Gabriela Ferreira",
+        "specialties": ["ORTODONCIA"],
+        "prices": [] },
+      { "id": "c...", "name": "Dr. Andrés Perdomo",
+        "specialties": ["CIRUGIA"],
+        "prices": [
+          { "code": "EXODONCIA", "name": "Exodoncia simple",
+            "priceCents": 5000, "priceUsd": 50, "priceBs": 38553.57,
+            "isPriceVariable": false }
+        ] }
+    ],
     "rooms":    [ { "id": "c...", "code": "C1", "name": "Consultorio 1" } ],
     "paymentMethods": [
       { "label": "Pago móvil",
@@ -180,12 +204,57 @@ Con los precios escritos en el prompt, el bot cotiza cifras viejas durante
 semanas y nadie se entera hasta que el paciente llega al mostrador y le cobran
 otra cosa.
 
+**Tratamientos de precio variable.** Si un tratamiento trae
+`"isPriceVariable": true` —el caso del tratamiento de conducto—, su precio es
+ORIENTATIVO: depende de lo que se vea en la radiografía. Cotízalo como «desde
+$X, el precio exacto te lo confirma el odontólogo en la consulta». Dar un
+precio cerrado ahí garantiza tener que desdecirlo en el mostrador.
+
+#### El precio depende de con QUIÉN se atienda
+
+*«Los precios varían de acuerdo al tratamiento, y también según el
+odontólogo.»* Un cirujano con veinte años cobra la exodoncia distinto que
+quien acaba de entrar.
+
+Por eso cada odontólogo trae su propio array `prices`. **La regla es una
+sola:**
+
+> Si el paciente ya eligió odontólogo y ese odontólogo tiene ese tratamiento
+> en su `prices`, **cotiza ESE precio**. Si no lo tiene —o el array está
+> vacío—, cotiza el de `treatments`, que es el precio de lista.
+
+Cómo se traduce en la conversación:
+
+- **Aún no ha elegido odontólogo** → da el precio de lista y aclara que puede
+  variar según el profesional: *«La exodoncia está en $30. Con algunos
+  especialistas varía; si prefieres a alguien en concreto te digo su
+  precio.»* Nunca des el precio de un odontólogo que el paciente no pidió.
+- **Ya eligió** → da directamente su precio, sin explicar que existe una
+  lista distinta. Al paciente le interesa lo que va a pagar, no cómo se
+  organiza la clínica por dentro.
+- **Pregunta por varios** → puedes comparar, pero sólo con los que trae el
+  catálogo. No inventes ni interpoles precios de un odontólogo que no tiene
+  ese tratamiento en su `prices`.
+
+`prices` sólo trae tarifas **ya aprobadas** por la administración. Una
+propuesta que el odontólogo mandó pero nadie aprobó todavía no aparece aquí,
+y eso es deliberado: hasta que se aprueba se cobra el precio de lista, así que
+cotizarla sería prometer un precio que el mostrador no va a respetar.
+
+`isPriceVariable` manda por encima de todo esto. Un conducto pactado en $150
+sigue siendo «desde $150»: lo que varía es la pieza, no quién la trata.
+
+**Lo que NO vas a encontrar en `prices`: el reparto.** Cómo se divide ese
+dinero entre la clínica y el odontólogo es un acuerdo interno. No sale en esta
+respuesta —directamente no se consulta— y no es algo que se le explique a un
+paciente. Si alguien pregunta por comisiones → `handoff`.
+
 `priceBs` ya viene convertido — no multipliques tú. Si `currency.stale` es
 `true`, da el precio en dólares y di que el monto en bolívares lo confirma
 recepción.
 
 **`paymentMethods` es lo que respondes cuando preguntan «¿cómo pago?».** Ver
-§8bis: es el mismo principio que los precios y con más consecuencias.
+§8: es el mismo principio que los precios y con más consecuencias.
 
 ### 3.3 `POST /api/automation/availability` — huecos libres
 
@@ -330,6 +399,64 @@ Un **Webhook** que recibe los mensajes que un agente escribe en el monitor:
 Verifica la firma y reenvíalo a WhatsApp. **No lo registres con `/messages`**:
 el panel ya lo guardó.
 
+### Flujo D — correos al personal
+
+Un **Webhook** aparte, que NO tiene nada que ver con WhatsApp: el panel te
+pide que mandes un correo cuando se da de alta a alguien del personal, cuando
+un administrador le restablece la clave, o cuando esa persona la recupera
+desde el login.
+
+Apunta aquí la variable `STAFF_EMAIL_WEBHOOK_URL` del panel. Llega firmado
+con el mismo HMAC (`X-Automation-Timestamp` + `X-Automation-Signature` sobre
+`${timestamp}.${body}`) — **verifícalo igual que el resto, y rechaza si no
+cuadra**.
+
+```json
+{
+  "type": "STAFF_INVITE",
+  "to": "gabriela.ferreira@dentalcoworking.com.ve",
+  "fullName": "Dra. Gabriela Ferreira",
+  "role": "Odontólogo",
+  "temporaryPassword": "Kj7mQp2xRt9wBnZv",
+  "resetUrl": null,
+  "loginUrl": "https://panel.clinica.com/login",
+  "issuedAt": "2026-08-19T14:32:00.000Z"
+}
+```
+
+**Nodos:** `Webhook` → `Code` (verificar firma) → `IF` (firma válida) →
+`Switch` por `type` → `Gmail: Send Message`.
+
+`type` tiene **tres valores** y cada uno se redacta distinto. No los juntes en
+un solo correo genérico: quien lo recibe tiene que entender por qué le llegó.
+
+| `type` | Cuándo | Qué lleva | Qué debe decir |
+|---|---|---|---|
+| `STAFF_INVITE` | Se le creó la cuenta | `temporaryPassword` | Bienvenida, su usuario (`to`), la clave, el `loginUrl`, y **que al entrar el panel le exigirá cambiarla** |
+| `STAFF_PASSWORD_RESET` | Un administrador le regeneró la clave | `temporaryPassword` | Que **se le restableció** (no que sea nueva cuenta), la clave, y que sus sesiones se cerraron |
+| `STAFF_PASSWORD_RECOVERY` | **Ella misma** la pidió desde el login | `resetUrl` | Un enlace para poner su contraseña. **Caduca en 1 hora y es de un solo uso** — dilo, o lo intentará dos veces |
+
+En `STAFF_PASSWORD_RECOVERY` **`temporaryPassword` viene `null`**: no se manda
+ninguna clave, se manda un enlace. Y al revés en los otros dos: `resetUrl` es
+`null`. Usa el que corresponda y no asumas que ambos vienen.
+
+Lo de «el panel le exigirá cambiarla» no es un consejo de cortesía: el panel
+no la deja hacer nada más hasta que la cambia, y sin avisarlo parece un error.
+
+Cuatro reglas sobre este flujo:
+
+1. **`temporaryPassword` y `resetUrl` son secretos en tránsito.** No los
+   escribas en logs de n8n, no los mandes a Slack, no los guardes en una hoja.
+   El panel ya no los tiene —guardó el hash— así que este correo es su único
+   destino legítimo. Un `resetUrl` en un log es una cuenta regalada.
+2. **No reenvíes.** Si el envío falla, la clave correcta ya no se puede
+   recuperar: hay que generar otra desde el panel. Un reintento que reenvíe
+   el mismo `issuedAt` está bien; fabricar una clave por tu cuenta, no.
+3. **Un solo destinatario: `to`.** Nada de copia al administrador. Una clave
+   que llega a dos buzones es una clave que conocen dos personas.
+4. **`issuedAt` sirve para deduplicar.** Si el mismo evento te llega dos
+   veces por un reintento de red, no mandes dos correos.
+
 ---
 
 ## 5. Los tres roles
@@ -354,9 +481,35 @@ Puede preguntar cosas como «¿qué tengo mañana?» o «¿a qué hora es mi pri
 cita del jueves?». Responde consultando `/availability` con su `dentistId`
 para saber qué tiene ocupado.
 
+**También puede AGENDAR.** Un odontólogo cierra citas por su cuenta —un
+paciente le escribe directo, o acuerdan el control al terminar la consulta— y
+tiene que poder hacerlo sin pasar por recepción. Llama a `/appointments` con
+`dentistId` = su propio `contact.dentistId`, nunca el de otro: si pide agendar
+a nombre de un colega, eso es cosa de recepción y va a `handoff`.
+
+Al agendar él, pídele siempre el **teléfono del paciente**: `patientPhone` es
+la llave con la que se crea o se encuentra la ficha, y el número del
+odontólogo no sirve.
+
 **Nunca le des importes ni comisiones.** El odontólogo cobra por liquidación
-mensual y las tarifas no son asunto suyo en este canal. Si pregunta por
-dinero → `handoff`.
+y las tarifas no son asunto suyo en este canal. Si pregunta por dinero →
+`handoff`.
+
+**Lo que se hace en el panel y NO por aquí.** El panel tiene pantallas propias
+para varias cosas que un odontólogo va a intentar pedirte por WhatsApp. No las
+escales a un humano: dile dónde están, que es más rápido para él.
+
+| Si pide… | Contéstale |
+|---|---|
+| Cambiar su horario | Que lo proponga en **Horarios** del panel; se aplica cuando lo aprueben |
+| Cambiar el precio de un tratamiento suyo | Que lo proponga en **Tarifas**; hasta que lo aprueben se cobra el de lista |
+| Apuntar o revisar su instrumental | Que use **Instrumental** en el panel |
+| Su contraseña, o no poder entrar | Que use «¿Olvidaste tu contraseña?» en la pantalla de inicio de sesión |
+| Ver o cobrar dinero | `handoff` — eso no va por este canal |
+
+Agendar **sí** lo haces tú, aquí mismo: es lo único de esa lista que resuelve
+mejor una conversación que una pantalla, porque suele pasar con el paciente
+delante.
 
 ### `ASSISTANT` y `ADMIN`
 
@@ -410,7 +563,7 @@ de menos puede costar un paciente — o algo peor si era una urgencia.
 
 ---
 
-## 8bis. Cómo se responde «¿cómo pago?»
+## 8. Cómo se responde «¿cómo pago?»
 
 Los medios de pago salen de `catalog.paymentMethods`. **No los escribas en el
 prompt del modelo ni en un nodo Set.**
@@ -446,6 +599,10 @@ de pago de golpe hace que el paciente no elija ninguna.
   bot no la ve.
 - **No registra cobros en el sistema.** Eso lo hace recepción desde el panel,
   donde el cobro queda firmado por su usuario y entra en el cierre de caja.
+
+  > Existe un `POST /api/automation/payments` en el panel, pero **NO lo
+  > llames**: está a medias a propósito y no persiste nada todavía. No lo he
+  > incluido en §3 por eso. Si algún día se activa, te lo paso aparte.
 - **No negocia descuentos, abonos ni financiamiento** → `handoff`.
 - Si el paciente **manda una captura de pago**, descríbela, guárdala con
   `/messages` (con su `mediaUrl`) y llama a `handoff` con el motivo
@@ -453,7 +610,7 @@ de pago de golpe hace que el paciente no elija ninguna.
 
 ---
 
-## 8. Cómo debe escribir
+## 9. Cómo debe escribir
 
 El objetivo es que **no se note que es un bot**. Reglas concretas:
 
@@ -480,7 +637,7 @@ consultorio**. Es lo que evita el «yo entendí que era el martes».
 
 ---
 
-## 9. Errores y reintentos
+## 10. Errores y reintentos
 
 - **`401`** → la firma o el reloj están mal. No reintentes en bucle: registra y
   escala. Reintentar con una firma mala 50 veces sólo llena los logs.
@@ -498,11 +655,11 @@ Un paciente esperando en silencio es el peor final posible.
 
 ---
 
-## 10. Qué quiero de vuelta
+## 11. Qué quiero de vuelta
 
 El JSON del workflow con:
 
-- Los **tres flujos** (A, B, C) en el mismo archivo.
+- Los **cuatro flujos** (A, B, C, D) en el mismo archivo.
 - El nodo Code de la firma HMAC, reutilizado por todas las llamadas.
 - Manejo de audio e imagen.
 - El corte por `aiEnabled === false` bien visible.
@@ -510,8 +667,25 @@ El JSON del workflow con:
 - Manejo de `409` con `suggestedSlots`.
 - Respuesta a «¿cómo pago?» leyendo `catalog.paymentMethods`, sin ningún dato
   bancario escrito dentro del flujo.
+- Cotización por odontólogo leyendo `dentists[].prices`, con caída al precio
+  de lista cuando ese odontólogo no tiene tarifa propia.
+- El flujo D con Gmail, con la firma verificada, un `Switch` por `type` que
+  cubra los **tres** correos (alta, restablecimiento, recuperación) y **sin
+  registrar `temporaryPassword` ni `resetUrl` en ningún log**.
+- Para el rol `DENTIST`: agendar sí, y remitir al panel lo de horarios,
+  tarifas, instrumental y contraseña (ver §5) en vez de escalarlo a un humano.
 - Nodos con **nombres en español** y descriptivos («Verificar si la IA está
   activa» y no «HTTP Request 3»).
 - Sin credenciales escritas dentro: todo por variables de entorno.
+
+Y estas tres, que son las que más veces se hacen mal:
+
+1. **Un solo `JSON.stringify`** por petición: se firma y se envía la MISMA
+   cadena. Serializar dos veces es la causa número uno de `401`.
+2. **`/conversation` primero, siempre**, y corte inmediato si `aiEnabled` es
+   `false`. Que el bot conteste en paralelo a un humano es el peor fallo
+   posible de este sistema.
+3. **Ningún precio, horario ni nombre escrito dentro del prompt del modelo.**
+   Todo sale de `/catalog` en cada conversación.
 
 Devuelve **sólo el JSON**.

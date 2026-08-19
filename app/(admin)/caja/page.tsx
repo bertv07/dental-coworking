@@ -9,6 +9,7 @@ import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/m
 import { IconDownload, IconChevronLeft, IconChevronRight } from '@/frontend/components/ui/icons';
 import { CashClosePanel } from '@/frontend/features/admin/CashClosePanel';
 import { PendingCharges } from '@/frontend/features/admin/PendingCharges';
+import { DailySettlements } from '@/frontend/features/admin/DailySettlements';
 
 /**
  * ===========================================================================
@@ -59,11 +60,13 @@ export default async function CashPage({
   const businessDate = clinicDayKey(cash.date);
   const todayKey = clinicDayKey(new Date());
 
-  const [closing, pending, settings] = await Promise.all([
+  const [closing, pending, settings, settlements] = await Promise.all([
     repository.getCashClosing(businessDate),
     // Lo que falta por cobrar: sólo tiene sentido en un día no cerrado.
     repository.listUnpaidAppointmentsForDay(businessDate),
     repository.getClinicSettings(),
+    // «Se paga al final del día»: lo que le toca a cada odontólogo hoy.
+    repository.getDailySettlements(businessDate),
   ]);
 
   const paymentMethods = await repository.listPaymentMethods();
@@ -192,6 +195,19 @@ export default async function CashPage({
           />
         </FadeIn>
       </div>
+
+      {/*
+        La liquidación va DESPUÉS de cuadrar la caja: primero se sabe cuánto
+        entró y que el efectivo cuadra, y sólo entonces se reparte.
+      */}
+      <FadeIn delay={0.16}>
+        <DailySettlements
+          settlements={settlements}
+          businessDate={businessDate}
+          exchangeRate={rate?.rate ?? null}
+          canSettle={user.role === 'SUPER_ADMIN'}
+        />
+      </FadeIn>
 
       <div className="grid-2">
         <FadeIn delay={0.18}>

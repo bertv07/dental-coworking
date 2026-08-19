@@ -168,6 +168,17 @@ export const authConfig: NextAuthConfig = {
       if (session.user) {
         session.user.id = token.sub ?? '';
         session.user.role = (token.role as UserRole) ?? 'ASSISTANT';
+        /*
+         * Marca de emisión, para poder revocar. `getCurrentUser()` la compara
+         * con la que tiene la cuenta ahora mismo: si la de la base es más
+         * nueva, este token se emitió antes de un cambio de contraseña y ya
+         * no vale.
+         *
+         * Sin exponerla aquí no hay nada contra lo que comparar, y el campo
+         * `sessionsValidFrom` se quedaría en lo que era hasta ahora: un dato
+         * que se escribe y que no lee nadie.
+         */
+        session.user.sessionsValidFrom = (token.sessionsValidFrom as number) ?? 0;
       }
       return session;
     },
@@ -210,6 +221,8 @@ declare module 'next-auth' {
       email: string;
       name: string;
       role: UserRole;
+      /** Milisegundos. Contra esto se decide si la sesión fue revocada. */
+      sessionsValidFrom: number;
     };
   }
 }

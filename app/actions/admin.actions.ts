@@ -13,13 +13,28 @@ import {
   roomFormSchema,
   appointmentFormSchema,
   appointmentStatusSchema,
+  appointmentAddonSchema,
+  dentistTreatmentSchema,
+  tariffReviewSchema,
+  instrumentSchema,
+  scheduleRequestSchema,
+  scheduleReviewSchema,
+  ownAppointmentSchema,
   clinicSettingsSchema,
   paymentFormSchema,
   cashClosingSchema,
   paymentMethodSchema,
 } from '@/backend/validators/admin.schema';
+import type { DentistFormInput } from '@/backend/validators/admin.schema';
 import { cuidSchema } from '@/backend/validators/common';
+import { hashPassword } from '@/backend/auth/password';
+import { env } from '@/backend/config/env';
+import {
+  generateTemporaryPassword,
+  sendStaffInvite,
+} from '@/backend/services/staff-invite.service';
 import { clinicDayKey, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
+import { scheduleAppointment } from '@/backend/services/scheduling.service';
 
 /**
  * ===========================================================================
@@ -50,6 +65,14 @@ export interface ActionResult {
   /** Campo concreto que falló, para resaltarlo en el formulario. */
   field?: string;
   message?: string;
+  /**
+   * La operación salió bien, pero hay algo que decir.
+   *
+   * Existe por el alta con cuenta: el odontólogo queda creado y el correo
+   * puede no salir. No es un error —deshacer el alta sería peor— pero quien
+   * lo hizo tiene que enterarse de que esa persona todavía no puede entrar.
+   */
+  warning?: string;
 }
 
 /**
@@ -67,6 +90,15 @@ async function runAction<TSchema extends z.ZodTypeAny>(config: {
   revalidate: string;
   /** Verbo de auditoría, ej: "patient.created". */
   auditAction: string;
+  /**
+   * Mensaje para `reason: 'DUPLICATE'` cuando el conflicto NO es un registro
+   * repetido. El repositorio sólo distingue "conflicto" de "no existe", así
+   * que el texto lo pone quien sabe qué significa el choque en su caso:
+   * para un paciente es un teléfono repetido, para un añadido es que la cita
+   * ya está cobrada. Sin esto, recepción leería "ya existe un registro con
+   * ese appointmentId", que no describe nada de lo que pasó.
+   */
+  conflictMessage?: string;
   handler: (
     data: z.infer<TSchema>,
     userId: string,
@@ -104,7 +136,9 @@ async function runAction<TSchema extends z.ZodTypeAny>(config: {
         return {
           ok: false,
           field: result.field,
-          error: `Ya existe un registro con ese ${FIELD_LABEL[result.field] ?? result.field}.`,
+          error:
+            config.conflictMessage ??
+            `Ya existe un registro con ese ${FIELD_LABEL[result.field] ?? result.field}.`,
         };
       }
       return { ok: false, error: 'El registro no existe o fue eliminado.' };
@@ -199,15 +233,124 @@ export async function deletePatientAction(id: string): Promise<ActionResult> {
 //  ODONTÓLOGOS  (sólo Super Admin: define cuánto cobra cada persona)
 // ===========================================================================
 
+/**
+ * Separa los datos clínicos de la decisión «además, créale cuenta».
+ *
+ * `createAccount` es una instrucción para esta acción, no una columna de
+ * `dentists`. Si se colara en el objeto que va al repositorio, Prisma
+ * fallaría con un campo desconocido.
+ */
+function toDentistInput(data: DentistFormInput) {
+  const { createAccount: _ignored, ...dentist } = data;
+  return dentist;
+}
+
+/**
+ * Alta de odontólogo, con o sin acceso al panel.
+ *
+ * Cuando se pide cuenta, no usa `runAction`: hay que generar una contraseña,
+ * hashearla y pedirle a n8n que mande el correo, y el resultado del envío
+ * tiene que llegar a la interfaz. `runAction` sólo sabe devolver ok/error.
+ *
+ * ORDEN DELIBERADO — primero la base, después el correo:
+ * si se enviara antes, un fallo al guardar dejaría a alguien con una clave
+ * por correo para una cuenta que no existe. Al revés, un fallo de correo deja
+ * la cuenta creada y la interfaz avisa de que hay que dar la clave a mano.
+ * El primer caso confunde a quien lo recibe; el segundo lo resuelve el
+ * administrador en un minuto.
+ */
 export async function createDentistAction(input: unknown): Promise<ActionResult> {
-  return runAction({
-    minimumRole: 'SUPER_ADMIN',
-    schema: dentistFormSchema,
-    input,
-    revalidate: '/odontologos',
-    auditAction: 'dentist.created',
-    handler: (data) => repository.createDentist(data),
-  });
+  const validation = dentistFormSchema.safeParse(input);
+
+  // Sin cuenta, el camino es el CRUD de siempre.
+  if (!validation.success || !validation.data.createAccount) {
+    return runAction({
+      minimumRole: 'SUPER_ADMIN',
+      schema: dentistFormSchema,
+      input,
+      revalidate: '/odontologos',
+      auditAction: 'dentist.created',
+      handler: (data) => repository.createDentist(toDentistInput(data)),
+    });
+  }
+
+  const authorization = await checkApiRole('SUPER_ADMIN');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error:
+        authorization.status === 401
+          ? 'Tu sesión expiró. Vuelve a iniciar sesión.'
+          : 'No tienes permiso para dar de alta odontólogos.',
+    };
+  }
+
+  const data = validation.data;
+
+  try {
+    // Se hashea FUERA de la transacción: Argon2 tarda ~80 ms y mantener la
+    // transacción abierta ese rato no aporta nada.
+    const temporaryPassword = generateTemporaryPassword();
+    const passwordHash = await hashPassword(temporaryPassword);
+
+    const result = await repository.createDentistWithAccount({
+      dentist: toDentistInput(data),
+      passwordHash,
+    });
+
+    if (!result.ok) {
+      if (result.reason === 'DUPLICATE') {
+        return {
+          ok: false,
+          field: result.field,
+          error:
+            result.field === 'email'
+              ? 'Ese correo ya tiene una cuenta en el panel.'
+              : `Ya existe un registro con ese ${FIELD_LABEL[result.field] ?? result.field}.`,
+        };
+      }
+      return { ok: false, error: 'No se pudo crear el odontólogo.' };
+    }
+
+    // Ya está en la base. El correo es el paso que puede fallar sin deshacer
+    // nada de lo anterior.
+    const delivery = await sendStaffInvite({
+      email: data.email,
+      fullName: data.fullName,
+      temporaryPassword,
+      role: 'Odontólogo',
+      loginUrl: `${env.APP_ORIGIN}/login`,
+    });
+
+    revalidatePath('/odontologos');
+
+    if (delivery.status !== 'SENT') {
+      /*
+       * La clave temporal NO se devuelve a la interfaz. Ya está hasheada en
+       * la base y no hay forma de recuperarla: para reenviarla hay que
+       * generar una nueva. Devolverla aquí la dejaría en el HTML, en el
+       * historial del navegador y en cualquier captura de pantalla.
+       */
+      return {
+        ok: true,
+        warning:
+          delivery.status === 'PENDING'
+            ? 'El odontólogo quedó creado, pero el envío de correo no está configurado (STAFF_EMAIL_WEBHOOK_URL). Tendrás que restablecerle la clave para que pueda entrar.'
+            : `El odontólogo quedó creado, pero el correo no se pudo enviar (${delivery.reason}). Tendrás que restablecerle la clave.`,
+      };
+    }
+
+    return { ok: true };
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        event: 'dentist.create_with_account_failed',
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return { ok: false, error: 'No se pudo crear el odontólogo. Intenta de nuevo.' };
+  }
 }
 
 export async function updateDentistAction(
@@ -392,6 +535,533 @@ export async function setAppointmentStatusAction(input: unknown): Promise<Action
   });
 }
 
+/**
+ * Añade un procedimiento a una cita ya agendada.
+ *
+ * El caso real: el paciente viene a una limpieza, el odontólogo ve una caries
+ * y la obtura en la misma sesión. Se agendó por una cosa y se cobra por dos.
+ *
+ * No se toca `agreedPriceCents` de la cita: ése es el precio congelado al
+ * agendar, y la diferencia entre lo cotizado y lo cobrado es justo el dato
+ * que revela si el bot está cotizando mal.
+ */
+export async function addAppointmentAddonAction(input: unknown): Promise<ActionResult> {
+  return runAction({
+    minimumRole: 'ASSISTANT',
+    schema: appointmentAddonSchema,
+    input,
+    revalidate: '/agenda',
+    auditAction: 'appointment.addon_added',
+    conflictMessage:
+      'Esa cita ya está cobrada. Para añadir un procedimiento hay que anular el cobro primero.',
+    handler: (data, userId) =>
+      repository.addAppointmentAddon({
+        appointmentId: data.appointmentId,
+        treatmentId: data.treatmentId,
+        priceCents: data.priceInPesos,
+        notes: data.notes,
+        userId,
+      }),
+  });
+}
+
+/** Quita un procedimiento añadido, mientras la cita no esté cobrada. */
+export async function removeAppointmentAddonAction(id: string): Promise<ActionResult> {
+  return runAction({
+    minimumRole: 'ASSISTANT',
+    schema: cuidSchema,
+    input: id,
+    revalidate: '/agenda',
+    auditAction: 'appointment.addon_removed',
+    conflictMessage: 'Esa cita ya está cobrada: sus conceptos no se pueden cambiar.',
+    handler: (validId, userId) =>
+      repository.removeAppointmentAddon({ id: validId, userId }),
+  });
+}
+
+// ===========================================================================
+//  TARIFAS PACTADAS POR ODONTÓLOGO
+// ===========================================================================
+//  «Los precios varían de acuerdo al tratamiento, y también según el
+//  odontólogo.» El odontólogo PROPONE y el administrador APRUEBA.
+//
+//  Mientras la propuesta esté en `PENDING` no se aplica: se sigue cobrando el
+//  precio de lista (`createPayment` sólo mira los `APPROVED`).
+// ===========================================================================
+
+/**
+ * Guarda un acuerdo de precio.
+ *
+ * NO usa `runAction` porque dos cosas dependen del ROL de quien envía, y
+ * ninguna puede salir del formulario:
+ *
+ *  · El ESTADO. El administrador guarda directamente en `APPROVED` —él es el
+ *    aprobador—; el odontólogo sólo puede dejarlo en `PENDING`.
+ *  · El ODONTÓLOGO. Un odontólogo sólo puede proponer para SÍ MISMO. El id
+ *    se resuelve desde su sesión, no desde el campo del formulario: si no,
+ *    bastaría con cambiar un id a mano para tocarle la tarifa a otro.
+ */
+export async function saveDentistTariffAction(input: unknown): Promise<ActionResult> {
+  const authorization = await checkApiRole('DENTIST');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error:
+        authorization.status === 401
+          ? 'Tu sesión expiró. Vuelve a iniciar sesión.'
+          : 'No tienes permiso para esto.',
+    };
+  }
+
+  const validation = dentistTreatmentSchema.safeParse(input);
+  if (!validation.success) {
+    const issue = validation.error.issues[0];
+    return { ok: false, error: issue?.message ?? 'Datos inválidos', field: issue?.path.join('.') };
+  }
+
+  const { user } = authorization;
+  const data = validation.data;
+  const esAdministrador = user.role === 'SUPER_ADMIN';
+
+  let dentistId = data.dentistId;
+
+  if (!esAdministrador) {
+    // El odontólogo propone para su propia ficha, resuelta desde la sesión.
+    const profile = await repository.findDentistByUserId(user.id);
+    if (!profile) {
+      return {
+        ok: false,
+        error: 'Tu usuario no está vinculado a una ficha de odontólogo.',
+      };
+    }
+
+    /*
+     * Se rechaza en vez de reescribir silenciosamente el id. Si el formulario
+     * pide una tarifa para otra persona, o hay un error de programación o hay
+     * un intento de manipulación: en ambos casos conviene que se note.
+     */
+    if (data.dentistId !== profile.id) {
+      return { ok: false, error: 'Sólo puedes proponer tarifas para ti.' };
+    }
+
+    dentistId = profile.id;
+  }
+
+  try {
+    const result = await repository.upsertDentistTreatment({
+      dentistId,
+      treatmentId: data.treatmentId,
+      customPriceCents: data.customPriceInPesos,
+      customCommissionPercent: data.customCommissionPercent,
+      // Aquí está la regla entera: el rol decide si nace aprobado o pendiente.
+      status: esAdministrador ? 'APPROVED' : 'PENDING',
+      userId: user.id,
+    });
+
+    if (!result.ok) {
+      return { ok: false, error: 'El odontólogo o el tratamiento ya no existen.' };
+    }
+
+    revalidatePath('/tarifas');
+    return { ok: true };
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        event: 'tariff.save_failed',
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return { ok: false, error: 'No se pudo guardar la tarifa.' };
+  }
+}
+
+/** Aprueba o rechaza una propuesta. Sólo el administrador. */
+export async function reviewDentistTariffAction(input: unknown): Promise<ActionResult> {
+  return runAction({
+    minimumRole: 'SUPER_ADMIN',
+    schema: tariffReviewSchema,
+    input,
+    revalidate: '/tarifas',
+    auditAction: 'tariff.reviewed',
+    handler: (data, userId) =>
+      repository.reviewDentistTreatment({
+        id: data.id,
+        status: data.status,
+        reviewNotes: data.reviewNotes,
+        userId,
+      }),
+  });
+}
+
+/** Elimina un acuerdo: ese odontólogo vuelve al precio de lista. */
+export async function deleteDentistTariffAction(id: string): Promise<ActionResult> {
+  return runAction({
+    minimumRole: 'SUPER_ADMIN',
+    schema: cuidSchema,
+    input: id,
+    revalidate: '/tarifas',
+    auditAction: 'tariff.deleted',
+    handler: (validId, userId) =>
+      repository.deleteDentistTreatment({ id: validId, userId }),
+  });
+}
+
+// ===========================================================================
+//  LA DOCTORA AGENDA SUS PROPIAS CITAS
+// ===========================================================================
+//  Una odontóloga cierra citas por su cuenta —un paciente le escribe directo,
+//  o acuerdan el control al terminar la consulta— y tiene que poder hacerlo
+//  sin pasar por recepción. Ya podía por WhatsApp; esto es lo mismo desde el
+//  panel.
+//
+//  Reutiliza `scheduleAppointment`, el MISMO servicio que usa el bot. No hay
+//  una segunda vía de agendamiento con sus propias reglas: el solapamiento,
+//  la duración, el precio congelado y la asignación de consultorio se
+//  resuelven en un solo sitio.
+// ===========================================================================
+
+export async function createOwnAppointmentAction(input: unknown): Promise<ActionResult> {
+  const authorization = await checkApiRole('DENTIST');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error:
+        authorization.status === 401
+          ? 'Tu sesión expiró. Vuelve a iniciar sesión.'
+          : 'No tienes permiso para agendar.',
+    };
+  }
+
+  const { user } = authorization;
+
+  // La ficha sale de la SESIÓN. Es lo que impide agendarle a una compañera.
+  const profile = await repository.findDentistByUserId(user.id);
+  if (!profile) {
+    return {
+      ok: false,
+      error: 'Tu usuario no está vinculado a una ficha de odontólogo.',
+    };
+  }
+
+  const validation = ownAppointmentSchema.safeParse(input);
+  if (!validation.success) {
+    const issue = validation.error.issues[0];
+    return { ok: false, error: issue?.message ?? 'Datos inválidos', field: issue?.path.join('.') };
+  }
+
+  const data = validation.data;
+
+  try {
+    const result = await scheduleAppointment({
+      patientPhone: data.patientPhone,
+      patientName: data.patientName,
+      // Siempre ella. Nunca lo que venga en el formulario.
+      dentistId: profile.id,
+      treatmentCode: data.treatmentCode,
+      startsAt: data.startsAt,
+      notes: data.notes,
+      /*
+       * Llave de idempotencia derivada de lo que identifica la cita, no
+       * aleatoria: si se hace doble clic en «Agendar», el segundo envío trae
+       * la misma llave y el servicio devuelve la cita ya creada en vez de
+       * duplicarla.
+       */
+      idempotencyKey: `panel-${profile.id}-${data.patientPhone}-${data.startsAt.toISOString()}`,
+    });
+
+    switch (result.outcome) {
+      case 'CREATED':
+      case 'ALREADY_EXISTS':
+        revalidatePath('/agenda');
+        return { ok: true };
+
+      case 'TREATMENT_NOT_FOUND':
+        return { ok: false, error: 'Ese tratamiento ya no está disponible.', field: 'treatmentCode' };
+
+      case 'DENTIST_NOT_FOUND':
+        return { ok: false, error: 'Tu ficha de odontólogo no está activa.' };
+
+      case 'DENTIST_UNAVAILABLE':
+        return {
+          ok: false,
+          field: 'startsAt',
+          error: `Ya tienes una cita a esa hora.${formatSuggestions(result.suggestedSlots)}`,
+        };
+
+      case 'NO_ROOM_AVAILABLE':
+        return {
+          ok: false,
+          field: 'startsAt',
+          error: `No hay consultorio libre a esa hora.${formatSuggestions(result.suggestedSlots)}`,
+        };
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        event: 'appointment.dentist_self_booking_failed',
+        dentistId: profile.id,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return { ok: false, error: 'No se pudo agendar. Intenta de nuevo.' };
+  }
+}
+
+/**
+ * Convierte los huecos alternativos en texto para el mensaje de error.
+ *
+ * Decir sólo «ocupado» obliga a probar horas a ciegas; con dos o tres
+ * alternativas se resuelve al segundo intento.
+ */
+function formatSuggestions(slots: Date[]): string {
+  if (slots.length === 0) return '';
+
+  const formatter = new Intl.DateTimeFormat('es-VE', {
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'America/Caracas',
+  });
+
+  return ` Libre: ${slots.slice(0, 3).map((slot) => formatter.format(slot)).join(', ')}.`;
+}
+
+// ===========================================================================
+//  LIQUIDACIÓN DIARIA  («se paga al final del día»)
+// ===========================================================================
+
+/**
+ * Marca como pagada la parte de un odontólogo por el día.
+ *
+ * Sólo Super Admin: es entregar dinero. Recepción registra los cobros y
+ * cuenta la caja, pero decidir que se le paga a alguien es otra cosa.
+ */
+export async function settleDentistDayAction(input: unknown): Promise<ActionResult> {
+  const parsed = z
+    .object({
+      dentistId: cuidSchema,
+      businessDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida'),
+    })
+    .safeParse(input);
+
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? 'Datos inválidos' };
+  }
+
+  return runAction({
+    minimumRole: 'SUPER_ADMIN',
+    schema: z.object({}).passthrough(),
+    input: {},
+    revalidate: '/caja',
+    auditAction: 'payout.daily_settled',
+    handler: (_data, userId) =>
+      repository.settleDentistDay({
+        dentistId: parsed.data.dentistId,
+        businessDate: parsed.data.businessDate,
+        userId,
+      }),
+  }).then((result) =>
+    result.ok
+      ? result
+      : {
+          ...result,
+          // `NOT_FOUND` aquí significa «no hay nada pendiente», no «no existe».
+          error: 'No hay nada pendiente de pagarle a ese odontólogo hoy.',
+        },
+  );
+}
+
+// ===========================================================================
+//  INSTRUMENTAL  («cada odontólogo tenga su inventario»)
+// ===========================================================================
+//  Es SU instrumental: el fórceps, la turbina, la cureta que trajo él. Lo
+//  gestiona él mismo, y el administrador puede gestionar el de cualquiera.
+//
+//  El DUEÑO nunca sale del formulario: si lo envía un odontólogo, es él; si
+//  lo envía el administrador, el que eligió. Así un odontólogo no puede
+//  meterle instrumental a otro cambiando un id a mano.
+// ===========================================================================
+
+/**
+ * Resuelve de quién es el instrumental que se está tocando.
+ *
+ * Devuelve el `dentistId` permitido o un error listo para devolver. Está
+ * aparte porque las tres acciones (guardar, borrar, y la de horarios) hacen
+ * exactamente la misma comprobación, y una que se olvidara sería el agujero.
+ */
+async function resolveOwnerDentistId(
+  requestedDentistId: string | null,
+): Promise<
+  | { ok: true; dentistId: string; userId: string; isAdmin: boolean }
+  | { ok: false; result: ActionResult }
+> {
+  const authorization = await checkApiRole('DENTIST');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      result: {
+        ok: false,
+        error:
+          authorization.status === 401
+            ? 'Tu sesión expiró. Vuelve a iniciar sesión.'
+            : 'No tienes permiso para esto.',
+      },
+    };
+  }
+
+  const { user } = authorization;
+  const isAdmin = user.role === 'SUPER_ADMIN';
+
+  if (isAdmin) {
+    if (!requestedDentistId) {
+      return { ok: false, result: { ok: false, error: 'Elige un odontólogo.' } };
+    }
+    return { ok: true, dentistId: requestedDentistId, userId: user.id, isAdmin };
+  }
+
+  // Odontólogo: su ficha sale de la sesión, nunca del formulario.
+  const profile = await repository.findDentistByUserId(user.id);
+  if (!profile) {
+    return {
+      ok: false,
+      result: { ok: false, error: 'Tu usuario no está vinculado a una ficha de odontólogo.' },
+    };
+  }
+
+  // Se rechaza en vez de reescribirlo por lo bajo: o es un error de
+  // programación o es un intento de tocar lo ajeno, y conviene que se note.
+  if (requestedDentistId && requestedDentistId !== profile.id) {
+    return {
+      ok: false,
+      result: { ok: false, error: 'Sólo puedes gestionar tu propio instrumental.' },
+    };
+  }
+
+  return { ok: true, dentistId: profile.id, userId: user.id, isAdmin };
+}
+
+export async function saveInstrumentAction(
+  id: string | null,
+  dentistId: string | null,
+  input: unknown,
+): Promise<ActionResult> {
+  const owner = await resolveOwnerDentistId(dentistId);
+  if (!owner.ok) return owner.result;
+
+  const validation = instrumentSchema.safeParse(input);
+  if (!validation.success) {
+    const issue = validation.error.issues[0];
+    return { ok: false, error: issue?.message ?? 'Datos inválidos', field: issue?.path.join('.') };
+  }
+
+  const result = await repository.saveInstrument({
+    id,
+    dentistId: owner.dentistId,
+    data: validation.data,
+    userId: owner.userId,
+  });
+
+  if (!result.ok) {
+    return { ok: false, error: 'Ese instrumento no existe o no es tuyo.' };
+  }
+
+  revalidatePath('/instrumental');
+  return { ok: true };
+}
+
+export async function deleteInstrumentAction(id: string): Promise<ActionResult> {
+  const owner = await resolveOwnerDentistId(null);
+  if (!owner.ok) return owner.result;
+
+  const parsedId = cuidSchema.safeParse(id);
+  if (!parsedId.success) return { ok: false, error: 'Identificador inválido' };
+
+  /*
+   * Se comprueba la propiedad ANTES de borrar. `deleteInstrument` recibe sólo
+   * el id, así que sin esto un odontólogo podría borrar el instrumental de
+   * otro conociendo su identificador.
+   */
+  if (!owner.isAdmin) {
+    const propios = await repository.listInstruments({ dentistId: owner.dentistId });
+    if (!propios.some((item) => item.id === parsedId.data)) {
+      return { ok: false, error: 'Ese instrumento no es tuyo.' };
+    }
+  }
+
+  const result = await repository.deleteInstrument({
+    id: parsedId.data,
+    userId: owner.userId,
+  });
+
+  if (!result.ok) return { ok: false, error: 'Ese instrumento ya no existe.' };
+
+  revalidatePath('/instrumental');
+  return { ok: true };
+}
+
+// ===========================================================================
+//  HORARIOS  (el odontólogo propone la semana, administración aprueba)
+// ===========================================================================
+
+/** El odontólogo propone su semana. Sólo puede tener UNA solicitud esperando. */
+export async function requestScheduleChangeAction(input: unknown): Promise<ActionResult> {
+  const owner = await resolveOwnerDentistId(null);
+  if (!owner.ok) return owner.result;
+
+  const validation = scheduleRequestSchema.safeParse(input);
+  if (!validation.success) {
+    const issue = validation.error.issues[0];
+    return { ok: false, error: issue?.message ?? 'Datos inválidos', field: issue?.path.join('.') };
+  }
+
+  const result = await repository.createScheduleRequest({
+    dentistId: owner.dentistId,
+    proposedBlocks: validation.data.proposedBlocks,
+    reason: validation.data.reason,
+    userId: owner.userId,
+  });
+
+  if (!result.ok) {
+    // El índice único parcial de Postgres sólo sabe decir "conflicto"; aquí
+    // se traduce a lo que de verdad pasó.
+    return {
+      ok: false,
+      error:
+        result.reason === 'DUPLICATE'
+          ? 'Ya tienes una solicitud esperando respuesta. Espera a que la revisen o pide que la rechacen.'
+          : 'No se pudo enviar la solicitud.',
+    };
+  }
+
+  revalidatePath('/horarios');
+  return { ok: true };
+}
+
+/**
+ * Aprueba o rechaza. Aprobar APLICA el horario en la misma transacción: ver
+ * `reviewScheduleRequest` en el repositorio.
+ */
+export async function reviewScheduleChangeAction(input: unknown): Promise<ActionResult> {
+  return runAction({
+    minimumRole: 'ASSISTANT',
+    schema: scheduleReviewSchema,
+    input,
+    revalidate: '/horarios',
+    auditAction: 'schedule.reviewed',
+    conflictMessage: 'Esa solicitud ya fue revisada.',
+    handler: (data, userId) =>
+      repository.reviewScheduleRequest({
+        id: data.id,
+        status: data.status,
+        reviewNotes: data.reviewNotes,
+        userId,
+      }),
+  });
+}
+
 // ===========================================================================
 //  AJUSTES DE LA CLÍNICA  (sólo Super Admin)
 // ===========================================================================
@@ -516,6 +1186,7 @@ export async function registerPaymentAction(input: unknown): Promise<ActionResul
         amountCents: data.amountInUsd,
         method: data.method,
         methodLabel: data.methodLabel,
+        commissionOverride: data.commissionOverride,
         externalReference: data.externalReference,
       },
       exchangeRate: rate.rate,

@@ -10,6 +10,7 @@ import { Modal, StaggerItem, Stagger, HoverCard } from '@/frontend/components/mo
 import {
   useCrud,
   TextField,
+  SelectField,
   TextAreaField,
   CheckboxField,
   FormFooter,
@@ -26,11 +27,13 @@ import { Badge, EmptyState, Notice } from '@/frontend/components/ui/primitives';
 
 interface RoomsManagerProps {
   rooms: Room[];
+  /** Para elegir el dueño fijo del consultorio. */
+  dentists: Array<{ id: string; fullName: string }>;
   /** Citas programadas por sala en los próximos 7 días. */
   upcomingByRoom: Record<string, number>;
 }
 
-export function RoomsManager({ rooms, upcomingByRoom }: RoomsManagerProps) {
+export function RoomsManager({ rooms, dentists, upcomingByRoom }: RoomsManagerProps) {
   const crud = useCrud<Room>({
     create: createRoomAction,
     update: updateRoomAction,
@@ -81,6 +84,15 @@ export function RoomsManager({ rooms, upcomingByRoom }: RoomsManagerProps) {
                           Equipamiento
                         </div>
                         <div className="row row--wrap" style={{ gap: '0.25rem' }}>
+                          {/* Quién manda en la sala, de un vistazo. */}
+                          {(() => {
+                            const duenio = dentists.find((d) => d.id === room.assignedDentistId);
+                            return (
+                              <Badge tone={duenio ? 'info' : 'neutral'}>
+                                {duenio ? duenio.fullName : 'Rotativo'}
+                              </Badge>
+                            );
+                          })()}
                           {room.equipment.length === 0 ? (
                             <span className="text-xs subtle">Sin registrar</span>
                           ) : (
@@ -163,6 +175,26 @@ export function RoomsManager({ rooms, upcomingByRoom }: RoomsManagerProps) {
             hint="Separado por comas"
             defaultValue={editing?.equipment.join(', ')}
             error={errorFor('equipment')}
+          />
+
+          {/*
+            Fijo o rotativo. Vacío = rotativo, que es el caso por defecto en un
+            coworking: la sala se reparte según la especialidad del día.
+
+            Asignarlo NO bloquea la agenda — es una preferencia fuerte. Un
+            candado dejaría el consultorio vacío los días que su dueño no viene.
+          */}
+          <SelectField
+            label="Odontólogo fijo"
+            name="assignedDentistId"
+            full
+            defaultValue={editing?.assignedDentistId ?? ''}
+            hint="Vacío = consultorio rotativo, se reparte por especialidad"
+            options={[
+              { value: '', label: '— rotativo —' },
+              ...dentists.map((d) => ({ value: d.id, label: d.fullName })),
+            ]}
+            error={errorFor('assignedDentistId')}
           />
           <TextAreaField
             label="Notas"

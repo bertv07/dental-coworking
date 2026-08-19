@@ -57,6 +57,7 @@ export function TextField({
   type = 'text',
   defaultValue,
   placeholder,
+  suggestions,
   ...rest
 }: FieldProps & {
   type?: string;
@@ -65,9 +66,20 @@ export function TextField({
   min?: number;
   max?: number;
   step?: number;
+  /**
+   * Valores sugeridos, sin cerrar el campo.
+   *
+   * Se usa para las especialidades: son texto libre a propósito —mañana
+   * aparece una nueva— pero sin sugerencias acaban conviviendo «CIRUGÍA
+   * ORAL», «Cirugia oral» y «cirujano» como si fueran cosas distintas, y el
+   * bot no encuentra al especialista que le piden.
+   */
+  suggestions?: string[];
   /** Permite reaccionar al tecleo (ej: convertir a bolívares en vivo). */
   onChange?: React.ChangeEventHandler<HTMLInputElement>;
 }) {
+  const listId = suggestions && suggestions.length > 0 ? `${name}-sugerencias` : undefined;
+
   return (
     <FieldShell {...{ label, name, hint, error, required, full }}>
       <input
@@ -78,10 +90,18 @@ export function TextField({
         defaultValue={defaultValue}
         placeholder={placeholder}
         required={required}
+        list={listId}
         // Señala el campo inválido a los lectores de pantalla, no sólo con color.
         aria-invalid={error ? 'true' : undefined}
         {...rest}
       />
+      {listId && (
+        <datalist id={listId}>
+          {suggestions?.map((value) => (
+            <option key={value} value={value} />
+          ))}
+        </datalist>
+      )}
     </FieldShell>
   );
 }
@@ -118,13 +138,27 @@ export function SelectField({
   full,
   defaultValue,
   options,
+  onChange,
 }: FieldProps & {
   defaultValue?: string;
   options: Array<{ value: string; label: string }>;
+  /**
+   * Permite reaccionar a la elección sin controlar el campo, igual que en
+   * `TextField`: el formulario sigue enviándose por `FormData` y esto sólo
+   * alimenta la previsualización (ej: avisar de que un tratamiento no tiene
+   * precio cerrado en cuanto se elige).
+   */
+  onChange?: React.ChangeEventHandler<HTMLSelectElement>;
 }) {
   return (
     <FieldShell {...{ label, name, hint, error, required, full }}>
-      <select id={name} name={name} className="select" defaultValue={defaultValue}>
+      <select
+        id={name}
+        name={name}
+        className="select"
+        defaultValue={defaultValue}
+        onChange={onChange}
+      >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
@@ -183,6 +217,16 @@ export interface CrudController<T> {
   /** Error por campo, para resaltar el input que falló. */
   fieldError: string | null;
   fieldName: string | null;
+  /**
+   * Aviso de una operación que SÍ salió bien.
+   *
+   * Sobrevive al cierre del modal a propósito: describe algo que pasó después
+   * de guardar —el alta se hizo, el correo no salió— y si se limpiara junto
+   * con los errores, quien lo hizo no llegaría a leerlo nunca.
+   */
+  warning: string | null;
+  /** Descarta el aviso una vez leído. */
+  dismissWarning: () => void;
   /** Envía el formulario invocando la Server Action correspondiente. */
   submit: (formData: FormData) => void;
   /** Elimina un registro, pidiendo confirmación primero. */
@@ -203,6 +247,7 @@ export function useCrud<T extends { id: string }>(actions: {
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [fieldName, setFieldName] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
 
   function clearErrors() {
     setFormError(null);
@@ -214,6 +259,9 @@ export function useCrud<T extends { id: string }>(actions: {
     if (result.ok) {
       setMode({ kind: 'closed' });
       clearErrors();
+      // El aviso se guarda DESPUÉS de limpiar: no es un error del formulario
+      // y tiene que seguir visible con el modal ya cerrado.
+      setWarning(result.warning ?? null);
       return;
     }
     // Si el servidor señaló un campo, el error se muestra junto a él; si no,
@@ -235,6 +283,8 @@ export function useCrud<T extends { id: string }>(actions: {
     formError,
     fieldError,
     fieldName,
+    warning,
+    dismissWarning: () => setWarning(null),
 
     openCreate() {
       clearErrors();
@@ -283,17 +333,27 @@ export function FormFooter({
   onCancel,
   isPending,
   submitLabel = 'Guardar',
+  formId = 'crud-form',
 }: {
   onCancel: () => void;
   isPending: boolean;
   submitLabel?: string;
+  /**
+   * Id del `<form>` que envía este botón.
+   *
+   * El botón vive en el pie del modal, FUERA del formulario, así que se
+   * enlaza por `form=`. Por defecto es `crud-form`, que es el que usan los
+   * CRUD; hay que darlo cuando una pantalla tiene más de un formulario —si
+   * dos compartieran id, el botón enviaría el que encontrara primero.
+   */
+  formId?: string;
 }) {
   return (
     <>
       <button type="button" className="btn btn--ghost" onClick={onCancel} disabled={isPending}>
         Cancelar
       </button>
-      <button type="submit" form="crud-form" className="btn btn--primary" disabled={isPending}>
+      <button type="submit" form={formId} className="btn btn--primary" disabled={isPending}>
         {isPending ? 'Guardando…' : submitLabel}
       </button>
     </>

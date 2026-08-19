@@ -92,6 +92,14 @@ export function LoginForm() {
       )}
 
       <SubmitButton />
+
+      {/*
+        El enlace de recuperación va DEBAJO del botón, no arriba: quien entra
+        normalmente no debe tropezarse con él, y quien lo necesita lo busca.
+      */}
+      <p className="text-sm" style={{ textAlign: 'center', marginTop: '0.25rem' }}>
+        <a href="/recuperar">¿Olvidaste tu contraseña?</a>
+      </p>
     </form>
   );
 }

@@ -25,11 +25,16 @@ Asistente → `/inicio`, Odontólogo → `/agenda`.
 |---|:--:|:--:|:--:|
 | `/inicio` — panel del turno | ✅ | ✅ | — |
 | `/dashboard` — finanzas | ✅ | 🔒 | 🔒 |
-| `/agenda` — citas + cobros | ✅ | ✅ | calendario, sólo lectura |
+| `/agenda` — citas + cobros | ✅ | ✅ | su calendario; agenda para sí misma, sin importes |
 | `/caja` — cierre del día | ✅ | ✅ | 🔒 |
 | `/whatsapp` — monitor IA | ✅ | ✅ | 🔒 |
 | `/pacientes` | ✅ | ✅ | 🔒 |
+| `/pacientes/{id}/expediente` — historia clínica | ✅ | ✅ | 🔒 |
 | `/tasa-cambio` | ✅ | ✅ | 🔒 |
+| `/tarifas` — precios por odontólogo | ✅ aprueba | 🔒 | sólo las suyas, propone |
+| `/horarios` — cambios de horario | ✅ aprueba | ✅ aprueba | los suyos, propone |
+| `/instrumental` — su material | ✅ el de todos | 🔒 | el suyo |
+| `/cambiar-clave` — su propia contraseña | ✅ | ✅ | ✅ |
 | `/odontologos`, `/tratamientos`, `/consultorios`, `/configuracion` | ✅ | 🔒 | 🔒 |
 | Barra superior: buscador, mensajes, notificaciones | ✅ | ✅ | — |
 | Sidebar: tarjeta «Precios en USD» | ✅ | ✅ | — |
@@ -38,6 +43,14 @@ Al odontólogo no se le pintan esos controles porque las tres cosas llevan a
 secciones que su rol no abre (`/pacientes`, `/whatsapp`, `/tasa-cambio`), y
 los avisos hablan de pacientes de toda la clínica. **No se ocultan con CSS: no
 se consultan**, así que esos datos no llegan a su navegador.
+
+> **`/tarifas` rompe la escalera de roles, a propósito.** Es la única sección
+> que el odontólogo abre y el asistente no. Los permisos casi siempre se
+> acumulan (asistente ⊃ odontólogo), pero aquí no aplica: la página trata de
+> cuánto cobra cada odontólogo, así que la abren el interesado y quien
+> aprueba. Recepción queda fuera. Por eso `NavLink` tiene `hiddenForRoles`:
+> sin él habría que elegir entre esconderle la página al odontólogo o
+> enseñarle a recepción un enlace que la rebota.
 
 > Para cambiarlas, edita `MOCK_CREDENTIALS` en
 > [`backend/src/mock/data.ts`](backend/src/mock/data.ts) y vuelve a ejecutar
@@ -51,8 +64,9 @@ otro.
 **Recepción y administración** ven la tabla de toda la clínica: alta,
 reprogramación, cambio de estado y cobro.
 
-**El odontólogo** ve un **calendario semanal de sus propias citas**, en modo
-lectura. De cada cita muestra hora, paciente, tratamiento, consultorio, origen
+**El odontólogo** ve un **calendario semanal de sus propias citas**, y puede
+agendarse citas a sí mismo con el botón «Agendar» (ver «La doctora agenda sus
+propias citas»). Lo que no puede es cobrar ni cambiar estados. De cada cita muestra hora, paciente, tratamiento, consultorio, origen
 y si está confirmada. Se navega entre semanas con `?semana=YYYY-MM-DD` y al
 pinchar una cita se abre el detalle con el teléfono y las notas de recepción.
 
@@ -66,6 +80,10 @@ Dos cosas que **no** tiene, a propósito:
 - **Ningún control de estado.** Confirmar, cancelar o marcar una inasistencia
   implica hablar con el paciente, y eso es de recepción. Aquí el estado sólo se
   lee: *Confirmada*, *Por confirmar*, *Atendida*, *Cancelada*, *No asistió*.
+
+  Agendar sí puede, y no es contradictorio: crear una cita suya es organizar su
+  propio trabajo; cambiarle el estado a una existente implica una conversación
+  con el paciente que la lleva recepción.
 
 ---
 
@@ -97,6 +115,12 @@ WHATSAPP_OUTBOUND_WEBHOOK_URL=""
 # Es sólo un aviso: el bot se entera igual porque consulta el estado del chat
 # en cada mensaje. Vacío = sin aviso inmediato, nada más.
 WHATSAPP_EVENTS_WEBHOOK_URL=""
+
+# --- Correo al personal (n8n) --------------------------------------------
+# Webhook de n8n que ENVÍA EL CORREO al dar de alta a un odontólogo con
+# cuenta de acceso. El panel no habla con Gmail: la credencial vive en n8n.
+# Vacío = el odontólogo se crea igual pero NO recibe la clave; la UI lo avisa.
+STAFF_EMAIL_WEBHOOK_URL=""
 
 # --- Origen de datos -----------------------------------------------------
 # "db" = PostgreSQL real (lo normal). "mock" = arrays en memoria, sin DB.
@@ -173,6 +197,7 @@ PANEL_URL="http://panel:3000"
 # En el panel → llamar a n8n
 WHATSAPP_OUTBOUND_WEBHOOK_URL="http://n8n:5678/webhook/whatsapp-saliente"
 WHATSAPP_EVENTS_WEBHOOK_URL="http://n8n:5678/webhook/panel-eventos"
+STAFF_EMAIL_WEBHOOK_URL="http://n8n:5678/webhook/correo-personal"
 ```
 
 Tres motivos: no dependes del DNS ni del certificado para algo que ocurre a
@@ -193,6 +218,7 @@ AUTOMATION_HMAC_SECRET="<openssl rand -hex 32>"
 AUTOMATION_SIGNATURE_TOLERANCE_SECONDS="300"
 WHATSAPP_OUTBOUND_WEBHOOK_URL="http://n8n:5678/webhook/whatsapp-saliente"
 WHATSAPP_EVENTS_WEBHOOK_URL="http://n8n:5678/webhook/panel-eventos"
+STAFF_EMAIL_WEBHOOK_URL="http://n8n:5678/webhook/correo-personal"
 DATA_SOURCE="db"
 DEFAULT_CLINIC_COMMISSION_PERCENT="40"
 CLINIC_TIMEZONE="America/Caracas"
@@ -289,6 +315,7 @@ APP_ORIGIN=https://<tu-dominio>
 AUTOMATION_SIGNATURE_TOLERANCE_SECONDS=300
 WHATSAPP_OUTBOUND_WEBHOOK_URL=http://n8n:5678/webhook/whatsapp-saliente
 WHATSAPP_EVENTS_WEBHOOK_URL=http://n8n:5678/webhook/panel-eventos
+STAFF_EMAIL_WEBHOOK_URL=http://n8n:5678/webhook/correo-personal
 DATA_SOURCE=db
 DEFAULT_CLINIC_COMMISSION_PERCENT=40
 CLINIC_TIMEZONE=America/Caracas
@@ -626,6 +653,10 @@ tratamiento.
 - Cobros conectados de extremo a extremo: lo que registra recepción aparece
   al instante en el dashboard del administrador y en la liquidación del
   odontólogo
+- **Procedimientos añadidos a una cita**: el paciente viene a una limpieza, el
+  odontólogo le ve una caries y se la obtura en la misma sesión. Se añaden
+  desde la agenda (botón del diente) y el cobro los suma solo. Ver «Cuando la
+  consulta se alarga» más abajo
 
 **Pendiente**
 
@@ -636,8 +667,20 @@ tratamiento.
   en la consulta (la extensión ya está instalada; ver comentario en
   `listPatients`).
 - Rate limit en memoria: migrar a Redis si se despliega en varias instancias.
-- Registro público de usuarios: hoy las cuentas se crean por seed. El hasheo
-  y la validación ya existen; falta la pantalla.
+- Registro público de usuarios: no hay autoservicio, y es deliberado. Las
+  cuentas del personal las crea el administrador desde `/odontologos` con
+  invitación por correo (ver «Alta de un odontólogo con acceso al panel»).
+- **Restablecer la clave de otro**: si a un odontólogo se le pierde el correo
+  de invitación, hoy no hay botón para regenerársela. Es lo siguiente que
+  toca en esta parte.
+- **Recuperar contraseña olvidada** desde el login: requiere token por correo
+  con caducidad. El canal (n8n → Gmail) ya está montado por el flujo D.
+- **Rate limit en memoria**: si algún día el panel corre en varias
+  instancias, los límites del login y de la recuperación hay que moverlos a
+  Redis. Con una sola instancia —que es el caso— funcionan.
+
+Lo que falta del panel, ordenado por lo que pidió la clínica, está en
+[«Lo que pidió la clínica»](#11-lo-que-pidió-la-clínica).
 
 ---
 
@@ -651,3 +694,267 @@ npm run db:deploy    # aplicar migraciones
 npm run db:seed      # poblar con datos de prueba
 npm run db:studio    # explorador visual de la DB
 ```
+
+
+
+---
+
+## 11. Lo que pidió la clínica
+
+Las notas de la reunión, una por una, con su estado. Se mantiene el orden y
+la redacción original a la derecha para poder contrastarlas con lo pedido.
+
+| Estado | Petición | Dónde está |
+|:--:|---|---|
+| ✅ | *«historias clínicas para asistente»* | La transcribe recepción en `/pacientes/{id}/expediente`. El odontólogo rellena el papel; recepción lo pasa al sistema |
+| ✅ | *«expedientes clínicos»* | Tablas `clinical_records` (uno por paciente) y `clinical_entries` (hoja de evolución) |
+| ✅ | *«el resto imprimir, poder tener en físico»* · *«imprimir el tema del historial»* | Botón de imprimir en el expediente, con hoja en blanco para rellenar a mano |
+| ✅ | *«los precios varían de acuerdo al tratamiento y también según el odontólogo»* | `/tarifas`. El odontólogo propone, el administrador aprueba. El bot cotiza el precio de ese odontólogo (`dentists[].prices` en `/catalog`). Ver «Quién pone el precio» |
+| ✅ | *«tratamiento de conducto varía»* | `Treatment.isPriceVariable`. El bot cotiza «desde $X» en vez de un precio que luego habría que desdecir |
+| ✅ | *«radiografía 10$ clínica»* | `Treatment.clinicKeepsAll`: la hace el equipo de la clínica, así que no se reparte 40/60 |
+| ✅ | *«algunos consultorios fijos y algunos no»* · *«rotatorio consultorio 2»* | `Room.assignedDentistId`; vacío = rotativo. Al agendar, el consultorio propio se prueba **primero** (`scheduling.service.ts`). Es preferencia, no candado: si está ocupado se da otro, porque bloquearlo dejaría la sala vacía los días que su dueño no viene |
+| ✅ | *«poder editar una cita en caso de hacerle más cosas»* | Procedimientos añadidos — ver abajo |
+| ✅ | *«9am a 6»* | Jornada por defecto en `scripts/configurar-clinica.mjs` |
+| ✅ | *«zelle binance»* | Medios de pago configurables en `/configuracion`, con Zelle y Binance como entradas propias |
+| ⏳ | *«odontólogos para asistente»* | `/odontologos` sigue siendo sólo de Super Admin: define cuánto cobra cada quien. Falta decidir **qué** parte necesita recepción (¿el listado y los horarios, sin las comisiones?) |
+| ✅ | *«cada odontólogo tenga su inventario»* | `/instrumental`. Son SUS instrumentos (fórceps, turbina, cureta), no un almacén de insumos: lista de bienes con dueño, cantidad, estado y último servicio |
+| ⏳ | *«cirujanos y tal»* | Las especialidades ya existen y el campo ahora **sugiere las que están en uso**, para que no convivan «CIRUGÍA ORAL» y «cirujano». Falta, si lo quieres: que la especialidad restrinja qué tratamientos puede hacer cada quien |
+| ✅ | *«agendar desde los odontólogos, escribir al bot y también disponible en la web»* | Las dos vías: **por el bot** (le escribe por WhatsApp, `docs/PROMPT-N8N.md` §5) y **desde el panel** (botón «Agendar» en su calendario). No hay formulario público para pacientes: de eso se encarga el bot |
+| ✅ | *«se paga al final del día»* | Bloque «Liquidación del día» en `/caja`: lo que le toca a cada odontólogo por lo cobrado hoy, con su equivalente en Bs, y botón de marcar pagado (sólo administración) |
+| ⚠️ | *«bruxismo»* | Creados **Férula de descarga** y **Control de bruxismo** (`scripts/anadir-bruxismo.mjs`). ⚠️ **El precio de la férula, $150, es un marcador**: depende de tu laboratorio. Ajústalo en `/tratamientos` |
+
+### La doctora agenda sus propias citas
+
+Una odontóloga cierra citas por su cuenta: un paciente le escribe directo, o
+acuerdan el control al terminar la consulta. Puede hacerlo por **dos vías**, y
+las dos son suyas: escribiéndole al bot por WhatsApp, o con el botón
+**«Agendar»** de su propio calendario en `/agenda`.
+
+No hay un formulario público para que el paciente se agende solo desde la web:
+para eso está el bot.
+
+Las dos vías pasan por el **mismo servicio** (`scheduleAppointment`), el que
+usa el bot. No hay una segunda vía de agendamiento con reglas propias — el
+solapamiento, la duración, el precio congelado y la asignación de consultorio
+se deciden en un solo sitio.
+
+Tres cosas que su formulario **no pregunta**, y ahí está el punto:
+
+- **Para quién es.** Es para ella: el `dentistId` sale de la sesión. Un campo
+  en el formulario permitiría meterle una cita a una compañera en su horario.
+- **Qué consultorio.** Lo asigna el servidor, probando primero el suyo si
+  tiene uno fijo. Elegirlo a mano dejaría ocupar la sala de otra persona.
+- **Cuánto cuesta.** Lo congela el servidor desde el tratamiento. En toda su
+  parte del panel no viaja ni un importe, y esto no es la excepción.
+
+El paciente se identifica **por teléfono**, no con un selector: ella no tiene
+acceso al listado de pacientes de la clínica y no debe tenerlo. Si el número ya
+existe se reutiliza su ficha; si no, se crea. Es lo mismo que hace el bot.
+
+Si la hora está ocupada, el error propone **horas alternativas** en vez de
+decir sólo «ocupado»: si no, hay que ir probando a ciegas.
+
+### El instrumental es de cada quien
+
+*«Cada odontólogo tenga su inventario.»* Y son **sus instrumentos**: el
+fórceps, la turbina, la cureta que trajo él y que se lleva si se va.
+
+Por eso `/instrumental` **no es un almacén de insumos que se descuenta al
+usarlos**. Aquí no hay consumo: hay una lista de bienes con dueño, con
+cantidad, número de serie, estado y último mantenimiento. Un coworking lo
+necesita justo por eso — el material es de cada quien pero convive en salas
+compartidas, y cuando algo se pierde o aparece roto hay que saber de quién era.
+
+El odontólogo gestiona el suyo; administración ve el de todos. La comprobación
+de propiedad la hace Postgres en el `WHERE` de la propia sentencia
+(`updateMany` con el `dentistId`), no leyendo primero y comparando después:
+entre esa lectura y la escritura cabría una carrera.
+
+### Cambiar el horario: se pide, no se toma
+
+El horario semanal es lo que el bot usa para ofrecer huecos, así que no lo
+cambia cada quien por su cuenta. En `/horarios` el odontólogo **propone su
+semana completa** y recepción o administración la aprueban.
+
+Tres reglas, todas por el mismo motivo — que el horario es lo que decide qué
+citas se pueden agendar:
+
+- **Se propone la semana entera**, no un cambio suelto. Se aprueba o se
+  rechaza completa: una aprobación parcial dejaría un horario que nadie
+  propuso.
+- **Aprobar APLICA el horario**, en la misma transacción. Separarlo dejaría
+  una solicitud aprobada con el bot ofreciendo todavía las horas viejas, y
+  nadie mirando la pantalla notaría la diferencia.
+- **Una sola solicitud pendiente por odontólogo**, forzada por un índice único
+  parcial en Postgres. Dos esperando dejarían a recepción sin saber cuál es la
+  buena.
+
+Recepción SÍ entra aquí, al revés que en `/tarifas`: quién trabaja cuándo es
+exactamente su trabajo. Lo que no ve es cuánto cobra cada quien.
+
+### Se paga al final del día
+
+En `/caja`, debajo del arqueo: lo que le corresponde a cada odontólogo por lo
+cobrado **ese día**, con su equivalente en bolívares —que es como se entrega
+el dinero— y un botón de marcar pagado. Sólo administración: recepción
+registra cobros y cuenta la caja, pero entregar dinero es otra decisión.
+
+Va **después** del arqueo a propósito: primero se sabe cuánto entró y que el
+efectivo cuadra, y sólo entonces se reparte.
+
+Lo que se paga es el `dentistShareCents` que ya se congeló en cada cobro, **no
+se recalcula**: ese número se fijó con la comisión vigente en ese momento, y
+recalcularlo hoy cambiaría lo que se debe por trabajo ya hecho.
+
+Pagar **engancha los cobros** a la liquidación (`payoutId`), así que dejan de
+aparecer como pendientes. Eso es lo que impide pagar dos veces lo mismo, y hay
+además un `unique` por (odontólogo, día) en Postgres. No hay botón de
+deshacer: se corrige con un ajuste, no borrando el rastro.
+
+### Alta de un odontólogo con acceso al panel
+
+Al crear un odontólogo hay una casilla: **«Crear su cuenta de acceso»**. Es
+opcional a propósito — a un odontólogo se le agendan citas y se le liquida
+igual sin que entre nunca, y cada acceso vivo es superficie de ataque.
+
+Cuando se marca:
+
+1. El servidor **genera** una contraseña de 16 caracteres (`crypto.randomInt`,
+   sin `O/0/l/1/I` porque se teclea desde un correo).
+2. Cuenta y perfil se crean **en la misma transacción**. O las dos cosas o
+   ninguna: un odontólogo sin la cuenta que se le prometió, o una cuenta
+   huérfana que entra al panel sin perfil, son estados igual de malos.
+3. Se le pide a **n8n** que mande el correo (flujo D, `STAFF_EMAIL_WEBHOOK_URL`).
+   El panel no habla con Gmail — la credencial vive en n8n, igual que la de
+   WhatsApp.
+4. La cuenta nace con `mustChangePassword`, y **el layout no la deja navegar a
+   ninguna otra sección** hasta que la cambia.
+
+La contraseña **nadie del equipo la ve**: se genera, se hashea y se manda. No
+se guarda en claro ni se devuelve a la interfaz, así que no acaba en el HTML,
+ni en el historial del navegador, ni en una captura. Si el correo falla, no se
+puede reenviar la misma — hay que generar otra.
+
+**El orden importa: primero la base, después el correo.** Al revés, un fallo
+al guardar dejaría a alguien con una clave por correo para una cuenta que no
+existe. Como está, un fallo de correo deja la cuenta creada y la interfaz
+avisa de que hay que hacerle llegar la clave por otra vía.
+
+### Cambiar la contraseña
+
+`/cambiar-clave`, para cualquier rol, sobre su propia cuenta. Pide la
+contraseña **actual** aunque ya haya sesión: una sesión abierta en un equipo
+compartido no debería bastar para quedarse con la cuenta.
+
+Al cambiarla se **cierran todas las sesiones**, incluida la del navegador que
+la está cambiando. El motivo habitual para cambiar una clave es sospechar que
+alguien la tiene; dejarle la sesión abierta a ese alguien vacía la operación
+de sentido.
+
+> **Esto arregló un agujero real.** `sessionsValidFrom` existía en el esquema
+> desde el principio, con un comentario que decía que invalidaba las sesiones
+> al cambiar la contraseña — pero **no se comparaba en ningún sitio**: se
+> escribía y no lo leía nadie. Ahora `getCurrentUser()` lo contrasta contra la
+> base en cada petición autenticada, junto con `status` y `deletedAt`. Un
+> token firmado sólo demuestra que este servidor lo emitió alguna vez; no dice
+> nada de lo que ha pasado desde entonces.
+
+### Si se pierde la contraseña
+
+Dos caminos, y los dos usan el mismo canal de correo (flujo D de n8n):
+
+**El administrador se la restablece** — botón «Restablecer clave» en
+`/odontologos`, sólo visible si esa persona tiene cuenta. Genera una clave
+nueva, se la manda y **cierra sus sesiones abiertas**: si hay que
+restablecerle la clave a alguien es porque perdió el control de la cuenta o
+del correo, y dejar viva la sesión de quien la tenga no arreglaría nada.
+
+**Ella la recupera sola** — enlace «¿Olvidaste tu contraseña?» en el login,
+que lleva a `/recuperar`. Llega un enlace de un solo uso que **caduca en una
+hora**.
+
+Cuatro decisiones que conviene no deshacer al tocar esto:
+
+- **La respuesta es siempre la misma**, exista la cuenta o no. Si dijera «ese
+  correo no está registrado», el formulario sería una forma de averiguar qué
+  correos tienen cuenta en la clínica — y con esa lista, un objetivo para
+  adivinar contraseñas. Ni siquiera al aplicar el límite cambia el mensaje:
+  uno distinto delataría que ese correo recibió intentos.
+- **Se guarda el hash del token, no el token.** Con el token en claro,
+  cualquiera con acceso de lectura a la base —un volcado, una copia de
+  seguridad— podría tomar el control de cualquier cuenta. SHA-256 basta aquí,
+  a diferencia de las contraseñas: son 256 bits de entropía generados por el
+  servidor, no hay diccionario que los ataque.
+- **Un solo uso, y pedir otro quema el anterior.** Sin lo primero, quien
+  reenvíe el correo entra otra vez; sin lo segundo, cada solicitud sumaría
+  una llave viva más.
+- **«No existe», «caducado» y «ya usado» dan el mismo error.**
+  Distinguirlos permitiría sondear tokens.
+
+Ninguna de las dos vías devuelve la contraseña a la pantalla, ni siquiera si
+el correo falla: ya está hasheada y no hay forma de recuperarla. Devolverla
+la dejaría en el HTML, en el historial del navegador y en cualquier captura.
+
+### Quién pone el precio
+
+*«Los precios varían de acuerdo al tratamiento, y también según el
+odontólogo.»* Un cirujano con veinte años cobra la exodoncia distinto que
+quien acaba de entrar.
+
+En `/tarifas`, **el odontólogo propone y el administrador aprueba**. Es una
+ruta con dos pantallas, igual que `/agenda`:
+
+| | Odontólogo | Super Admin |
+|---|---|---|
+| Qué ve | sólo sus tarifas | las de todos |
+| Qué puede hacer | proponer | crear, aprobar, rechazar, eliminar |
+| En qué estado nace lo que guarda | `PENDING` | `APPROVED` |
+
+Recepción no entra: no decide cuánto cobra nadie.
+
+**Mientras esté pendiente, no se aplica.** Se sigue cobrando el precio de
+lista. Es lo que impide que tener cuenta de odontólogo baste para cambiar lo
+que se le cobra a un paciente — `createPayment` sólo mira los `APPROVED`.
+
+Dos cosas **no** viajan en el formulario, y las dos por el mismo motivo:
+
+- **El estado.** Lo decide el servidor según el rol de quien envía. Si
+  llegara del cliente, un odontólogo podría aprobarse su propia tarifa.
+- **El odontólogo.** Cuando propone un odontólogo, su id sale de la sesión.
+  Si el formulario trae otro, se rechaza en vez de corregirlo por lo bajo:
+  o es un error de programación o es un intento de tocarle la tarifa a otro,
+  y en ambos casos conviene que se note.
+
+Se puede pactar sólo el precio, sólo el reparto, o los dos. Lo que se deje
+vacío sigue las reglas normales. Rechazar **exige un motivo**: sin él, lo
+normal es que se vuelva a proponer exactamente lo mismo.
+
+### Cuando la consulta se alarga
+
+*«Poder editar una cita en caso de hacerle más cosas.»* El paciente viene a
+una limpieza, el odontólogo ve una caries y se la obtura ahí mismo. Se agendó
+por una cosa y hay que cobrar por dos.
+
+Desde la agenda, el botón del diente abre los **procedimientos de la cita**:
+se añade lo que se hizo de más y el cobro lo suma solo.
+
+Lo que **no** hace es subir el precio de la cita, que sería lo más rápido:
+
+- `agreedPriceCents` es el precio **congelado al agendar**. La diferencia
+  entre lo que se cotizó y lo que se acabó cobrando es justo el dato que
+  revela si el bot está cotizando mal. Machacarlo borra esa evidencia.
+- **Cada línea se reparte por su cuenta.** Una limpieza va al 40/60 y una
+  radiografía se la queda entera la clínica. Un único importe no puede
+  representar dos repartos: con $30 de limpieza y $10 de radiografía, aplicar
+  un solo porcentaje al total le pagaría al odontólogo parte de un trabajo que
+  no hizo. El reparto correcto es $22 clínica / $18 odontólogo — un 55 %
+  efectivo, que no es la media de los porcentajes.
+
+El porcentaje **no viaja en el formulario**: lo deriva el servidor del
+tratamiento y del acuerdo aprobado con el odontólogo. Si se aceptara del
+cliente, se podría añadir una radiografía marcada como repartible y cobrar
+comisión por un trabajo de la clínica.
+
+Una cita **ya cobrada no admite cambios** en sus conceptos: el cobro congeló
+el reparto, y añadir una línea después dejaría un pago que no cuadra con la
+suma de sus partes. Para corregirla hay que anular el cobro primero.

@@ -85,6 +85,13 @@ export interface Room {
   name: string;
   code: string;
   equipment: string[];
+  /**
+   * Odontólogo dueño del consultorio, o `null` si es rotativo.
+   *
+   * Algunos consultorios son fijos de una persona; otros se reparten según la
+   * especialidad del día.
+   */
+  assignedDentistId: string | null;
   isActive: boolean;
   notes: string | null;
 }
@@ -133,6 +140,19 @@ export interface Treatment {
   basePriceCents: number;
   durationMinutes: number;
   bufferMinutes: number;
+  /**
+   * El precio de lista es sólo una referencia y se pacta en consulta.
+   *
+   * El tratamiento de conducto cuesta distinto según cuántos conductos tenga
+   * la pieza, y eso no se sabe hasta ver la radiografía.
+   */
+  isPriceVariable: boolean;
+  /**
+   * La clínica se queda con el 100 %: el odontólogo no cobra comisión.
+   *
+   * Es el caso de la radiografía, que la hace el equipo de la clínica.
+   */
+  clinicKeepsAll: boolean;
   isActive: boolean;
 }
 
@@ -211,12 +231,125 @@ export interface WhatsAppMessage {
 
 // --- Vistas compuestas (lo que consume la UI) ------------------------------
 
+/** Estado de todo lo que necesita el visto bueno de otra persona. */
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export type InstrumentCondition = 'GOOD' | 'NEEDS_SERVICE' | 'OUT_OF_SERVICE' | 'LOST';
+
+/**
+ * Una pieza del instrumental de un odontólogo.
+ *
+ * Es SUYO: el fórceps, la turbina, la cureta que trajo él y que se lleva si se
+ * va. No es un almacén de insumos que se descuenta al usarlos — aquí no hay
+ * consumo, hay una lista de bienes con dueño.
+ */
+export interface DentistInstrument {
+  id: string;
+  dentistId: string;
+  name: string;
+  category: string | null;
+  quantity: number;
+  serialNumber: string | null;
+  condition: InstrumentCondition;
+  location: string | null;
+  notes: string | null;
+  lastServicedOn: Date | null;
+}
+
+/** Un bloque del horario semanal: `weekday` 0=domingo … 6=sábado. */
+export interface ScheduleBlock {
+  weekday: number;
+  startMinute: number;
+  endMinute: number;
+}
+
+/**
+ * Solicitud de cambio de horario. La pide el odontólogo, la aprueba
+ * recepción o administración.
+ *
+ * `proposedBlocks` es la semana ENTERA propuesta, no un delta: se aprueba o
+ * se rechaza completa. Una aprobación parcial dejaría al odontólogo con un
+ * horario que él nunca propuso.
+ */
+export interface ScheduleChangeRequest {
+  id: string;
+  dentistId: string;
+  dentistName: string;
+  proposedBlocks: ScheduleBlock[];
+  /** El horario que tiene HOY, para poder comparar al decidir. */
+  currentBlocks: ScheduleBlock[];
+  reason: string | null;
+  status: ApprovalStatus;
+  reviewNotes: string | null;
+  reviewedAt: Date | null;
+  createdAt: Date;
+}
+
+/**
+ * Precio y reparto pactados entre UN odontólogo y UN tratamiento.
+ *
+ * Lo propone el odontólogo y lo aprueba el administrador. Mientras esté en
+ * `PENDING` no se aplica: se sigue cobrando el precio de lista. Aplicarlo
+ * antes del visto bueno significaría que cualquiera con cuenta de odontólogo
+ * puede cambiar lo que se le cobra a los pacientes.
+ *
+ * Los nombres vienen aplanados porque este tipo es el contrato con la
+ * pantalla de tarifas, no un reflejo de las tablas.
+ */
+export interface DentistTreatmentAgreement {
+  id: string;
+  dentistId: string;
+  dentistName: string;
+  treatmentId: string;
+  treatmentName: string;
+  /** Precio de lista, para poder comparar con lo pactado. */
+  treatmentBasePriceCents: number;
+  /** `null` = se cobra el precio de lista. */
+  customPriceCents: number | null;
+  /** `null` = se aplica la comisión general del odontólogo. */
+  customCommissionPercent: number | null;
+  status: ApprovalStatus;
+  /** Por qué se rechazó. Sin esto, se vuelve a proponer lo mismo. */
+  reviewNotes: string | null;
+  reviewedAt: Date | null;
+  createdAt: Date;
+}
+
+/**
+ * Procedimiento añadido a una cita YA agendada.
+ *
+ * Viene a una limpieza, el odontólogo ve una caries y la obtura en la misma
+ * sesión: se agendó por una cosa y se cobra por dos.
+ *
+ * `priceCents` y `commissionPercent` se congelan al añadirlo. El porcentaje
+ * se copia y no se lee del tratamiento al cobrar porque son dos momentos
+ * distintos: si mañana la radiografía pasa a repartirse, los cobros de hoy
+ * no deben cambiar de reparto retroactivamente.
+ */
+export interface AppointmentAddon {
+  id: string;
+  appointmentId: string;
+  treatmentId: string;
+  treatmentName: string;
+  priceCents: number;
+  commissionPercent: number;
+  notes: string | null;
+  createdAt: Date;
+}
+
 /** Cita con sus relaciones resueltas, para pintar tablas sin N+1 en el cliente. */
 export interface AppointmentWithRelations extends Appointment {
   patient: Pick<Patient, 'id' | 'fullName' | 'phoneE164'>;
   dentist: Pick<Dentist, 'id' | 'fullName'>;
   room: Pick<Room, 'id' | 'name' | 'code'>;
   treatment: Pick<Treatment, 'id' | 'name' | 'durationMinutes'>;
+  /**
+   * Procedimientos añadidos durante la consulta.
+   *
+   * Va en la vista de recepción porque cambia lo que se cobra: el modal de
+   * cobro tiene que enseñar el total real, no sólo el precio de la cita.
+   */
+  addons: AppointmentAddon[];
 }
 
 /**

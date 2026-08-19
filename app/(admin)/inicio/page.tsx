@@ -3,6 +3,7 @@ import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { getCurrentRate } from '@/backend/services/exchange-rate.service';
 import { formatCents, formatBs } from '@/backend/domain/money';
+import { totalCitaCents } from '@/backend/domain/pricing';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import {
   Card,
@@ -318,13 +319,17 @@ export default async function AssistantHomePage() {
                       <td>
                         <SourceBadge source={appointment.source} />
                       </td>
+                      {/*
+                        Lo agendado MÁS lo añadido en consulta: es lo que
+                        recepción tiene que cobrar antes de cerrar el turno.
+                      */}
                       <td className="table__num mono table__strong">
-                        {formatCents(appointment.agreedPriceCents)}
+                        {formatCents(totalCitaCents(appointment))}
                         {rate && (
                           <span className="amount-bs">
                             {formatBs(
                               Math.round(
-                                (appointment.agreedPriceCents / 100) * rate.rate * 100,
+                                (totalCitaCents(appointment) / 100) * rate.rate * 100,
                               ) / 100,
                             )}
                           </span>

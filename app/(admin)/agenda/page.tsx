@@ -105,6 +105,10 @@ async function DentistWeekView({
     range: weekQueryRange(weekStart),
   });
 
+  // Catálogo para que pueda agendar ella misma. Los precios que trae no se
+  // pintan: su formulario no muestra importes.
+  const treatments = await repository.listTreatments();
+
   const timeFormatter = new Intl.DateTimeFormat('es-VE', {
     hour: '2-digit',
     minute: '2-digit',
@@ -224,6 +228,7 @@ async function DentistWeekView({
           // `weekStart` es siempre el primer día visible (lunes); el último se
           // deriva de cuántas columnas quedaron a la vista.
           weekLabel={formatWeekLabel(weekStart, addDays(weekStart, visibleDayKeys.length - 1))}
+          treatments={treatments}
           previousWeekHref={`/agenda?semana=${addDays(weekStart, -7)}`}
           nextWeekHref={`/agenda?semana=${addDays(weekStart, 7)}`}
           currentWeekHref="/agenda"

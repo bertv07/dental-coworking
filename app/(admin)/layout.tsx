@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { requireAuth } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { Sidebar } from '@/frontend/components/layout/Sidebar';
@@ -42,6 +44,29 @@ import { getNotifications, getMessageAlerts } from '@/backend/services/notificat
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   // Redirige a /login si no hay sesión. Nada por debajo llega a ejecutarse.
   const user = await requireAuth();
+
+  /*
+   * Clave temporal sin cambiar: no se deja navegar a ninguna otra sección.
+   *
+   * Va en el layout y no en cada página porque el layout es el único sitio
+   * por el que pasan TODAS las rutas del panel. Ponerlo página a página
+   * significaría acordarse de repetirlo en cada una nueva, y la que se
+   * olvidara sería justo el agujero.
+   *
+   * La contraseña llegó por correo, así que la ha visto quien tenga acceso a
+   * ese buzón. Mientras siga siendo válida, la cuenta no es realmente de su
+   * dueño.
+   */
+  if (user.mustChangePassword) {
+    // `x-pathname` lo pone el middleware: un layout no conoce la ruta por su
+    // cuenta, se renderiza igual para todas sus hijas.
+    const pathname = (await headers()).get('x-pathname') ?? '';
+
+    // La propia pantalla de cambio queda fuera, o sería un bucle infinito.
+    if (!pathname.startsWith('/cambiar-clave')) {
+      redirect('/cambiar-clave');
+    }
+  }
 
   /*
    * Las herramientas de la barra superior son de RECEPCIÓN, no del panel:

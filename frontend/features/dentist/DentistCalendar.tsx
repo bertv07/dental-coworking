@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useReducedMotion } from 'framer-motion';
-import type { AppointmentSource, AppointmentStatus } from '@/backend/domain/types';
+import type { AppointmentSource, AppointmentStatus, Treatment } from '@/backend/domain/types';
 import { Modal, motion } from '@/frontend/components/motion';
 import { Badge, Card, Notice, SourceBadge } from '@/frontend/components/ui/primitives';
+import { BookOwnAppointment } from '@/frontend/features/dentist/BookOwnAppointment';
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -94,6 +95,14 @@ interface DentistCalendarProps {
   nextWeekHref: string;
   currentWeekHref: string;
   isCurrentWeek: boolean;
+  /**
+   * Catálogo para el formulario de agendar.
+   *
+   * Llega ya recortado a lo que la odontóloga puede ver: nombre, código y
+   * duración. Los precios no se usan aquí — en toda su parte del panel no
+   * viaja ningún importe.
+   */
+  treatments: Treatment[];
 }
 
 /** Alto de una hora en píxeles. Fija la escala de toda la rejilla. */
@@ -189,6 +198,7 @@ export function DentistCalendar({
   nextWeekHref,
   currentWeekHref,
   isCurrentWeek,
+  treatments,
 }: DentistCalendarProps) {
   const reduce = useReducedMotion();
   const [selected, setSelected] = useState<CalendarEntry | null>(null);
@@ -265,6 +275,11 @@ export function DentistCalendar({
         subtitle={subtitle}
         actions={
           <div className="cal__nav">
+            {/*
+              Agendar va junto a la navegación de semanas: es el mismo sitio
+              donde ya se está mirando el hueco que se quiere ocupar.
+            */}
+            <BookOwnAppointment treatments={treatments} />
             <Link
               href={previousWeekHref}
               className="btn btn--ghost btn--sm"
@@ -292,8 +307,8 @@ export function DentistCalendar({
         {entries.length === 0 && (
           <div className="cal__empty-banner">
             <Notice tone="info">
-              No tienes citas esta semana. Recepción las agenda desde el panel y
-              aparecerán aquí.
+              No tienes citas esta semana. Puedes agendar tú misma con el botón de
+              arriba, o las agenda recepción y aparecen aquí.
             </Notice>
           </div>
         )}

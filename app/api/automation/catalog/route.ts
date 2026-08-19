@@ -83,16 +83,35 @@ export async function POST(request: NextRequest) {
     if (!signed.ok) return signed.response;
 
     // No hay parámetros que validar: el catálogo es el mismo para todos.
-    const [settings, treatments, dentists, rooms, paymentMethods] = await Promise.all([
-      repository.getClinicSettings(),
-      repository.listTreatments(),
-      repository.listDentists(),
-      repository.listRooms(),
-      repository.listPaymentMethods(),
-    ]);
+    const [settings, treatments, dentists, rooms, paymentMethods, agreements] =
+      await Promise.all([
+        repository.getClinicSettings(),
+        repository.listTreatments(),
+        repository.listDentists(),
+        repository.listRooms(),
+        repository.listPaymentMethods(),
+        /*
+         * Tarifas pactadas, SÓLO las aprobadas.
+         *
+         * Es la misma regla que aplica el cobro: una propuesta pendiente no
+         * cambia lo que se paga. Si el bot cotizara una tarifa sin aprobar,
+         * el paciente oiría un precio y en el mostrador le cobrarían otro.
+         */
+        repository.listDentistTreatments({ status: 'APPROVED' }),
+      ]);
 
     const rateSource = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
     const rate = await getCurrentRate(rateSource);
+
+    /*
+     * Índice por id para resolver el código y la variabilidad de cada tarifa
+     * pactada sin recorrer la lista entera por acuerdo.
+     *
+     * `listTreatments()` sin `includeInactive` sólo trae los activos, así que
+     * un acuerdo sobre un tratamiento retirado no encuentra pareja y se
+     * descarta más abajo — que es justo lo que se quiere.
+     */
+    const treatmentById = new Map(treatments.map((treatment) => [treatment.id, treatment]));
 
     return ok({
       clinic: {
@@ -134,12 +153,58 @@ export async function POST(request: NextRequest) {
         priceCents: treatment.basePriceCents,
         priceUsd: treatment.basePriceCents / 100,
         priceBs: rate ? centsToBs(treatment.basePriceCents, rate.rate) : null,
+        /*
+         * Precio orientativo: el bot debe cotizar «desde $X» en vez de un
+         * precio cerrado. Es el caso del tratamiento de conducto, que depende
+         * de cuántos conductos tenga la pieza — y eso no se sabe hasta ver la
+         * radiografía.
+         */
+        isPriceVariable: treatment.isPriceVariable,
       })),
 
+      /*
+       * Cada odontólogo con SUS precios pactados, cuando los tiene.
+       *
+       * «Los precios varían de acuerdo al tratamiento, y también según el
+       * odontólogo»: un cirujano con veinte años cobra la exodoncia distinto
+       * que quien acaba de entrar. Sin esto el bot cotizaría siempre el
+       * precio de lista y el paciente se llevaría la sorpresa al pagar.
+       *
+       * ⚠️  Va el PRECIO, nunca `customCommissionPercent`. Cómo se reparte
+       *  ese dinero entre la clínica y el odontólogo es un acuerdo interno
+       *  que no le importa al paciente, y este endpoint habla con el público.
+       *  El reparto no sale de aquí porque no se selecciona, no porque el bot
+       *  tenga instrucciones de callarlo.
+       */
       dentists: dentists.map((dentist) => ({
         id: dentist.id,
         name: dentist.fullName,
         specialties: dentist.specialties,
+        prices: agreements
+          .filter(
+            (agreement) =>
+              agreement.dentistId === dentist.id && agreement.customPriceCents !== null,
+          )
+          .map((agreement) => {
+            const treatment = treatmentById.get(agreement.treatmentId);
+            const priceCents = agreement.customPriceCents as number;
+
+            return {
+              // El código, no el id: es la llave estable con la que se agenda.
+              code: treatment?.code ?? null,
+              name: agreement.treatmentName,
+              priceCents,
+              priceUsd: priceCents / 100,
+              priceBs: rate ? centsToBs(priceCents, rate.rate) : null,
+              // Un precio pactado sobre un tratamiento variable sigue siendo
+              // orientativo: el conducto depende de la pieza, no de quién lo
+              // haga.
+              isPriceVariable: treatment?.isPriceVariable ?? false,
+            };
+          })
+          // Un acuerdo sobre un tratamiento desactivado no se puede agendar:
+          // ofrecerlo sería cotizar algo que luego no se puede reservar.
+          .filter((price) => price.code !== null),
       })),
 
       rooms: rooms.map((room) => ({ id: room.id, code: room.code, name: room.name })),

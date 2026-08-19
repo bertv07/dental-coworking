@@ -1,15 +1,22 @@
 import type {
   Appointment,
+  AppointmentAddon,
   AppointmentWithRelations,
+  ApprovalStatus,
   ConversationListItem,
   Dentist,
   DentistAgendaItem,
   DentistEarnings,
+  DentistInstrument,
+  DentistTreatmentAgreement,
+  ScheduleBlock,
+  ScheduleChangeRequest,
   FinancialSummary,
   Patient,
   PaymentMethodOption,
   Room,
   Treatment,
+  UserStatus,
   UserWithSecrets,
   WhatsAppMessage,
 } from '@/backend/domain/types';
@@ -112,6 +119,8 @@ export interface RoomInput {
   name: string;
   code: string;
   equipment: string[];
+  /** Odontólogo fijo, o `null` si el consultorio es rotativo. */
+  assignedDentistId: string | null;
   notes: string | null;
   isActive: boolean;
 }
@@ -124,6 +133,13 @@ export interface PaymentInput {
   method: 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE';
   /** Etiqueta del medio concreto ("Pago móvil Banesco"). Se congela en el cobro. */
   methodLabel: string | null;
+  /**
+   * Reparto pactado para ESTE cobro, si recepción lo ajustó (el 50/50).
+   *
+   * `null` = se aplican las reglas normales. Cuando viene, gana sobre todo lo
+   * demás: es una decisión tomada con el caso delante, y queda en auditoría.
+   */
+  commissionOverride: number | null;
   externalReference: string | null;
 }
 
@@ -198,6 +214,42 @@ export interface ClinicSettings extends ClinicSettingsInput {
   updatedAt: Date;
 }
 
+/**
+ * Lo que se le debe a un odontólogo por lo cobrado en un día.
+ *
+ * «Se paga al final del día»: al cerrar la caja, cada quien se lleva su parte
+ * de lo que produjo esa jornada, en vez de esperar a una liquidación
+ * quincenal.
+ */
+export interface DailySettlement {
+  dentistId: string;
+  dentistName: string;
+  /** Cobros del día que todavía no se han liquidado. */
+  paymentCount: number;
+  /** Total facturado por este odontólogo hoy. */
+  grossCents: number;
+  /** Parte de la clínica. */
+  clinicShareCents: number;
+  /** Lo que hay que entregarle. */
+  dentistShareCents: number;
+  /** `true` si su parte del día ya se pagó. */
+  isSettled: boolean;
+  /** Lo ya liquidado hoy, para poder enseñarlo cuando `isSettled`. */
+  settledCents: number;
+}
+
+/** Campos editables de una pieza de instrumental. */
+export interface InstrumentInput {
+  name: string;
+  category: string | null;
+  quantity: number;
+  serialNumber: string | null;
+  condition: 'GOOD' | 'NEEDS_SERVICE' | 'OUT_OF_SERVICE' | 'LOST';
+  location: string | null;
+  notes: string | null;
+  lastServicedOn: Date | null;
+}
+
 /** Resultado de una escritura: permite distinguir el conflicto del fallo. */
 export type WriteResult<T> =
   | { ok: true; data: T }
@@ -213,6 +265,81 @@ export interface DataRepository {
    * contador de fallos y aplica el bloqueo temporal.
    */
   registerLoginOutcome(userId: string, success: boolean): Promise<void>;
+
+  /**
+   * Estado vivo de una cuenta, para validar la sesión en cada petición.
+   *
+   * El JWT lleva el rol y `sessionsValidFrom` congelados desde el login. Eso
+   * basta para pintar la interfaz, pero no para decidir si la sesión SIGUE
+   * siendo válida: una cuenta suspendida hace diez minutos, o una contraseña
+   * cambiada desde otro dispositivo, seguirían teniendo un token con firma
+   * correcta. Esto es lo que se contrasta contra el token.
+   */
+  getAccountState(userId: string): Promise<{
+    status: UserStatus;
+    sessionsValidFrom: Date;
+    mustChangePassword: boolean;
+    deletedAt: Date | null;
+  } | null>;
+
+  /**
+   * El administrador le regenera la clave a alguien.
+   *
+   * Distinto de `changePassword`: aquí NO se pide la contraseña actual —quien
+   * la pide es un tercero— y la cuenta queda obligada a cambiarla, porque la
+   * clave nueva viajó por correo. También cierra sus sesiones: si se le
+   * restablece la clave a alguien es porque perdió el control de la cuenta o
+   * del correo, y dejarle la sesión abierta a quien la tenga no arreglaría
+   * nada.
+   */
+  resetPasswordAsAdmin(params: {
+    /** Ficha del odontólogo. La cuenta se resuelve por su `userId`. */
+    dentistId: string;
+    passwordHash: string;
+    userId: string;
+  }): Promise<WriteResult<{ userId: string; email: string; fullName: string }>>;
+
+  /**
+   * Emite un enlace de recuperación, si la cuenta existe.
+   *
+   * Devuelve `null` cuando no existe, está suspendida o borrada — y el
+   * llamador debe responder EXACTAMENTE igual que si existiera. Si la
+   * respuesta cambiara, el formulario de «olvidé mi contraseña» se convertiría
+   * en una forma de averiguar qué correos tienen cuenta.
+   *
+   * Invalida los enlaces pendientes de esa cuenta: pedir uno nuevo tiene que
+   * dejar sin valor al anterior, o cada solicitud sumaría una llave viva más.
+   */
+  createPasswordResetToken(params: {
+    email: string;
+    tokenHash: string;
+    expiresAt: Date;
+    requestedIp: string | null;
+  }): Promise<{ email: string; fullName: string } | null>;
+
+  /**
+   * Canjea un enlace: pone la contraseña nueva y quema el token.
+   *
+   * Todo en una transacción. El token se marca usado Y se cambia la clave: si
+   * se hicieran por separado, un fallo entre medias dejaría un enlace válido
+   * para una contraseña ya cambiada.
+   */
+  redeemPasswordResetToken(params: {
+    tokenHash: string;
+    passwordHash: string;
+  }): Promise<WriteResult<{ userId: string }>>;
+
+  /**
+   * Cambia la contraseña y CIERRA las demás sesiones.
+   *
+   * Las dos cosas van juntas y en la misma transacción a propósito: el motivo
+   * habitual para cambiar una clave es sospechar que alguien la tiene, y
+   * dejarle la sesión abierta a ese alguien vacía la operación de sentido.
+   */
+  changePassword(params: {
+    userId: string;
+    passwordHash: string;
+  }): Promise<WriteResult<{ id: string }>>;
 
   // --- Catálogos (lectura) -------------------------------------------------
   listDentists(options?: { includeInactive?: boolean }): Promise<Dentist[]>;
@@ -283,6 +410,23 @@ export interface DataRepository {
 
   // --- Odontólogos (escritura) ---------------------------------------------
   createDentist(data: DentistInput): Promise<WriteResult<Dentist>>;
+
+  /**
+   * Alta de odontólogo CON cuenta de acceso, en una sola transacción.
+   *
+   * Va junto y no en dos llamadas porque el estado intermedio es malo de las
+   * dos formas: un odontólogo sin cuenta al que se le dijo que la tendría, o
+   * una cuenta huérfana que puede entrar al panel sin perfil clínico. O las
+   * dos cosas o ninguna.
+   *
+   * El `passwordHash` llega ya calculado: hashear es caro (~80 ms con Argon2)
+   * y hacerlo DENTRO de la transacción la mantendría abierta todo ese rato
+   * sin necesidad.
+   */
+  createDentistWithAccount(params: {
+    dentist: DentistInput;
+    passwordHash: string;
+  }): Promise<WriteResult<{ id: string; userId: string }>>;
   updateDentist(id: string, data: DentistInput): Promise<WriteResult<Dentist>>;
   softDeleteDentist(id: string): Promise<WriteResult<Dentist>>;
 
@@ -344,6 +488,159 @@ export interface DataRepository {
     dentistId?: string;
     limit?: number;
   }): Promise<AppointmentWithRelations[]>;
+
+  /**
+   * Añade un procedimiento a una cita ya agendada.
+   *
+   * El precio y la comisión NO llegan del formulario: se derivan aquí del
+   * tratamiento y del acuerdo aprobado con el odontólogo. Aceptarlos del
+   * cliente permitiría añadir una radiografía «al 0 % de clínica» tecleando
+   * el porcentaje a mano.
+   *
+   * Se rechaza si la cita ya está cobrada: el cobro congela el reparto, y
+   * añadir una línea después dejaría el pago sin cuadrar con sus conceptos.
+   */
+  addAppointmentAddon(params: {
+    appointmentId: string;
+    treatmentId: string;
+    /** Precio pactado en consulta. `null` = el que corresponda por reglas. */
+    priceCents: number | null;
+    notes: string | null;
+    userId: string;
+  }): Promise<WriteResult<AppointmentAddon>>;
+
+  /**
+   * Quita un procedimiento añadido. Sólo mientras la cita no esté cobrada,
+   * por el mismo motivo que no se puede añadir.
+   */
+  removeAppointmentAddon(params: {
+    id: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  // --- Tarifas pactadas por odontólogo -------------------------------------
+
+  /**
+   * Acuerdos de precio, opcionalmente los de un solo odontólogo.
+   *
+   * `dentistId` no es un filtro de comodidad: es lo que permite servir esta
+   * pantalla al odontólogo sin enseñarle lo que ha pactado el resto.
+   */
+  listDentistTreatments(params?: {
+    dentistId?: string;
+    status?: ApprovalStatus;
+  }): Promise<DentistTreatmentAgreement[]>;
+
+  /**
+   * Crea o reemplaza un acuerdo.
+   *
+   * `status` lo decide quien llama según su rol: el administrador guarda
+   * directamente en `APPROVED` porque él es el aprobador; el odontólogo sólo
+   * puede dejarlo en `PENDING`. Volver a proponer sobre un acuerdo ya
+   * aprobado lo devuelve a `PENDING`: si no, bastaría con editar un acuerdo
+   * aprobado para saltarse la revisión.
+   */
+  upsertDentistTreatment(params: {
+    dentistId: string;
+    treatmentId: string;
+    customPriceCents: number | null;
+    customCommissionPercent: number | null;
+    status: Extract<ApprovalStatus, 'PENDING' | 'APPROVED'>;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /** Aprueba o rechaza una propuesta. Sólo el administrador. */
+  reviewDentistTreatment(params: {
+    id: string;
+    status: Extract<ApprovalStatus, 'APPROVED' | 'REJECTED'>;
+    reviewNotes: string | null;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /** Elimina un acuerdo: se vuelve a cobrar el precio de lista. */
+  deleteDentistTreatment(params: {
+    id: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  // --- Liquidación diaria («se paga al final del día») ----------------------
+
+  /**
+   * Lo que la clínica le debe a cada odontólogo por lo cobrado HOY.
+   *
+   * Sólo cuenta lo que todavía no se ha liquidado (`payoutId IS NULL`): una
+   * vez pagado, ese dinero deja de deberse aunque el cobro siga siendo del
+   * mismo día.
+   */
+  getDailySettlements(businessDate: string): Promise<DailySettlement[]>;
+
+  /**
+   * Marca como pagada la parte de UN odontólogo por UN día.
+   *
+   * Crea el `DentistPayout` y le engancha los cobros incluidos, en una sola
+   * transacción. Enganchar los pagos es lo que hace que no se pueda pagar dos
+   * veces lo mismo: a partir de ahí ya no salen como pendientes.
+   */
+  settleDentistDay(params: {
+    dentistId: string;
+    businessDate: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string; totalCents: number }>>;
+
+  // --- Instrumental del odontólogo -----------------------------------------
+
+  /** Instrumental, opcionalmente el de un solo odontólogo. */
+  listInstruments(params?: { dentistId?: string }): Promise<DentistInstrument[]>;
+
+  saveInstrument(params: {
+    /** `null` = alta. Con id, edición. */
+    id: string | null;
+    dentistId: string;
+    data: InstrumentInput;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /** Borrado lógico: el historial de quién tenía qué no se destruye. */
+  deleteInstrument(params: {
+    id: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  // --- Horarios y sus cambios ----------------------------------------------
+
+  /** Horario semanal vigente de un odontólogo. */
+  listSchedule(dentistId: string): Promise<ScheduleBlock[]>;
+
+  listScheduleRequests(params?: {
+    dentistId?: string;
+    status?: ApprovalStatus;
+  }): Promise<ScheduleChangeRequest[]>;
+
+  /**
+   * El odontólogo propone una semana nueva.
+   *
+   * Sólo puede haber UNA pendiente por persona —lo fuerza un índice único
+   * parcial en Postgres—: dos solicitudes esperando dejarían a recepción sin
+   * saber cuál es la buena.
+   */
+  createScheduleRequest(params: {
+    dentistId: string;
+    proposedBlocks: ScheduleBlock[];
+    reason: string | null;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /**
+   * Aprueba o rechaza. Al aprobar, el horario propuesto SUSTITUYE al vigente
+   * en la misma transacción: aprobar sin aplicar dejaría al odontólogo
+   * creyendo que su horario cambió cuando el bot sigue ofreciendo el viejo.
+   */
+  reviewScheduleRequest(params: {
+    id: string;
+    status: Extract<ApprovalStatus, 'APPROVED' | 'REJECTED'>;
+    reviewNotes: string | null;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
 
   /**
    * Agenda de UN odontólogo, recortada a lo que él puede ver.

@@ -8,10 +8,15 @@ import type {
 } from '@/backend/repositories/types';
 import type {
   Appointment,
+  AppointmentAddon,
   AppointmentWithRelations,
   ConversationListItem,
   Dentist,
   DentistEarnings,
+  DentistInstrument,
+  DentistTreatmentAgreement,
+  ScheduleBlock,
+  ScheduleChangeRequest,
   FinancialSummary,
   Patient,
   PaymentMethodOption,
@@ -151,8 +156,32 @@ function hydrateAppointment(appointment: Appointment): AppointmentWithRelations 
       name: treatment?.name ?? '—',
       durationMinutes: treatment?.durationMinutes ?? 0,
     },
+    addons: addons.filter((addon) => addon.appointmentId === appointment.id),
   };
 }
+
+/**
+ * Procedimientos añadidos, en memoria.
+ *
+ * Empieza vacío a propósito: los añadidos son un hecho de la consulta, no
+ * del catálogo de ejemplo. Se llena al usarlos desde la agenda.
+ */
+const addons: AppointmentAddon[] = [];
+
+/**
+ * Tarifas pactadas por odontólogo, en memoria.
+ *
+ * Vacío = todos cobran el precio de lista, que es el estado de partida real
+ * de la clínica.
+ */
+const agreements: DentistTreatmentAgreement[] = [];
+
+/** Instrumental en memoria. Vacío: cada odontólogo va cargando el suyo. */
+const instruments: DentistInstrument[] = [];
+
+/** Horario semanal vigente por odontólogo, y solicitudes de cambio. */
+const schedules = new Map<string, ScheduleBlock[]>();
+const scheduleRequests: ScheduleChangeRequest[] = [];
 
 /** Ajustes en memoria para el modo mock. */
 const mockSettings = {
@@ -194,6 +223,50 @@ export const mockRepository: DataRepository = {
       lockedUntil: null,
       sessionsValidFrom: user.createdAt,
     };
+  },
+
+  async getAccountState(userId) {
+    const user = MOCK_USERS.find((item) => item.id === userId);
+    if (!user) return null;
+
+    return {
+      status: user.status,
+      // En memoria no hay revocación real: el modo mock existe para poder
+      // mover la interfaz sin Postgres, y una marca que nunca avanza deja
+      // todas las sesiones válidas, que es lo esperable aquí.
+      sessionsValidFrom: user.createdAt,
+      mustChangePassword: false,
+      deletedAt: null,
+    };
+  },
+
+  async resetPasswordAsAdmin({ dentistId }) {
+    const dentist = dentists.find((item) => item.id === dentistId);
+    if (!dentist?.userId) return { ok: false, reason: 'NOT_FOUND' };
+
+    return {
+      ok: true,
+      data: { userId: dentist.userId, email: dentist.email, fullName: dentist.fullName },
+    };
+  },
+
+  async createPasswordResetToken({ email }) {
+    const user = MOCK_USERS.find((item) => item.email === email);
+    // Mismo contrato que en Postgres: `null` si no procede, y quien llama
+    // responde igual en los dos casos.
+    if (!user) return null;
+    return { email: user.email, fullName: user.fullName };
+  },
+
+  async redeemPasswordResetToken() {
+    // La demo no persiste tokens: no hay enlace que canjear.
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async changePassword({ userId }) {
+    const user = MOCK_USERS.find((item) => item.id === userId);
+    if (!user) return { ok: false, reason: 'NOT_FOUND' };
+    return { ok: true, data: { id: userId } };
   },
 
   async registerLoginOutcome() {
@@ -366,6 +439,19 @@ export const mockRepository: DataRepository = {
 
   // --- Odontólogos (escritura) ---------------------------------------------
 
+  async createDentistWithAccount({ dentist }) {
+    const created = await mockRepository.createDentist(dentist);
+    if (!created.ok) return created;
+
+    // En memoria no hay tabla de usuarios que crecer: basta con dejar el
+    // vínculo puesto para que la interfaz se comporte igual que con Postgres.
+    const userId = newId('user');
+    const stored = dentists.find((item) => item.id === created.data.id);
+    if (stored) stored.userId = userId;
+
+    return { ok: true, data: { id: created.data.id, userId } };
+  },
+
   async createDentist(data) {
     if (isTaken(dentists, null, (d) => d.licenseNumber === data.licenseNumber)) {
       return { ok: false, reason: 'DUPLICATE', field: 'licenseNumber' };
@@ -420,7 +506,15 @@ export const mockRepository: DataRepository = {
       return { ok: false, reason: 'DUPLICATE', field: 'code' };
     }
 
-    const created: Treatment = { id: newId('trmt'), description: null, ...data };
+    const created: Treatment = {
+      id: newId('trmt'),
+      description: null,
+      // El formulario del panel aún no ofrece estas dos reglas; se crean
+      // apagadas y se activan desde la base o al editarlas.
+      isPriceVariable: false,
+      clinicKeepsAll: false,
+      ...data,
+    };
     treatments.push(created);
     return { ok: true, data: created };
   },
@@ -729,6 +823,211 @@ export const mockRepository: DataRepository = {
       .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime())
       .slice(0, limit)
       .map(hydrateAppointment);
+  },
+
+  async addAppointmentAddon({ appointmentId, treatmentId, priceCents, notes }) {
+    const appointment = appointments.find((item) => item.id === appointmentId);
+    if (!appointment) return { ok: false, reason: 'NOT_FOUND' };
+
+    const treatment = treatments.find((item) => item.id === treatmentId);
+    if (!treatment) return { ok: false, reason: 'NOT_FOUND' };
+
+    // Misma regla que en Postgres: una cita cobrada ya congeló su reparto.
+    const cobrada = MOCK_PAYMENTS.some(
+      (payment) => payment.appointmentId === appointmentId && payment.status === 'PAID',
+    );
+    if (cobrada) return { ok: false, reason: 'DUPLICATE', field: 'appointmentId' };
+
+    const dentist = dentists.find((item) => item.id === appointment.dentistId);
+
+    const addon: AppointmentAddon = {
+      id: `addon-${addons.length + 1}`,
+      appointmentId,
+      treatmentId,
+      treatmentName: treatment.name,
+      priceCents: priceCents ?? treatment.basePriceCents,
+      // Sin acuerdos por odontólogo en el mock: basta con respetar la regla
+      // que de verdad cambia el dinero, que es la del 100 % de la clínica.
+      commissionPercent: treatment.clinicKeepsAll
+        ? 100
+        : (dentist?.clinicCommissionPercent ?? 40),
+      notes,
+      createdAt: new Date(),
+    };
+
+    addons.push(addon);
+    return { ok: true, data: addon };
+  },
+
+  async removeAppointmentAddon({ id }) {
+    const index = addons.findIndex((addon) => addon.id === id);
+    if (index === -1) return { ok: false, reason: 'NOT_FOUND' };
+
+    addons.splice(index, 1);
+    return { ok: true, data: { id } };
+  },
+
+  async getDailySettlements() {
+    // El mock no lleva liquidaciones: la demo enseña la pantalla vacía, que
+    // es el estado real de una clínica que aún no ha cobrado nada ese día.
+    return [];
+  },
+
+  async settleDentistDay() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async listInstruments(params) {
+    return instruments.filter(
+      (item) => !params?.dentistId || item.dentistId === params.dentistId,
+    );
+  },
+
+  async saveInstrument({ id, dentistId, data }) {
+    if (id) {
+      const existente = instruments.find(
+        (item) => item.id === id && item.dentistId === dentistId,
+      );
+      if (!existente) return { ok: false, reason: 'NOT_FOUND' };
+      Object.assign(existente, data);
+      return { ok: true, data: { id } };
+    }
+
+    const nuevo = { id: newId('instr'), dentistId, ...data };
+    instruments.push(nuevo);
+    return { ok: true, data: { id: nuevo.id } };
+  },
+
+  async deleteInstrument({ id }) {
+    const index = instruments.findIndex((item) => item.id === id);
+    if (index === -1) return { ok: false, reason: 'NOT_FOUND' };
+    instruments.splice(index, 1);
+    return { ok: true, data: { id } };
+  },
+
+  async listSchedule(dentistId) {
+    return schedules.get(dentistId) ?? [];
+  },
+
+  async listScheduleRequests(params) {
+    return scheduleRequests.filter((request) => {
+      if (params?.dentistId && request.dentistId !== params.dentistId) return false;
+      if (params?.status && request.status !== params.status) return false;
+      return true;
+    });
+  },
+
+  async createScheduleRequest({ dentistId, proposedBlocks, reason }) {
+    const dentist = dentists.find((item) => item.id === dentistId);
+    if (!dentist) return { ok: false, reason: 'NOT_FOUND' };
+
+    // Misma regla que el índice único parcial de Postgres.
+    if (scheduleRequests.some((r) => r.dentistId === dentistId && r.status === 'PENDING')) {
+      return { ok: false, reason: 'DUPLICATE', field: 'dentistId' };
+    }
+
+    const request: ScheduleChangeRequest = {
+      id: newId('sched'),
+      dentistId,
+      dentistName: dentist.fullName,
+      proposedBlocks,
+      currentBlocks: schedules.get(dentistId) ?? [],
+      reason,
+      status: 'PENDING',
+      reviewNotes: null,
+      reviewedAt: null,
+      createdAt: new Date(),
+    };
+
+    scheduleRequests.push(request);
+    return { ok: true, data: { id: request.id } };
+  },
+
+  async reviewScheduleRequest({ id, status, reviewNotes }) {
+    const request = scheduleRequests.find((item) => item.id === id);
+    if (!request) return { ok: false, reason: 'NOT_FOUND' };
+    if (request.status !== 'PENDING') {
+      return { ok: false, reason: 'DUPLICATE', field: 'status' };
+    }
+
+    request.status = status;
+    request.reviewNotes = reviewNotes;
+    request.reviewedAt = new Date();
+
+    // Aprobar aplica el horario, igual que en Postgres.
+    if (status === 'APPROVED') schedules.set(request.dentistId, request.proposedBlocks);
+
+    return { ok: true, data: { id } };
+  },
+
+  async listDentistTreatments(params) {
+    return agreements.filter((agreement) => {
+      if (params?.dentistId && agreement.dentistId !== params.dentistId) return false;
+      if (params?.status && agreement.status !== params.status) return false;
+      return true;
+    });
+  },
+
+  async upsertDentistTreatment({
+    dentistId,
+    treatmentId,
+    customPriceCents,
+    customCommissionPercent,
+    status,
+  }) {
+    const dentist = dentists.find((item) => item.id === dentistId);
+    const treatment = treatments.find((item) => item.id === treatmentId);
+    if (!dentist || !treatment) return { ok: false, reason: 'NOT_FOUND' };
+
+    const existente = agreements.find(
+      (agreement) =>
+        agreement.dentistId === dentistId && agreement.treatmentId === treatmentId,
+    );
+
+    if (existente) {
+      existente.customPriceCents = customPriceCents;
+      existente.customCommissionPercent = customCommissionPercent;
+      existente.status = status;
+      existente.reviewNotes = null;
+      existente.reviewedAt = status === 'APPROVED' ? new Date() : null;
+      return { ok: true, data: { id: existente.id } };
+    }
+
+    const agreement: DentistTreatmentAgreement = {
+      id: `tarifa-${agreements.length + 1}`,
+      dentistId,
+      dentistName: dentist.fullName,
+      treatmentId,
+      treatmentName: treatment.name,
+      treatmentBasePriceCents: treatment.basePriceCents,
+      customPriceCents,
+      customCommissionPercent,
+      status,
+      reviewNotes: null,
+      reviewedAt: status === 'APPROVED' ? new Date() : null,
+      createdAt: new Date(),
+    };
+
+    agreements.push(agreement);
+    return { ok: true, data: { id: agreement.id } };
+  },
+
+  async reviewDentistTreatment({ id, status, reviewNotes }) {
+    const agreement = agreements.find((item) => item.id === id);
+    if (!agreement) return { ok: false, reason: 'NOT_FOUND' };
+
+    agreement.status = status;
+    agreement.reviewNotes = reviewNotes;
+    agreement.reviewedAt = new Date();
+    return { ok: true, data: { id } };
+  },
+
+  async deleteDentistTreatment({ id }) {
+    const index = agreements.findIndex((agreement) => agreement.id === id);
+    if (index === -1) return { ok: false, reason: 'NOT_FOUND' };
+
+    agreements.splice(index, 1);
+    return { ok: true, data: { id } };
   },
 
   async listDentistAgenda({ dentistId, range, limit = 200 }) {

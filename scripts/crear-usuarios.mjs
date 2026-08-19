@@ -87,6 +87,55 @@ const CUENTAS = [
   },
 ];
 
+/**
+ * Crea (o reutiliza) la ficha clínica del odontólogo y la enlaza a su cuenta.
+ *
+ * Le deja además un horario semanal: sin él, `/availability` no encuentra
+ * ningún hueco y ni el panel ni el bot pueden agendarle nada.
+ */
+async function vincularFichaDeOdontologo(userId, cuenta) {
+  const licencia = process.env.DENTIST_LICENSE ?? 'RM-00001';
+
+  const ficha = await prisma.dentist.upsert({
+    where: { licenseNumber: licencia },
+    update: { userId, deletedAt: null, isActive: true },
+    create: {
+      userId,
+      fullName: cuenta.fullName,
+      licenseNumber: licencia,
+      email: cuenta.email,
+      // El teléfono de la ficha es el que usa el bot para reconocer al
+      // odontólogo cuando escribe por WhatsApp.
+      phone: cuenta.phoneE164 ?? '+584140000001',
+      specialties: (process.env.DENTIST_SPECIALTIES ?? 'ODONTOLOGÍA GENERAL')
+        .split(',')
+        .map((s) => s.trim().toUpperCase())
+        .filter(Boolean),
+      clinicCommissionPercent: Number(process.env.DENTIST_COMMISSION ?? 40),
+    },
+    select: { id: true, fullName: true, clinicCommissionPercent: true },
+  });
+
+  // Horario: lunes a sábado, la jornada de la clínica. `createMany` con
+  // `skipDuplicates` lo hace repetible — el índice único es (odontólogo,
+  // día, hora de inicio).
+  const APERTURA = 9 * 60;   // 09:00
+  const CIERRE = 18 * 60;    // 18:00
+  await prisma.dentistSchedule.createMany({
+    data: [1, 2, 3, 4, 5, 6].map((weekday) => ({
+      dentistId: ficha.id,
+      weekday,
+      startMinute: APERTURA,
+      endMinute: weekday === 6 ? 13 * 60 : CIERRE,
+    })),
+    skipDuplicates: true,
+  });
+
+  console.log(
+    `                  ↳ ficha ${licencia} · comisión clínica ${ficha.clinicCommissionPercent}% · horario lun-sáb`,
+  );
+}
+
 async function main() {
   console.log('Creando cuentas de acceso…\n');
 
@@ -124,11 +173,27 @@ async function main() {
         status: 'ACTIVE',
         phoneE164: cuenta.phoneE164,
       },
-      select: { email: true, role: true, createdAt: true, updatedAt: true },
+      select: { id: true, email: true, role: true, createdAt: true, updatedAt: true },
     });
 
     const esNueva = usuario.createdAt.getTime() === usuario.updatedAt.getTime();
     console.log(`  ${esNueva ? '✓ creada    ' : '↻ actualizada'}  ${usuario.role.padEnd(11)}  ${usuario.email}`);
+
+    /*
+     * Una cuenta con rol DENTIST no sirve de nada por sí sola.
+     *
+     * `User` es la credencial de acceso; `Dentist` es la ficha clínica con la
+     * licencia, las especialidades y la comisión. La agenda del odontólogo
+     * busca su ficha por `Dentist.userId`, y si no la encuentra muestra «tu
+     * usuario todavía no está vinculado a una ficha de odontólogo».
+     *
+     * Están separados a propósito: hay odontólogos que no necesitan entrar al
+     * panel, y un administrador no es un odontólogo. Pero cuando la cuenta ES
+     * de un odontólogo, hay que crear las dos cosas y enlazarlas.
+     */
+    if (cuenta.role === 'DENTIST') {
+      await vincularFichaDeOdontologo(usuario.id, cuenta);
+    }
   }
 
   // Recuento final: si el panel sigue rechazando el login después de esto, el

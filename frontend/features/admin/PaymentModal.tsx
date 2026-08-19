@@ -71,15 +71,57 @@ export function PaymentModal({
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
-  // Se inicializa con el precio pactado, que es el caso normal. El campo
-  // sigue siendo editable para descuentos y abonos.
-  const [amountUsd, setAmountUsd] = useState(
-    appointment ? (appointment.agreedPriceCents / 100).toFixed(2) : '',
-  );
+  /*
+   * Importe propuesto: el precio pactado, que es el caso normal. Sigue siendo
+   * editable para descuentos y abonos.
+   *
+   * Se reajusta al CAMBIAR de cita en vez de sólo al inicializar porque este
+   * componente no se desmonta: vive siempre montado en la agenda y sólo se
+   * abre y se cierra su modal. Con un `useState(...)` a secas, el valor
+   * inicial se calculaba una única vez —con `appointment` todavía en `null`—
+   * y el campo salía vacío en todos los cobros, con el botón deshabilitado
+   * hasta teclear el importe a mano.
+   *
+   * Es el patrón de React para ajustar estado cuando cambian las props: se
+   * corrige durante el render, sin `useEffect`, así no hay un primer pintado
+   * con el importe de la cita anterior.
+   */
+  const [amountUsd, setAmountUsd] = useState('');
+  const [lastAppointmentId, setLastAppointmentId] = useState<string | null>(null);
 
+  if (appointment && appointment.id !== lastAppointmentId) {
+    setLastAppointmentId(appointment.id);
+    setAmountUsd((appointment.agreedPriceCents / 100).toFixed(2));
+  }
+
+  /*
+   * El campo cubre SÓLO la cita principal. Los procedimientos añadidos
+   * durante la consulta los suma el servidor con su propio precio y su propio
+   * reparto, así que aquí hay que hacer lo mismo para previsualizar: si se
+   * mostrara el importe tecleado como total, recepción cobraría de menos en
+   * cuanto la cita llevara un añadido.
+   */
   const cents = Math.round((Number.parseFloat(amountUsd) || 0) * 100);
-  const clinicCents = Math.round((cents * commissionPercent) / 100);
-  const dentistCents = cents - clinicCents;
+  const addons = appointment?.addons ?? [];
+  const addonsCents = addons.reduce((suma, addon) => suma + addon.priceCents, 0);
+  const totalCents = cents + addonsCents;
+
+  /*
+   * Reparto línea a línea, igual que en `domain/pricing.ts`: cada añadido
+   * puede tener su propio porcentaje. Sumar los porcentajes no significaría
+   * nada, porque se aplican sobre bases distintas.
+   */
+  const clinicCents =
+    Math.round((cents * commissionPercent) / 100) +
+    addons.reduce(
+      (suma, addon) => suma + Math.round((addon.priceCents * addon.commissionPercent) / 100),
+      0,
+    );
+  const dentistCents = totalCents - clinicCents;
+
+  /** Porcentaje EFECTIVO sobre el total, que es el que describe el dinero. */
+  const effectivePercent =
+    totalCents === 0 ? commissionPercent : Math.round((clinicCents / totalCents) * 100);
 
   function submit(formData: FormData) {
     setError(null);
@@ -171,6 +213,22 @@ export function PaymentModal({
             }))}
           />
 
+          {/*
+            Reparto puntual. Se deja vacío casi siempre; sólo se rellena
+            cuando se pacta algo distinto con el odontólogo, como el 50/50.
+
+            Va aquí y no en la ficha del odontólogo porque es una decisión de
+            ESTA visita: cambiarle la comisión general afectaría a todas las
+            citas pasadas y futuras.
+          */}
+          <TextField
+            label="Reparto de esta cita (% clínica)"
+            name="commissionOverride"
+            type="number"
+            placeholder={String(commissionPercent)}
+            hint={`Vacío = ${commissionPercent}% habitual. Escribe 50 para un 50/50.`}
+          />
+
           <TextField
             label="Referencia"
             name="externalReference"
@@ -190,13 +248,48 @@ export function PaymentModal({
                 padding: '1rem',
               }}
             >
+              {/*
+                El desglose sólo aparece si hubo añadidos. En la cita normal
+                sería ruido: el importe tecleado ya es el total.
+              */}
+              {addons.length > 0 && (
+                <div
+                  style={{
+                    marginBottom: '0.75rem',
+                    paddingBottom: '0.5rem',
+                    borderBottom: '1px solid var(--color-border)',
+                  }}
+                >
+                  <div className="row row--between text-xs">
+                    <span className="muted">{appointment.treatment.name}</span>
+                    <span className="mono">{formatCents(cents)}</span>
+                  </div>
+                  {addons.map((addon) => (
+                    <div className="row row--between text-xs" key={addon.id}>
+                      <span className="muted">
+                        {addon.treatmentName}
+                        {addon.commissionPercent === 100 && ' · 100 % clínica'}
+                      </span>
+                      <span className="mono">{formatCents(addon.priceCents)}</span>
+                    </div>
+                  ))}
+                  <div
+                    className="row row--between text-xs"
+                    style={{ marginTop: '0.35rem', fontWeight: 700 }}
+                  >
+                    <span>Total</span>
+                    <span className="mono">{formatCents(totalCents)}</span>
+                  </div>
+                </div>
+              )}
+
               <div className="row row--between" style={{ marginBottom: '0.5rem' }}>
                 <span className="text-sm muted">Cobrar en bolívares</span>
                 <span
                   className="mono"
                   style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--color-primary)' }}
                 >
-                  {formatBs(centsToBs(cents, exchangeRate))}
+                  {formatBs(centsToBs(totalCents, exchangeRate))}
                 </span>
               </div>
 
@@ -209,15 +302,27 @@ export function PaymentModal({
                 className="row row--between text-xs"
                 style={{ borderTop: '1px solid var(--color-border)', paddingTop: '0.5rem' }}
               >
-                <span className="muted">Clínica ({commissionPercent}%)</span>
+                <span className="muted">Clínica ({effectivePercent}%)</span>
                 <span className="mono">{formatCents(clinicCents)}</span>
               </div>
               <div className="row row--between text-xs">
                 <span className="muted">
-                  {appointment.dentist.fullName} ({100 - commissionPercent}%)
+                  {appointment.dentist.fullName} ({100 - effectivePercent}%)
                 </span>
                 <span className="mono">{formatCents(dentistCents)}</span>
               </div>
+
+              {/*
+                Con añadidos, el porcentaje mostrado es el EFECTIVO sobre el
+                total y no coincide con el del odontólogo. Sin esta línea
+                parecería que se le ha cambiado la comisión.
+              */}
+              {addons.length > 0 && effectivePercent !== commissionPercent && (
+                <div className="text-xs subtle" style={{ marginTop: '0.35rem' }}>
+                  Su comisión sigue siendo {commissionPercent}%; el porcentaje efectivo
+                  cambia porque algún añadido se reparte distinto.
+                </div>
+              )}
             </div>
           )}
         </form>

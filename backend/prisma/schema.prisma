@@ -110,6 +110,22 @@ enum WhatsAppDeliveryStatus {
   FAILED  /// El proveedor lo rechazó; `deliveryError` explica por qué
 }
 
+/// Estado de una pieza del instrumental de un odontólogo.
+enum InstrumentCondition {
+  GOOD
+  NEEDS_SERVICE
+  OUT_OF_SERVICE
+  LOST
+}
+
+/// Estado de una solicitud que necesita el visto bueno de otra persona.
+/// La usan las propuestas de precio y los cambios de horario.
+enum ApprovalStatus {
+  PENDING  /// Esperando revisión
+  APPROVED /// Aprobada y aplicada
+  REJECTED /// Rechazada; el motivo queda en la solicitud
+}
+
 enum MessageAuthor {
   PATIENT
   AI_BOT
@@ -153,10 +169,25 @@ model User {
   /// Fuerza el cierre de todas las sesiones activas: si el JWT fue emitido
   /// antes de esta marca, se considera inválido. Se actualiza al cambiar
   /// contraseña o al suspender la cuenta.
+  ///
+  /// Lo comprueba `getCurrentUser()` en cada petición autenticada, contra el
+  /// valor que el token trae congelado desde el login.
   sessionsValidFrom DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Obliga a cambiar la contraseña en el próximo inicio de sesión.
+  ///
+  /// Se enciende cuando la cuenta nace de una invitación: la clave temporal
+  /// viajó por correo, así que la ha visto un tercero y no puede quedarse.
+  mustChangePassword Boolean @default(false)
+
+  /// Última vez que se cambió la contraseña. NULL = nunca desde el alta.
+  passwordChangedAt DateTime? @db.Timestamptz(3)
 
   /// Perfil de odontólogo, si esta cuenta pertenece a uno.
   dentist Dentist?
+
+  /// Enlaces de recuperación de contraseña emitidos para esta cuenta.
+  passwordResetTokens PasswordResetToken[]
 
   auditLogs AuditLog[]
   /// Arqueos de caja firmados por esta persona.
@@ -169,6 +200,34 @@ model User {
   @@index([role, status])
   @@index([deletedAt])
   @@map("users")
+}
+
+/// Enlace de recuperación de contraseña, de un solo uso.
+///
+/// Se guarda el HASH del token, no el token: si se guardara en claro,
+/// cualquiera con acceso de lectura a la base podría tomar el control de
+/// cualquier cuenta sin saber ninguna contraseña.
+model PasswordResetToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 hex del token que viajó por correo.
+  tokenHash String @unique
+
+  /// Caduca pronto: un enlace que vale una semana es una llave de repuesto
+  /// olvidada en el buzón.
+  expiresAt DateTime  @db.Timestamptz(3)
+  /// Un solo uso. Sin esto, quien reenvíe el correo entra otra vez.
+  usedAt    DateTime? @db.Timestamptz(3)
+
+  /// Para poder investigar un uso sospechoso después.
+  requestedIp String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
 }
 
 /// Registro inmutable de acciones sensibles (cambios de precio, borrados,
@@ -244,6 +303,19 @@ model Room {
   /// panorámico" sin cambiar el esquema.
   equipment String[]
 
+  /// Odontólogo dueño del consultorio, o `null` si es ROTATIVO.
+  ///
+  /// Algunos consultorios son fijos de una persona y otros se reparten según
+  /// la especialidad del día. Lo ajusta recepción, que es quien conoce la
+  /// rotación real.
+  ///
+  /// Que sea fijo NO bloquea la agenda por sí solo: es una preferencia fuerte
+  /// que el asignador respeta al elegir sala. Bloquearlo del todo dejaría un
+  /// consultorio vacío cuando su dueño no viene, que es justo lo contrario de
+  /// lo que quiere una clínica de coworking.
+  assignedDentistId String?
+  assignedDentist   Dentist? @relation(fields: [assignedDentistId], references: [id], onDelete: SetNull)
+
   isActive Boolean @default(true)
   notes    String?
 
@@ -297,6 +369,52 @@ model Dentist {
 
   @@index([isActive, deletedAt])
   @@map("dentists")
+  /// Líneas de evolución firmadas por este odontólogo.
+  clinicalEntries ClinicalEntry[]
+  /// Solicitudes de cambio de horario que ha hecho.
+  scheduleRequests ScheduleChangeRequest[]
+  /// Consultorios asignados en fijo a este odontólogo.
+  assignedRooms Room[]
+  /// Su instrumental. Suyo: se lo lleva si se va.
+  instruments DentistInstrument[]
+}
+
+/// Una pieza del instrumental de un odontólogo.
+///
+/// NO es un almacén de insumos que se descuenta al usarlos: es una lista de
+/// bienes con dueño. En un coworking el instrumental es de cada quien pero
+/// convive en salas compartidas, y cuando algo se pierde o aparece roto hay
+/// que saber de quién era.
+model DentistInstrument {
+  id        String  @id @default(cuid())
+  dentistId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+
+  name String
+  /// Agrupa la lista ("ROTATORIO", "CIRUGÍA"). Libre: el instrumental de un
+  /// cirujano y el de un ortodoncista no comparten taxonomía.
+  category String?
+
+  quantity Int @default(1)
+
+  /// Serie o marcado propio: distingue «mi turbina» de las otras tres iguales.
+  serialNumber String?
+
+  condition InstrumentCondition @default(GOOD)
+
+  /// Dónde suele estar. Texto y no FK: mucho instrumental vive en un maletín.
+  location String?
+  notes    String?
+
+  /// Última revisión. Sin esto nadie recuerda cuándo se mandó a servicio.
+  lastServicedOn DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([dentistId])
+  @@map("dentist_instruments")
 }
 
 /// Horario semanal recurrente de un odontólogo.
@@ -366,6 +484,9 @@ model Patient {
   marketingConsent   Boolean   @default(false)
   consentGrantedAt   DateTime? @db.Timestamptz(3)
 
+  /// Expediente clínico. Uno por paciente, creado al imprimirlo.
+  clinicalRecord ClinicalRecord?
+
   appointments  Appointment[]
   conversations WhatsAppConversation[]
 
@@ -403,6 +524,20 @@ model Treatment {
   /// Se suman al bloqueo del consultorio pero no se le cobran al paciente.
   bufferMinutes Int @default(10)
 
+  /// El precio de lista es SÓLO una referencia y se pacta en consulta.
+  ///
+  /// Un tratamiento de conducto cuesta distinto según cuántos conductos tenga
+  /// la pieza, y eso no se sabe hasta ver la radiografía. Con esto activo, el
+  /// bot cotiza «desde $X» en vez de dar un precio cerrado que luego habría
+  /// que desdecir en el mostrador.
+  isPriceVariable Boolean @default(false)
+
+  /// La clínica se queda con el 100 %: el odontólogo no cobra comisión.
+  ///
+  /// Es el caso de la radiografía: la hace el equipo de la clínica, no el
+  /// odontólogo. Repartir 40/60 ahí sería pagarle por un trabajo que no hizo.
+  clinicKeepsAll Boolean @default(false)
+
   isActive Boolean @default(true)
 
   appointments     Appointment[]
@@ -415,6 +550,8 @@ model Treatment {
 
   @@index([category, isActive])
   @@map("treatments")
+  /// Veces que se ha añadido a una cita ya existente.
+  addons AppointmentAddon[]
 }
 
 /// Historial de precios. Cada cambio desde el panel de "Configuración de
@@ -452,7 +589,21 @@ model DentistTreatment {
   /// Si es null, se usa `Dentist.clinicCommissionPercent`.
   customCommissionPercent Int?
 
+  /// El odontólogo PROPONE, el administrador aprueba.
+  ///
+  /// Mientras esté en PENDING NO se aplica: se sigue cobrando el precio de
+  /// lista. Aplicarlo antes de la aprobación significaría que cualquiera con
+  /// cuenta de odontólogo puede cambiar lo que se le cobra a los pacientes.
+  status ApprovalStatus @default(PENDING)
+
+  proposedByUserId String?
+  reviewedByUserId String?
+  reviewedAt       DateTime? @db.Timestamptz(3)
+  /// Por qué se rechazó. Sin esto, el odontólogo vuelve a proponer lo mismo.
+  reviewNotes      String?
+
   createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
   @@unique([dentistId, treatmentId])
   @@map("dentist_treatments")
@@ -521,6 +672,10 @@ model Appointment {
   @@index([status, startsAt])    // "citas de hoy pendientes"
   @@index([startsAt])            // rango del dashboard financiero
   @@map("appointments")
+  /// Línea de evolución generada por esta cita, si se registró.
+  clinicalEntry ClinicalEntry?
+  /// Procedimientos añadidos sobre la marcha durante la consulta.
+  addons AppointmentAddon[]
 }
 
 // ===========================================================================
@@ -901,4 +1056,203 @@ model PaymentMethodOption {
 
   @@index([isActive, sortOrder])
   @@map("payment_method_options")
+}
+
+/// ===========================================================================
+///  EXPEDIENTE CLÍNICO
+/// ===========================================================================
+///  Un expediente por paciente. Recoge lo que NO cambia entre visitas:
+///  antecedentes médicos, alergias, odontograma y plan de tratamiento.
+///
+///  EL FLUJO QUE ESTO MODELA
+///  1. El sistema imprime un expediente EN BLANCO.
+///  2. El odontólogo lo rellena a mano durante la consulta.
+///  3. La asistente lo pasa al sistema.
+///  4. El papel se archiva; el sistema conserva la copia consultable.
+///
+///  Por eso el expediente puede existir vacío: se crea al imprimirlo, antes
+///  de que nadie lo haya llenado. Un modelo que exigiera todos los campos al
+///  crearlo haría imposible el paso 1.
+model ClinicalRecord {
+  id        String  @id @default(cuid())
+  patientId String  @unique
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  // --- Antecedentes médicos ------------------------------------------------
+  /// Banderas de riesgo. Son las que cambian el tratamiento o lo contraindican,
+  /// y por eso van como columnas y no dentro de un texto libre: tienen que
+  /// poder consultarse y avisar antes de un procedimiento.
+  hypertension   Boolean @default(false)
+  diabetes       Boolean @default(false)
+  heartDisease   Boolean @default(false)
+  anticoagulants Boolean @default(false)
+  pregnant       Boolean @default(false)
+
+  /// Alergias y medicación habitual. Texto libre: la lista real es infinita.
+  allergies          String?
+  currentMedications String?
+  /// Cualquier otro antecedente relevante.
+  medicalNotes       String?
+
+  /// Motivo de consulta de la primera visita.
+  chiefComplaint String?
+
+  /**
+   * Odontograma: el estado de cada pieza dental.
+   *
+   * Se guarda como JSON con notación FDI ("18", "17"… "48"), no como 32
+   * columnas ni como 32 filas en otra tabla.
+   *
+   * Por qué JSON: el odontograma se lee y se escribe SIEMPRE entero —nadie
+   * consulta "el estado de la pieza 24 de todos los pacientes"—, y una tabla
+   * aparte convertiría cada apertura del expediente en 32 filas que unir.
+   * Además la notación cambia entre adultos y niños (dentición temporal
+   * 55-85), y un esquema rígido de 32 columnas no admitiría eso.
+   *
+   * Forma: { "18": { "estado": "CARIES", "notas": "distal" }, ... }
+   */
+  odontogram Json?
+
+  /// Plan de tratamiento acordado.
+  treatmentPlan String?
+
+  /// Quién lo pasó al sistema y cuándo. El papel lo firma el odontólogo; esto
+  /// registra quién lo transcribió, que es una responsabilidad distinta.
+  createdByUserId String?
+  updatedByUserId String?
+
+  entries ClinicalEntry[]
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@map("clinical_records")
+}
+
+/// Una línea de la hoja de evolución: qué se le hizo al paciente y qué día.
+///
+/// Separada del expediente porque crece sin límite: un paciente de ortodoncia
+/// acumula decenas de entradas sobre el mismo expediente.
+model ClinicalEntry {
+  id       String         @id @default(cuid())
+  recordId String
+  record   ClinicalRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
+
+  /// Fecha de la atención — la del PAPEL, que puede no ser la de hoy: la
+  /// asistente transcribe expedientes con días de retraso.
+  performedOn DateTime @db.Timestamptz(3)
+
+  /// Qué odontólogo atendió. Opcional: un expediente antiguo transcrito puede
+  /// no tener ficha en el sistema.
+  dentistId String?
+  dentist   Dentist? @relation(fields: [dentistId], references: [id], onDelete: SetNull)
+
+  /// Cita asociada, si la hubo. Enlaza la historia clínica con la agenda.
+  appointmentId String?      @unique
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  /// Lo que se hizo, tal cual lo escribió el odontólogo.
+  procedure String
+  /// Piezas tratadas, notación FDI: ["16", "17"].
+  teeth     String[]
+  notes     String?
+
+  createdByUserId String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([recordId, performedOn])
+  @@index([dentistId, performedOn])
+  @@map("clinical_entries")
+}
+
+/// ===========================================================================
+///  SOLICITUD DE CAMBIO DE HORARIO
+/// ===========================================================================
+///  El odontólogo propone su horario desde su cuenta; recepción lo aprueba.
+///
+///  POR QUÉ NO PUEDE CAMBIARLO ÉL DIRECTAMENTE
+///  Su horario es lo que el bot usa para ofrecer huecos. Si un odontólogo se
+///  quitara el martes por la mañana con dos semanas ya agendadas, el sistema
+///  seguiría teniendo esas citas pero él no estaría — y el paciente se
+///  presenta a una consulta que nadie va a atender. Recepción es quien sabe
+///  qué hay agendado y puede reprogramarlo antes de aceptar.
+///
+///  La solicitud guarda la semana ENTERA propuesta, no un bloque suelto: así
+///  se revisa de una vez y no queda un horario a medio aprobar.
+model ScheduleChangeRequest {
+  id        String  @id @default(cuid())
+  dentistId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+
+  /**
+   * Horario propuesto: un array de bloques
+   * `[{ "weekday": 1, "startMinute": 540, "endMinute": 1080 }, ...]`.
+   *
+   * Va como JSON y no como filas porque se aprueba o se rechaza ENTERO. Con
+   * filas sueltas, una aprobación parcial dejaría al odontólogo con una
+   * semana que él nunca propuso.
+   */
+  proposedBlocks Json
+
+  /// Por qué lo pide. Recepción decide con esto delante.
+  reason String?
+
+  status ApprovalStatus @default(PENDING)
+
+  requestedByUserId String
+  reviewedByUserId  String?
+  reviewedAt        DateTime? @db.Timestamptz(3)
+  reviewNotes       String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@index([dentistId, status])
+  @@map("schedule_change_requests")
+}
+
+/// ===========================================================================
+///  PROCEDIMIENTOS AÑADIDOS A UNA CITA
+/// ===========================================================================
+///  Lo que se le hizo al paciente ADEMÁS de aquello por lo que vino.
+///
+///  El caso real: viene a una limpieza, el odontólogo ve una caries y la
+///  obtura en la misma sesión. La cita se agendó por una cosa y se cobra por
+///  dos.
+///
+///  POR QUÉ NO SE EDITA `agreedPriceCents` Y YA
+///  Porque ese campo es el precio CONGELADO al agendar, y sobre él se
+///  construye la trazabilidad: cuánto se cotizó frente a cuánto se cobró.
+///  Machacarlo borraría la diferencia, que es justo el dato que revela si se
+///  está cotizando mal o si se añaden procedimientos sistemáticamente.
+///
+///  Cada añadido guarda su propio precio y su propia comisión, porque puede
+///  tener reglas distintas: una radiografía añadida sigue siendo 100 % de la
+///  clínica aunque la cita principal se reparta 40/60.
+model AppointmentAddon {
+  id            String      @id @default(cuid())
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  treatmentId String
+  treatment   Treatment @relation(fields: [treatmentId], references: [id])
+
+  /// Precio pactado para ESTE añadido, en centavos de USD.
+  priceCents Int
+
+  /// Comisión de la clínica aplicable, copiada al añadirlo. `100` para lo que
+  /// no se reparte (radiografía).
+  commissionPercent Int
+
+  notes String?
+
+  addedByUserId String?
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([appointmentId])
+  @@map("appointment_addons")
 }

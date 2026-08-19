@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useTransition } from 'react';
 import type { Dentist, DentistEarnings } from '@/backend/domain/types';
 import { formatCents } from '@/backend/domain/money';
 import {
@@ -7,6 +8,7 @@ import {
   updateDentistAction,
   deleteDentistAction,
 } from '@/app/actions/admin.actions';
+import { resetDentistPasswordAction } from '@/app/actions/account.actions';
 import { Modal, MotionRow, AnimatePresence } from '@/frontend/components/motion';
 import {
   useCrud,
@@ -26,17 +28,67 @@ import { Badge, EmptyState, Avatar, Notice } from '@/frontend/components/ui/prim
  */
 
 interface DentistsManagerProps {
+  /**
+   * Especialidades ya en uso, para sugerirlas.
+   *
+   * «Cirujanos y tal»: el bot enruta al especialista por este campo, así que
+   * si conviven «CIRUGÍA ORAL» y «cirujano» como valores distintos, a quien
+   * pida un cirujano se le ofrece medio equipo o ninguno.
+   */
+  knownSpecialties: string[];
   dentists: Dentist[];
   /** Producción del periodo, indexada por id de odontólogo. */
   earningsByDentist: Record<string, DentistEarnings | undefined>;
 }
 
-export function DentistsManager({ dentists, earningsByDentist }: DentistsManagerProps) {
+export function DentistsManager({
+  dentists,
+  earningsByDentist,
+  knownSpecialties,
+}: DentistsManagerProps) {
   const crud = useCrud<Dentist>({
     create: createDentistAction,
     update: updateDentistAction,
     remove: deleteDentistAction,
   });
+
+  const [isResetting, startReset] = useTransition();
+  const [resetNotice, setResetNotice] = useState<{ tone: 'info' | 'danger' | 'warning'; text: string } | null>(null);
+
+  /**
+   * Le genera una clave nueva y se la manda por correo.
+   *
+   * No "recupera" la que tenía: nadie la sabe, está hasheada. Se confirma
+   * porque además CIERRA sus sesiones abiertas — si estaba trabajando, se
+   * queda fuera en ese momento.
+   */
+  function resetPassword(dentist: Dentist) {
+    if (
+      !window.confirm(
+        `¿Restablecer la contraseña de ${dentist.fullName}?\n\n` +
+          'Se le enviará una clave temporal por correo y se cerrarán sus sesiones abiertas.',
+      )
+    ) {
+      return;
+    }
+
+    setResetNotice(null);
+    startReset(async () => {
+      const result = await resetDentistPasswordAction(dentist.id);
+      if (!result.ok) {
+        setResetNotice({ tone: 'danger', text: result.error ?? 'No se pudo restablecer' });
+        return;
+      }
+      setResetNotice(
+        result.warning
+          ? { tone: 'warning', text: result.warning }
+          : {
+              tone: 'info',
+              text: `Listo: se le envió una clave temporal a ${dentist.email}. Tendrá que cambiarla al entrar.`,
+            },
+      );
+    });
+  }
 
   const editing = crud.mode.kind === 'edit' ? crud.mode.item : null;
 
@@ -140,6 +192,22 @@ export function DentistsManager({ dentists, earningsByDentist }: DentistsManager
                               >
                                 Editar
                               </button>
+                              {/*
+                                Restablecer sólo tiene sentido si tiene cuenta.
+                                Sin `userId` no hay contraseña que regenerar:
+                                ese odontólogo no entra al panel.
+                              */}
+                              {dentist.userId && (
+                                <button
+                                  type="button"
+                                  className="btn btn--ghost btn--sm"
+                                  onClick={() => resetPassword(dentist)}
+                                  disabled={isResetting}
+                                  title="Le genera una clave nueva y se la envía por correo"
+                                >
+                                  Restablecer clave
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 className="btn btn--danger btn--sm"
@@ -160,6 +228,37 @@ export function DentistsManager({ dentists, earningsByDentist }: DentistsManager
           )}
         </div>
       </div>
+
+      {/*
+        Aviso posterior al alta: se creó, pero el correo no salió. Va fuera
+        del modal porque para cuando se muestra el modal ya se cerró — la
+        operación tuvo éxito.
+      */}
+      {resetNotice && (
+        <Notice tone={resetNotice.tone}>
+          {resetNotice.text}{' '}
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={() => setResetNotice(null)}
+          >
+            Entendido
+          </button>
+        </Notice>
+      )}
+
+      {crud.warning && (
+        <Notice tone="warning">
+          {crud.warning}{' '}
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={crud.dismissWarning}
+          >
+            Entendido
+          </button>
+        </Notice>
+      )}
 
       <Modal
         open={crud.mode.kind !== 'closed'}
@@ -208,7 +307,8 @@ export function DentistsManager({ dentists, earningsByDentist }: DentistsManager
             required
             full
             placeholder="ORTODONCIA, ESTÉTICA DENTAL"
-            hint="Separadas por comas"
+            hint="Separadas por comas. Reutiliza las que ya existen: el bot busca por ellas."
+            suggestions={knownSpecialties}
             defaultValue={editing?.specialties.join(', ')}
             error={errorFor('specialties')}
           />
@@ -229,6 +329,30 @@ export function DentistsManager({ dentists, earningsByDentist }: DentistsManager
             hint="Los inactivos no se asignan a citas nuevas, pero conservan su historial."
             defaultChecked={editing?.isActive ?? true}
           />
+
+          {/*
+            Sólo al dar de alta. En edición no aparece porque crear la cuenta
+            de alguien que ya la tiene no es una casilla: es restablecerle la
+            clave, que es otra operación y con otras consecuencias.
+          */}
+          {!editing && (
+            <>
+              <CheckboxField
+                label="Crear su cuenta de acceso al panel"
+                name="createAccount"
+                hint="Se le envía un correo con una clave temporal que deberá cambiar al entrar."
+                defaultChecked={false}
+              />
+
+              <div className="form-grid--full">
+                <Notice tone="info">
+                  La contraseña la genera el sistema y se manda por correo a través de
+                  n8n. Nadie del equipo llega a verla, y el panel obliga a cambiarla en
+                  el primer inicio de sesión.
+                </Notice>
+              </div>
+            </>
+          )}
         </form>
       </Modal>
     </>

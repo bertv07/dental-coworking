@@ -164,6 +164,15 @@ export function PatientsManager({
                         </td>
                         <td>
                           <div className="table__actions">
+                          {/* El expediente es lo que más se abre de un
+                              paciente: va antes que editar. */}
+                          <a
+                            href={`/pacientes/${patient.id}/expediente/editar`}
+                            className="btn btn--ghost btn--sm"
+                            title="Expediente clínico"
+                          >
+                            Expediente
+                          </a>
                             <button
                               type="button"
                               className="btn btn--ghost btn--sm"

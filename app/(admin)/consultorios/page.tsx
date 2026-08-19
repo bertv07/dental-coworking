@@ -29,8 +29,10 @@ export default async function RoomsPage() {
   const from = new Date();
   const to = new Date(from.getTime() + 7 * 24 * 60 * 60 * 1000);
 
-  const [rooms, appointments] = await Promise.all([
+  const [rooms, dentists, appointments] = await Promise.all([
     repository.listRooms({ includeInactive: true }),
+    // Para elegir el odontólogo fijo de cada consultorio.
+    repository.listDentists(),
     repository.listAppointments({ range: { from, to }, limit: 500 }),
   ]);
 
@@ -52,7 +54,7 @@ export default async function RoomsPage() {
       </FadeIn>
 
       <FadeIn delay={0.08}>
-        <RoomsManager rooms={rooms} upcomingByRoom={upcomingByRoom} />
+        <RoomsManager rooms={rooms} dentists={dentists} upcomingByRoom={upcomingByRoom} />
       </FadeIn>
     </div>
   );
