@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import type { Patient } from '@/backend/domain/types';
 import {
   createPatientAction,
@@ -164,15 +165,26 @@ export function PatientsManager({
                         </td>
                         <td>
                           <div className="table__actions">
-                          {/* El expediente es lo que más se abre de un
-                              paciente: va antes que editar. */}
-                          <a
-                            href={`/pacientes/${patient.id}/expediente/editar`}
-                            className="btn btn--ghost btn--sm"
-                            title="Expediente clínico"
-                          >
-                            Expediente
-                          </a>
+                            {/*
+                              El expediente es lo que más se abre de un
+                              paciente: va antes que editar.
+
+                              Apunta a `/expediente`, sin `/editar`: esa
+                              pantalla se quitó cuando el expediente pasó a ser
+                              un papel escaneado en vez de un formulario que
+                              transcribía recepción. El enlace se quedó
+                              apuntando a la ruta vieja y daba 404.
+
+                              `Link` y no `<a>`: navega sin recargar el panel
+                              entero, que es lo que hacía el enlace anterior.
+                            */}
+                            <Link
+                              href={`/pacientes/${patient.id}/expediente`}
+                              className="btn btn--ghost btn--sm"
+                              title="Documentos del paciente"
+                            >
+                              Expediente
+                            </Link>
                             <button
                               type="button"
                               className="btn btn--ghost btn--sm"

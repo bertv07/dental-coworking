@@ -446,6 +446,29 @@ export const mockRepository: DataRepository = {
 
   // --- Odontólogos (escritura) ---------------------------------------------
 
+  async reactivateDentist({ id }) {
+    const dentist = dentists.find((item) => item.id === id);
+    if (!dentist) return { ok: false, reason: 'NOT_FOUND' };
+
+    dentist.isActive = true;
+    dentist.deletedAt = null;
+    return { ok: true, data: { id } };
+  },
+
+  async findDentistByLicenseOrEmail({ licenseNumber, email }) {
+    const dentist = dentists.find(
+      (item) => item.licenseNumber === licenseNumber || item.email === email,
+    );
+    if (!dentist) return null;
+
+    return {
+      id: dentist.id,
+      fullName: dentist.fullName,
+      isActive: dentist.isActive,
+      isDeleted: dentist.deletedAt !== null,
+    };
+  },
+
   async createDentistWithAccount({ dentist }) {
     const created = await mockRepository.createDentist(dentist);
     if (!created.ok) return created;

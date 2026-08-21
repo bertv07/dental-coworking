@@ -346,7 +346,45 @@ export interface DataRepository {
   }): Promise<WriteResult<{ id: string }>>;
 
   // --- Catálogos (lectura) -------------------------------------------------
-  listDentists(options?: { includeInactive?: boolean }): Promise<Dentist[]>;
+  /**
+   * @param includeInactive Añade los desactivados, que siguen en plantilla.
+   * @param includeDeleted  Añade los DADOS DE BAJA.
+   *
+   * Los dados de baja no se borran de la tabla —sus liquidaciones históricas
+   * tienen que seguir cuadrando— y por eso conservan su número de colegio y
+   * su correo, que son ÚNICOS. Sin poder listarlos, dar de alta otra vez a
+   * alguien que estuvo aquí falla con «ya existe» y no hay manera de ver
+   * quién ocupa ese número ni de recuperarlo.
+   */
+  listDentists(options?: {
+    includeInactive?: boolean;
+    includeDeleted?: boolean;
+  }): Promise<Dentist[]>;
+
+  /**
+   * Devuelve al servicio a alguien que estaba dado de baja.
+   *
+   * Es lo que hay que hacer cuando vuelve, en vez de crearle una ficha nueva:
+   * su historial —citas, cobros, liquidaciones— cuelga de ESTA fila. Una
+   * ficha duplicada partiría su historia en dos y las cuentas de antes
+   * dejarían de encontrarla.
+   */
+  reactivateDentist(params: {
+    id: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /**
+   * Busca quién ocupa un número de colegio o un correo, INCLUIDOS los dados
+   * de baja.
+   *
+   * Existe para poder decir «ese número es de Fulana, que está dada de baja»
+   * en vez de un «ya existe» que deja a quien da el alta sin saber qué hacer.
+   */
+  findDentistByLicenseOrEmail(params: {
+    licenseNumber: string;
+    email: string;
+  }): Promise<{ id: string; fullName: string; isActive: boolean; isDeleted: boolean } | null>;
   listRooms(options?: { includeInactive?: boolean }): Promise<Room[]>;
   listTreatments(options?: { includeInactive?: boolean }): Promise<Treatment[]>;
   findTreatmentByCode(code: string): Promise<Treatment | null>;

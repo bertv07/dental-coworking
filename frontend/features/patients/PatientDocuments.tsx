@@ -158,7 +158,12 @@ export function PatientDocuments({
       </Card>
 
       <Card title="Subir un escaneo" subtitle="PDF o foto, hasta 20 MB">
-        <form ref={formRef} action={submit} className="form-grid">
+        {/*
+          Con `id`: la pantalla tiene tres formularios —el buscador de la barra
+          superior, éste y el modal— y sin él no hay forma de referirse a uno
+          en concreto, ni desde un botón externo ni desde una prueba.
+        */}
+        <form id="upload-document" ref={formRef} action={submit} className="form-grid">
           <input type="hidden" name="patientId" value={patientId} />
 
           <div className="field form-grid--full">

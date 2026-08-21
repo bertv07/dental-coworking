@@ -523,11 +523,58 @@ export const prismaRepository: DataRepository = {
   async listDentists(options) {
     return prisma.dentist.findMany({
       where: {
-        deletedAt: null,
+        // Los dados de baja se excluyen salvo que se pidan: siguen en la
+        // tabla porque sus liquidaciones históricas cuelgan de ellos.
+        ...(options?.includeDeleted ? {} : { deletedAt: null }),
         ...(options?.includeInactive ? {} : { isActive: true }),
       },
       orderBy: { fullName: 'asc' },
     });
+  },
+
+  async reactivateDentist({ id, userId }) {
+    try {
+      const dentist = await prisma.dentist.update({
+        where: { id },
+        // Se limpia la baja Y se reactiva. El historial no se toca: sigue
+        // colgando de esta misma fila, que es justo el motivo de reactivar
+        // en vez de crear una ficha nueva.
+        data: { isActive: true, deletedAt: null },
+        select: { id: true, fullName: true },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'dentist.reactivated',
+          entityType: 'Dentist',
+          entityId: dentist.id,
+          after: { fullName: dentist.fullName },
+        },
+      });
+
+      return { ok: true, data: { id: dentist.id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async findDentistByLicenseOrEmail({ licenseNumber, email }) {
+    const dentist = await prisma.dentist.findFirst({
+      // Sin filtrar por `deletedAt`: el choque lo provoca precisamente una
+      // ficha dada de baja que sigue ocupando el número.
+      where: { OR: [{ licenseNumber }, { email }] },
+      select: { id: true, fullName: true, isActive: true, deletedAt: true },
+    });
+
+    if (!dentist) return null;
+
+    return {
+      id: dentist.id,
+      fullName: dentist.fullName,
+      isActive: dentist.isActive,
+      isDeleted: dentist.deletedAt !== null,
+    };
   },
 
   async listRooms(options) {

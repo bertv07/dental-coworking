@@ -6,6 +6,8 @@ import { PageHead } from '@/frontend/components/layout/Topbar';
 import { Stat } from '@/frontend/components/ui/primitives';
 import { DentistsManager } from '@/frontend/features/admin/DentistsManager';
 import { DentistRoster } from '@/frontend/features/admin/DentistRoster';
+import { RetiredDentists } from '@/frontend/features/admin/RetiredDentists';
+import { prisma } from '@/backend/db/client';
 import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/motion';
 
 /**
@@ -76,6 +78,31 @@ export default async function DentistsPage() {
     repository.listDentists({ includeInactive: true }),
     repository.getDentistEarnings({ from, to }),
   ]);
+
+  /*
+   * Los DADOS DE BAJA, aparte.
+   *
+   * No salen en el listado principal —dejaron la clínica— pero siguen
+   * ocupando su número de colegio y su correo, que son únicos. Sin poder
+   * verlos, dar de alta otra vez a alguien que volvió falla con «ya existe» y
+   * no hay manera de saber quién lo ocupa.
+   *
+   * Se cuentan sus citas para que se vea de un vistazo cuánto historial hay
+   * colgando de esa ficha, que es el motivo de reactivarla en vez de crear
+   * una nueva.
+   */
+  const retired = await prisma.dentist.findMany({
+    where: { deletedAt: { not: null } },
+    select: {
+      id: true,
+      fullName: true,
+      licenseNumber: true,
+      email: true,
+      specialties: true,
+      _count: { select: { appointments: true } },
+    },
+    orderBy: { fullName: 'asc' },
+  });
 
   // Índice por id para que la tabla no haga un `find` por fila (O(n²)).
   const earningsByDentist: Record<string, DentistEarnings | undefined> = {};
@@ -161,6 +188,19 @@ export default async function DentistsPage() {
           dentists={dentists}
           earningsByDentist={earningsByDentist}
           knownSpecialties={knownSpecialties}
+        />
+      </FadeIn>
+
+      <FadeIn delay={0.12}>
+        <RetiredDentists
+          dentists={retired.map((d) => ({
+            id: d.id,
+            fullName: d.fullName,
+            licenseNumber: d.licenseNumber,
+            email: d.email,
+            specialties: d.specialties,
+            appointmentCount: d._count.appointments,
+          }))}
         />
       </FadeIn>
     </div>

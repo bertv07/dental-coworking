@@ -260,12 +260,64 @@ function toDentistInput(data: DentistFormInput) {
  * El primer caso confunde a quien lo recibe; el segundo lo resuelve el
  * administrador en un minuto.
  */
+/**
+ * Explica un choque de número de colegio o correo diciendo QUIÉN lo ocupa.
+ *
+ * El mensaje genérico —«ya existe un registro con ese registro profesional»—
+ * deja a quien da el alta sin salida: no puede ver la ficha que choca porque,
+ * si está dada de baja, el panel no la lista. Y el caso más común es
+ * justamente ese: alguien que trabajó aquí y vuelve.
+ *
+ * Crear una ficha nueva sería lo peor: su historial de citas y liquidaciones
+ * cuelga de la ficha vieja, así que quedarían dos personas donde hay una.
+ */
+async function explicarChoque(
+  data: DentistFormInput,
+  field: string,
+): Promise<ActionResult> {
+  const existente = await repository.findDentistByLicenseOrEmail({
+    licenseNumber: data.licenseNumber,
+    email: data.email,
+  });
+
+  if (!existente) {
+    return {
+      ok: false,
+      field,
+      error: `Ya existe un registro con ese ${FIELD_LABEL[field] ?? field}.`,
+    };
+  }
+
+  /*
+   * El texto se redacta en torno a la FICHA y no a la persona: así no hay que
+   * concordar en género con un nombre del que no se sabe nada. «Su ficha está
+   * dada de baja» vale para cualquiera; «está dado/a de baja» obliga a
+   * acertar, y acertar mal delante de quien trabaja aquí es feo.
+   */
+  if (existente.isDeleted) {
+    return {
+      ok: false,
+      field,
+      error:
+        `Ese ${FIELD_LABEL[field] ?? field} ya lo tiene ${existente.fullName}, ` +
+        'cuya ficha está dada de baja. No crees una ficha nueva: reactiva la suya ' +
+        'desde «Dados de baja» y conserva todo su historial.',
+    };
+  }
+
+  return {
+    ok: false,
+    field,
+    error: `Ese ${FIELD_LABEL[field] ?? field} ya lo tiene ${existente.fullName}.`,
+  };
+}
+
 export async function createDentistAction(input: unknown): Promise<ActionResult> {
   const validation = dentistFormSchema.safeParse(input);
 
   // Sin cuenta, el camino es el CRUD de siempre.
   if (!validation.success || !validation.data.createAccount) {
-    return runAction({
+    const result = await runAction({
       minimumRole: 'SUPER_ADMIN',
       schema: dentistFormSchema,
       input,
@@ -273,6 +325,17 @@ export async function createDentistAction(input: unknown): Promise<ActionResult>
       auditAction: 'dentist.created',
       handler: (data) => repository.createDentist(toDentistInput(data)),
     });
+
+    /*
+     * Si chocó un campo único, se sustituye el mensaje genérico por uno que
+     * diga QUIÉN ocupa ese número. `runAction` no puede hacerlo: la consulta
+     * es asíncrona y él sólo sabe traducir códigos de error.
+     */
+    if (!result.ok && result.field && validation.success) {
+      return explicarChoque(validation.data, result.field);
+    }
+
+    return result;
   }
 
   const authorization = await checkApiRole('SUPER_ADMIN');
@@ -301,14 +364,7 @@ export async function createDentistAction(input: unknown): Promise<ActionResult>
 
     if (!result.ok) {
       if (result.reason === 'DUPLICATE') {
-        return {
-          ok: false,
-          field: result.field,
-          error:
-            result.field === 'email'
-              ? 'Ese correo ya tiene una cuenta en el panel.'
-              : `Ya existe un registro con ese ${FIELD_LABEL[result.field] ?? result.field}.`,
-        };
+        return explicarChoque(data, result.field);
       }
       return { ok: false, error: 'No se pudo crear el odontólogo.' };
     }
@@ -377,6 +433,18 @@ export async function updateDentistAction(
      * esquema es el mismo para alta y edición, así que el campo llega igual.
      */
     handler: (data) => repository.updateDentist(parsedId.data, toDentistInput(data)),
+  });
+}
+
+/** Devuelve al servicio a alguien que estaba dado de baja. */
+export async function reactivateDentistAction(id: string): Promise<ActionResult> {
+  return runAction({
+    minimumRole: 'SUPER_ADMIN',
+    schema: cuidSchema,
+    input: id,
+    revalidate: '/odontologos',
+    auditAction: 'dentist.reactivated',
+    handler: (validId, userId) => repository.reactivateDentist({ id: validId, userId }),
   });
 }
 
