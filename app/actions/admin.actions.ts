@@ -19,6 +19,7 @@ import {
   instrumentSchema,
   scheduleRequestSchema,
   scheduleReviewSchema,
+  baseScheduleSchema,
   ownAppointmentSchema,
   clinicSettingsSchema,
   paymentFormSchema,
@@ -366,7 +367,16 @@ export async function updateDentistAction(
     input,
     revalidate: '/odontologos',
     auditAction: 'dentist.updated',
-    handler: (data) => repository.updateDentist(parsedId.data, data),
+    /*
+     * `toDentistInput` quita `createAccount`, que es una instrucción del
+     * formulario y NO una columna de `dentists`. Sin esto, editar cualquier
+     * odontóloga fallaba: Prisma recibía un campo desconocido.
+     *
+     * Al editar, la casilla ni se pinta —crear la cuenta de alguien que ya la
+     * tiene es restablecerle la clave, que es otra operación—, pero el
+     * esquema es el mismo para alta y edición, así que el campo llega igual.
+     */
+    handler: (data) => repository.updateDentist(parsedId.data, toDentistInput(data)),
   });
 }
 
@@ -1019,6 +1029,7 @@ export async function requestScheduleChangeAction(input: unknown): Promise<Actio
 
   const result = await repository.createScheduleRequest({
     dentistId: owner.dentistId,
+    weekStart: validation.data.weekStart,
     proposedBlocks: validation.data.proposedBlocks,
     reason: validation.data.reason,
     userId: owner.userId,
@@ -1031,7 +1042,7 @@ export async function requestScheduleChangeAction(input: unknown): Promise<Actio
       ok: false,
       error:
         result.reason === 'DUPLICATE'
-          ? 'Ya tienes una solicitud esperando respuesta. Espera a que la revisen o pide que la rechacen.'
+          ? 'Ya tienes una solicitud esperando para esa semana. Espera a que la revisen, o pide otra semana distinta.'
           : 'No se pudo enviar la solicitud.',
     };
   }
@@ -1041,8 +1052,37 @@ export async function requestScheduleChangeAction(input: unknown): Promise<Actio
 }
 
 /**
- * Aprueba o rechaza. Aprobar APLICA el horario en la misma transacción: ver
- * `reviewScheduleRequest` en el repositorio.
+ * Recepción fija el horario BASE de un odontólogo.
+ *
+ * Es el que rige mientras nadie diga lo contrario y el que usa el bot para
+ * ofrecer citas. Lo pone recepción, no el odontólogo: cambiarlo afecta a la
+ * ocupación de los consultorios y a lo que se puede agendar.
+ */
+export async function setBaseScheduleAction(
+  dentistId: string,
+  input: unknown,
+): Promise<ActionResult> {
+  const parsedId = cuidSchema.safeParse(dentistId);
+  if (!parsedId.success) return { ok: false, error: 'Identificador inválido' };
+
+  return runAction({
+    minimumRole: 'ASSISTANT',
+    schema: baseScheduleSchema,
+    input,
+    revalidate: '/horarios',
+    auditAction: 'schedule.base_set',
+    handler: (data, userId) =>
+      repository.setBaseSchedule({
+        dentistId: parsedId.data,
+        blocks: data.blocks,
+        userId,
+      }),
+  });
+}
+
+/**
+ * Aprueba o rechaza. Aprobar guarda la excepción DE ESA SEMANA en la misma
+ * transacción; el horario base no se toca. Ver `reviewScheduleRequest`.
  */
 export async function reviewScheduleChangeAction(input: unknown): Promise<ActionResult> {
   return runAction({

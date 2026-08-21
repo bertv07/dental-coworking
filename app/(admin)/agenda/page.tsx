@@ -105,9 +105,20 @@ async function DentistWeekView({
     range: weekQueryRange(weekStart),
   });
 
-  // Catálogo para que pueda agendar ella misma. Los precios que trae no se
-  // pintan: su formulario no muestra importes.
-  const treatments = await repository.listTreatments();
+  /*
+   * Catálogo para que pueda agendar ella misma, RECORTADO aquí.
+   *
+   * `listTreatments()` trae `basePriceCents`, y pasar el objeto entero metía
+   * la lista de precios en el payload que viaja al navegador aunque el
+   * formulario no la pintase. Se mandan sólo los tres campos que usa.
+   */
+  const treatments = (await repository.listTreatments())
+    .filter((treatment) => treatment.isActive)
+    .map((treatment) => ({
+      code: treatment.code,
+      name: treatment.name,
+      durationMinutes: treatment.durationMinutes,
+    }));
 
   const timeFormatter = new Intl.DateTimeFormat('es-VE', {
     hour: '2-digit',
@@ -139,7 +150,6 @@ async function DentistWeekView({
         endMinute: rawEndMinute > startMinute ? rawEndMinute : MINUTES_PER_DAY,
         timeLabel: `${timeFormatter.format(appointment.startsAt)} – ${timeFormatter.format(appointment.endsAt)}`,
         patientName: appointment.patientName,
-        patientPhone: appointment.patientPhone,
         treatmentName: appointment.treatmentName,
         durationMinutes: appointment.treatmentDurationMinutes,
         roomName: appointment.roomName,

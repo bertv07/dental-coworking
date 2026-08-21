@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import type { Treatment } from '@/backend/domain/types';
 import { createOwnAppointmentAction } from '@/app/actions/admin.actions';
 import { Modal } from '@/frontend/components/motion';
 import {
@@ -12,6 +11,20 @@ import {
 } from '@/frontend/components/ui/form';
 import { Notice } from '@/frontend/components/ui/primitives';
 import { IconPlus } from '@/frontend/components/ui/icons';
+
+/**
+ * Lo ÚNICO que el formulario necesita de un tratamiento.
+ *
+ * No es `Treatment`: ese tipo lleva `basePriceCents`, y usarlo aquí metía la
+ * lista de precios entera en el payload que se manda al navegador de la
+ * odontóloga —aunque la pantalla no la pintara—. En su parte del panel no
+ * viaja ni un importe, y esto no es la excepción.
+ */
+export interface OpcionTratamiento {
+  code: string;
+  name: string;
+  durationMinutes: number;
+}
 
 /**
  * ===========================================================================
@@ -38,15 +51,13 @@ import { IconPlus } from '@/frontend/components/ui/icons';
  * ===========================================================================
  */
 
-export function BookOwnAppointment({ treatments }: { treatments: Treatment[] }) {
+export function BookOwnAppointment({ treatments }: { treatments: OpcionTratamiento[] }) {
   const [isOpen, setOpen] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(
     null,
   );
-
-  const activos = treatments.filter((treatment) => treatment.isActive);
 
   function submit(formData: FormData) {
     setError(null);
@@ -117,7 +128,7 @@ export function BookOwnAppointment({ treatments }: { treatments: Treatment[] }) 
             full
             options={[
               { value: '', label: 'Elige un tratamiento…' },
-              ...activos.map((treatment) => ({
+              ...treatments.map((treatment) => ({
                 value: treatment.code,
                 // Sin precio: en la vista del odontólogo no viaja ningún importe.
                 label: `${treatment.name} · ${treatment.durationMinutes} min`,

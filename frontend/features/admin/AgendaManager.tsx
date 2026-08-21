@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import type {
   AppointmentWithRelations,
   Dentist,
@@ -16,6 +17,7 @@ import {
   updateAppointmentAction,
   setAppointmentStatusAction,
 } from '@/app/actions/admin.actions';
+import { openInvoiceAction } from '@/app/actions/invoice.actions';
 import { Modal, MotionRow, AnimatePresence } from '@/frontend/components/motion';
 import {
   useCrud,
@@ -120,6 +122,7 @@ export function AgendaManager({
   paidAppointmentIds,
   paymentMethods,
 }: AgendaManagerProps) {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [statusError, setStatusError] = useState<string | null>(null);
   /** Cita que se está cobrando, o `null` si el modal está cerrado. */
@@ -151,6 +154,25 @@ export function AgendaManager({
   const editing = crud.mode.kind === 'edit' ? crud.mode.item : null;
   const errorFor = (field: string) =>
     crud.fieldName === field ? crud.fieldError ?? undefined : undefined;
+
+  /**
+   * Abre la factura de una cita y navega a ella.
+   *
+   * Sustituye al modal de cobro directo: ahora el dinero entra CONTRA UNA
+   * FACTURA, que es lo que permite editarla si en consulta se hizo algo más,
+   * marcar descuentos y cobrar en dos partes.
+   */
+  function abrirFactura(appointment: AppointmentWithRelations) {
+    setStatusError(null);
+    startTransition(async () => {
+      const result = await openInvoiceAction(appointment.id);
+      if (!result.ok || !result.invoiceId) {
+        setStatusError(result.error ?? 'No se pudo abrir la factura');
+        return;
+      }
+      router.push(`/facturas/${result.invoiceId}`);
+    });
+  }
 
   /** Cambio rápido de estado desde la tabla. */
   function changeStatus(appointment: AppointmentWithRelations, status: string) {
@@ -313,10 +335,11 @@ export function AgendaManager({
                                 <button
                                   type="button"
                                   className="btn btn--primary btn--sm"
-                                  onClick={() => setPayingFor(appointment)}
-                                  aria-label={`Cobrar cita de ${appointment.patient.fullName}`}
+                                  onClick={() => abrirFactura(appointment)}
+                                  disabled={isPending}
+                                  aria-label={`Facturar cita de ${appointment.patient.fullName}`}
                                 >
-                                  <IconCurrency size={14} /> Cobrar
+                                  <IconCurrency size={14} /> Facturar
                                 </button>
                               )}
 

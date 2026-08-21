@@ -179,8 +179,15 @@ const agreements: DentistTreatmentAgreement[] = [];
 /** Instrumental en memoria. Vacío: cada odontólogo va cargando el suyo. */
 const instruments: DentistInstrument[] = [];
 
-/** Horario semanal vigente por odontólogo, y solicitudes de cambio. */
+/** Horario BASE por odontólogo, el que pone recepción. */
 const schedules = new Map<string, ScheduleBlock[]>();
+
+/**
+ * Excepciones de una semana concreta, indexadas por `dentistId|weekStart`.
+ *
+ * Vacío = todas las semanas siguen el horario base, que es el estado normal.
+ */
+const overrides = new Map<string, ScheduleBlock[]>();
 const scheduleRequests: ScheduleChangeRequest[] = [];
 
 /** Ajustes en memoria para el modo mock. */
@@ -877,6 +884,61 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  // --- Facturas -------------------------------------------------------------
+  //  La demo no factura: emitir, descontar y cobrar en partes son operaciones
+  //  con dinero de verdad, y una versión en memoria que se pierde al
+  //  reiniciar daría una falsa sensación de que quedó registrado.
+
+  async openInvoiceForAppointment() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async listInvoices() {
+    return [];
+  },
+
+  async getInvoice() {
+    return null;
+  },
+
+  async addInvoiceLine() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async updateInvoiceLine() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async removeInvoiceLine() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async registerInvoicePayment() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async voidInvoice() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async listPatientDocuments() {
+    // La demo no guarda binarios: la pantalla se ve vacía, que es el estado
+    // real de un paciente al que aún no se le ha escaneado nada.
+    return [];
+  },
+
+  async getPatientDocumentFile() {
+    return null;
+  },
+
+  async savePatientDocument() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async deletePatientDocument({ id }) {
+    return { ok: true, data: { id } };
+  },
+
   async listInstruments(params) {
     return instruments.filter(
       (item) => !params?.dentistId || item.dentistId === params.dentistId,
@@ -905,8 +967,22 @@ export const mockRepository: DataRepository = {
     return { ok: true, data: { id } };
   },
 
-  async listSchedule(dentistId) {
+  async listSchedule(dentistId, weekStart) {
+    // Misma regla que en Postgres: la excepción de esa semana manda; si no
+    // hay ninguna, rige el base.
+    if (weekStart) {
+      const excepcion = overrides.get(`${dentistId}|${weekStart}`);
+      if (excepcion && excepcion.length > 0) return excepcion;
+    }
     return schedules.get(dentistId) ?? [];
+  },
+
+  async setBaseSchedule({ dentistId, blocks }) {
+    const dentist = dentists.find((item) => item.id === dentistId);
+    if (!dentist) return { ok: false, reason: 'NOT_FOUND' };
+
+    schedules.set(dentistId, blocks);
+    return { ok: true, data: { id: dentistId } };
   },
 
   async listScheduleRequests(params) {
@@ -917,19 +993,25 @@ export const mockRepository: DataRepository = {
     });
   },
 
-  async createScheduleRequest({ dentistId, proposedBlocks, reason }) {
+  async createScheduleRequest({ dentistId, weekStart, proposedBlocks, reason }) {
     const dentist = dentists.find((item) => item.id === dentistId);
     if (!dentist) return { ok: false, reason: 'NOT_FOUND' };
 
-    // Misma regla que el índice único parcial de Postgres.
-    if (scheduleRequests.some((r) => r.dentistId === dentistId && r.status === 'PENDING')) {
-      return { ok: false, reason: 'DUPLICATE', field: 'dentistId' };
+    // Misma regla que el índice único parcial de Postgres: una pendiente por
+    // odontólogo Y SEMANA. Para semanas distintas sí puede tener varias.
+    if (
+      scheduleRequests.some(
+        (r) => r.dentistId === dentistId && r.weekStart === weekStart && r.status === 'PENDING',
+      )
+    ) {
+      return { ok: false, reason: 'DUPLICATE', field: 'weekStart' };
     }
 
     const request: ScheduleChangeRequest = {
       id: newId('sched'),
       dentistId,
       dentistName: dentist.fullName,
+      weekStart,
       proposedBlocks,
       currentBlocks: schedules.get(dentistId) ?? [],
       reason,
@@ -954,8 +1036,10 @@ export const mockRepository: DataRepository = {
     request.reviewNotes = reviewNotes;
     request.reviewedAt = new Date();
 
-    // Aprobar aplica el horario, igual que en Postgres.
-    if (status === 'APPROVED') schedules.set(request.dentistId, request.proposedBlocks);
+    // Aprobar guarda la EXCEPCIÓN de esa semana; el base no se toca.
+    if (status === 'APPROVED') {
+      overrides.set(`${request.dentistId}|${request.weekStart}`, request.proposedBlocks);
+    }
 
     return { ok: true, data: { id } };
   },
@@ -1054,7 +1138,6 @@ export const mockRepository: DataRepository = {
           source: full.source,
           notes: full.notes,
           patientName: full.patient.fullName,
-          patientPhone: full.patient.phoneE164,
           treatmentName: full.treatment.name,
           treatmentDurationMinutes: full.treatment.durationMinutes,
           roomName: full.room.name,

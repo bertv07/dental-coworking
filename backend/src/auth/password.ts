@@ -85,13 +85,34 @@ export async function fakeVerifyPassword(): Promise<false> {
 }
 
 /**
- * Política de contraseñas alineada con NIST SP 800-63B.
+ * Política de contraseñas.
  *
  * Nota deliberada: NO se exigen "1 mayúscula + 1 número + 1 símbolo". Esas
  * reglas empujan a la gente hacia `Password1!` y el NIST las desaconseja
  * desde 2017. La longitud es lo que de verdad aporta entropía.
+ *
+ * ---------------------------------------------------------------------
+ * POR QUÉ 6 Y NO 12
+ * ---------------------------------------------------------------------
+ * Lo pidió la clínica: el personal entra y sale del panel muchas veces al
+ * día, delante de pacientes, y una frase larga se convertía en un papel
+ * pegado al monitor — que es peor que una clave corta.
+ *
+ * Seis caracteres NO resisten un ataque por fuerza bruta si alguien se lleva
+ * la base de datos. Lo que sostiene esto es todo lo de alrededor:
+ *
+ *  · Argon2id con 19 MiB de memoria por intento: probar millones de
+ *    combinaciones sale caro incluso con la base robada.
+ *  · Bloqueo por intentos fallidos: el ataque en vivo contra el login se
+ *    corta a los pocos intentos (ver `registerLoginOutcome`).
+ *  · Límite por IP y correo en el login.
+ *  · Revocación de sesiones al cambiar la clave.
+ *
+ * Es un compromiso consciente entre seguridad y que la gente pueda trabajar,
+ * no un descuido. Si algún día el panel se expone a internet abierto sin el
+ * bloqueo por intentos, este número hay que volver a subirlo.
  */
 export const PASSWORD_POLICY = {
-  minLength: 12,
+  minLength: 6,
   maxLength: 128, // Cota superior: evita DoS hasheando entradas de 10 MB.
 } as const;

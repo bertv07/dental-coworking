@@ -63,15 +63,9 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // /dashboard es el panel FINANCIERO y su guard exige SUPER_ADMIN.
       { href: '/dashboard', label: 'Dashboard', Icon: IconDashboard, minimumRole: 'SUPER_ADMIN' },
       { href: '/agenda', label: 'Agenda', Icon: IconCalendar, minimumRole: 'DENTIST' },
-      // Dos vistas: el odontólogo propone las suyas, el administrador aprueba
-      // las de todos. Recepción queda fuera: no decide cuánto cobra nadie.
-      {
-        href: '/tarifas',
-        label: 'Tarifas',
-        Icon: IconTag,
-        minimumRole: 'DENTIST',
-        hiddenForRoles: ['ASSISTANT'],
-      },
+      // Tres vistas: el odontólogo propone las suyas, recepción consulta los
+      // precios para cotizar, el administrador aprueba.
+      { href: '/tarifas', label: 'Tarifas', Icon: IconTag, minimumRole: 'DENTIST' },
       // Quién trabaja cuándo SÍ es cosa de recepción, al revés que las
       // tarifas: por eso este no esconde nada.
       { href: '/horarios', label: 'Horarios', Icon: IconClock, minimumRole: 'DENTIST' },
@@ -83,6 +77,8 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
         minimumRole: 'DENTIST',
         hiddenForRoles: ['ASSISTANT'],
       },
+      // Facturación: el trabajo diario del mostrador, junto a la caja.
+      { href: '/facturas', label: 'Facturas', Icon: IconTag, minimumRole: 'ASSISTANT' },
       { href: '/caja', label: 'Caja', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
       { href: '/whatsapp', label: 'WhatsApp', Icon: IconChat, minimumRole: 'ASSISTANT' },
       { href: '/pacientes', label: 'Pacientes', Icon: IconUsers, minimumRole: 'ASSISTANT' },
@@ -91,7 +87,9 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
   {
     label: 'Administración',
     links: [
-      { href: '/odontologos', label: 'Odontólogos', Icon: IconStethoscope, minimumRole: 'SUPER_ADMIN' },
+      // Recepción ve el listado (quién hay y qué hace); el administrador, el
+      // CRUD con las comisiones.
+      { href: '/odontologos', label: 'Odontólogos', Icon: IconStethoscope, minimumRole: 'ASSISTANT' },
       { href: '/tratamientos', label: 'Precios', Icon: IconTag, minimumRole: 'SUPER_ADMIN' },
       { href: '/tasa-cambio', label: 'Tasa de cambio', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
       { href: '/consultorios', label: 'Consultorios', Icon: IconRoom, minimumRole: 'SUPER_ADMIN' },

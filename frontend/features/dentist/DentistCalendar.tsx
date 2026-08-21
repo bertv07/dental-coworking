@@ -3,10 +3,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useReducedMotion } from 'framer-motion';
-import type { AppointmentSource, AppointmentStatus, Treatment } from '@/backend/domain/types';
+import type { AppointmentSource, AppointmentStatus } from '@/backend/domain/types';
 import { Modal, motion } from '@/frontend/components/motion';
 import { Badge, Card, Notice, SourceBadge } from '@/frontend/components/ui/primitives';
-import { BookOwnAppointment } from '@/frontend/features/dentist/BookOwnAppointment';
+import {
+  BookOwnAppointment,
+  type OpcionTratamiento,
+} from '@/frontend/features/dentist/BookOwnAppointment';
 import {
   IconChevronLeft,
   IconChevronRight,
@@ -59,7 +62,6 @@ export interface CalendarEntry {
   /** Ya formateado en el servidor: "09:30 a. m. – 10:15 a. m.". */
   timeLabel: string;
   patientName: string;
-  patientPhone: string;
   treatmentName: string;
   durationMinutes: number;
   roomName: string;
@@ -98,11 +100,39 @@ interface DentistCalendarProps {
   /**
    * Catálogo para el formulario de agendar.
    *
-   * Llega ya recortado a lo que la odontóloga puede ver: nombre, código y
-   * duración. Los precios no se usan aquí — en toda su parte del panel no
-   * viaja ningún importe.
+   * Llega recortado en el SERVIDOR a código, nombre y duración. El precio no
+   * es que no se pinte: no se manda, así que no está en el payload ni se
+   * puede leer abriendo las herramientas del navegador.
    */
-  treatments: Treatment[];
+  treatments: OpcionTratamiento[];
+}
+
+/**
+ * Hora en formato de 12 horas con am/pm, que es como se dice y se lee aquí.
+ *
+ * El reloj de 24 h obliga a restar mentalmente («14:00… las dos»), y en una
+ * agenda que se consulta de un vistazo entre paciente y paciente eso es una
+ * fricción que no aporta nada.
+ *
+ * Se construye a mano en vez de con `Intl`: la rejilla necesita etiquetas
+ * cortas y alineadas («8 am», «12 m», «3 pm»), y `Intl` mete «a. m.» con
+ * espacios y puntos que descuadran la columna.
+ */
+function formatHour(minute: number): string {
+  const h = Math.floor(minute / 60) % 24;
+  if (h === 0) return '12 am';
+  // Mediodía se marca «12 m», como en el uso venezolano.
+  if (h === 12) return '12 m';
+  return h < 12 ? `${h} am` : `${h - 12} pm`;
+}
+
+/** Igual, pero con minutos: «8:30 am». */
+function formatMinute(minute: number): string {
+  const h = Math.floor(minute / 60) % 24;
+  const m = String(minute % 60).padStart(2, '0');
+  const sufijo = h < 12 ? 'am' : 'pm';
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${m} ${sufijo}`;
 }
 
 /** Alto de una hora en píxeles. Fija la escala de toda la rejilla. */
@@ -230,7 +260,7 @@ export function DentistCalendar({
     for (let minute = gridStartMinute; minute <= gridEndMinute; minute += 60) {
       marks.push({
         minute,
-        label: `${String(Math.floor(minute / 60)).padStart(2, '0')}:00`,
+        label: formatHour(minute),
       });
     }
     return marks;
@@ -423,8 +453,7 @@ export function DentistCalendar({
                           aria-label={`${entry.timeLabel} · ${entry.patientName} · ${entry.treatmentName} · ${view.label}`}
                         >
                           <span className="cal__event-time">
-                            {String(Math.floor(entry.startMinute / 60)).padStart(2, '0')}
-                            :{String(entry.startMinute % 60).padStart(2, '0')}
+                            {formatMinute(entry.startMinute)}
                           </span>
                           <span className="cal__event-patient">{entry.patientName}</span>
                           <span className="cal__event-meta">
@@ -497,15 +526,6 @@ export function DentistCalendar({
                 </dt>
                 <dd>
                   {selected.roomName} <span className="subtle">({selected.roomCode})</span>
-                </dd>
-              </div>
-              <div className="detail-list__row">
-                <dt>Teléfono</dt>
-                <dd>
-                  {/* Enlace `tel:` — desde el móvil se llama al paciente de un toque. */}
-                  <a className="mono" href={`tel:${selected.patientPhone}`}>
-                    {selected.patientPhone}
-                  </a>
                 </dd>
               </div>
             </dl>

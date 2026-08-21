@@ -126,6 +126,21 @@ enum ApprovalStatus {
   REJECTED /// Rechazada; el motivo queda en la solicitud
 }
 
+/// Estado de una factura interna de la clínica.
+/// Qué es el papel que se escaneó y se anexó al paciente.
+enum PatientDocumentKind {
+  EXPEDIENTE     /// Historia clínica rellenada por el paciente
+  CONSENTIMIENTO /// Consentimiento informado firmado
+  RADIOGRAFIA
+  OTRO
+}
+
+enum InvoiceStatus {
+  OPEN /// Emitida, con saldo pendiente
+  PAID /// Saldada
+  VOID /// Anulada; se conserva porque el papel se entregó
+}
+
 enum MessageAuthor {
   PATIENT
   AI_BOT
@@ -369,10 +384,11 @@ model Dentist {
 
   @@index([isActive, deletedAt])
   @@map("dentists")
-  /// Líneas de evolución firmadas por este odontólogo.
-  clinicalEntries ClinicalEntry[]
+  invoices        Invoice[]
   /// Solicitudes de cambio de horario que ha hecho.
   scheduleRequests ScheduleChangeRequest[]
+  /// Horarios excepcionales de semanas concretas.
+  scheduleOverrides DentistScheduleOverride[]
   /// Consultorios asignados en fijo a este odontólogo.
   assignedRooms Room[]
   /// Su instrumental. Suyo: se lo lleva si se va.
@@ -485,7 +501,8 @@ model Patient {
   consentGrantedAt   DateTime? @db.Timestamptz(3)
 
   /// Expediente clínico. Uno por paciente, creado al imprimirlo.
-  clinicalRecord ClinicalRecord?
+  invoices       Invoice[]
+  documents      PatientDocument[]
 
   appointments  Appointment[]
   conversations WhatsAppConversation[]
@@ -543,6 +560,7 @@ model Treatment {
   appointments     Appointment[]
   priceHistory     TreatmentPriceHistory[]
   dentistOverrides DentistTreatment[]
+  invoiceLines     InvoiceLine[]
 
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
@@ -659,7 +677,10 @@ model Appointment {
   /// ya creada en vez de duplicarla.
   idempotencyKey String? @unique
 
-  payment Payment?
+  /// Pagos de esta cita. Dejó de ser uno solo cuando se permitió pagar en
+  /// dos partes.
+  payments Payment[]
+  invoices Invoice[]
 
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
   updatedAt DateTime  @updatedAt @db.Timestamptz(3)
@@ -672,8 +693,6 @@ model Appointment {
   @@index([status, startsAt])    // "citas de hoy pendientes"
   @@index([startsAt])            // rango del dashboard financiero
   @@map("appointments")
-  /// Línea de evolución generada por esta cita, si se registró.
-  clinicalEntry ClinicalEntry?
   /// Procedimientos añadidos sobre la marcha durante la consulta.
   addons AppointmentAddon[]
 }
@@ -683,13 +702,148 @@ model Appointment {
 // ===========================================================================
 
 /// Pago de una cita. Aquí se congela el reparto 40/60.
+/// Factura interna de la clínica. NO es fiscal: no lleva numeración del
+/// SENIAT, ni RIF obligatorio, ni IVA desglosado. Es el comprobante que se le
+/// entrega al paciente y el documento que recepción edita cuando en la
+/// consulta se hace algo más de lo previsto.
+/// Un papel escaneado y anexado a la ficha del paciente.
+///
+/// El expediente lo rellena EL PACIENTE a mano y el consentimiento lo firma;
+/// recepción imprime el formulario en blanco, lo recibe firmado y lo escanea.
+/// No se transcribe nada: el original es el papel, y teclearlo otra vez sólo
+/// crearía una segunda versión capaz de contradecir a la que vale.
+model PatientDocument {
+  id        String  @id @default(cuid())
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  kind PatientDocumentKind @default(EXPEDIENTE)
+
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+
+  /// El archivo, en la base y no en disco.
+  ///
+  /// Se respalda con un `pg_dump`, no exige configurar volúmenes en el
+  /// despliegue y no deja huérfanos al borrar un paciente. Un escaneo son
+  /// unos cientos de KB: la base lo lleva de sobra.
+  content Bytes
+
+  /// Qué es, en palabras de recepción («Consentimiento de endodoncia»).
+  notes String?
+
+  uploadedByUserId String?
+  createdAt        DateTime  @default(now()) @db.Timestamptz(3)
+  /// Borrado lógico: un documento clínico que existió no se destruye.
+  deletedAt        DateTime? @db.Timestamptz(3)
+
+  @@index([patientId])
+  @@map("patient_documents")
+}
+
+model Invoice {
+  id String @id @default(cuid())
+
+  /// Correlativo interno legible («Factura Nº 1042»). Lo da una secuencia de
+  /// Postgres: dos recepcionistas cobrando a la vez no pueden repetirlo.
+  number Int @unique @default(dbgenerated("nextval('invoice_number_seq')"))
+
+  patientId String
+  patient   Patient @relation(fields: [patientId], references: [id])
+
+  /// A quién se le reparte. Va aquí y no sólo en la cita porque puede haber
+  /// venta sin cita (una radiografía suelta).
+  dentistId String?
+  dentist   Dentist? @relation(fields: [dentistId], references: [id])
+
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+
+  status InvoiceStatus @default(OPEN)
+
+  /// Totales en CENTAVOS DE USD. Se recalculan desde las líneas en cada
+  /// cambio; nunca se editan a mano.
+  subtotalCents Int @default(0)
+  discountCents Int @default(0)
+  totalCents    Int @default(0)
+
+  /// Reparto del total, calculado línea a línea y congelado al emitir.
+  /// Cada pago toma de aquí su parte proporcional.
+  clinicShareCents  Int @default(0)
+  dentistShareCents Int @default(0)
+
+  notes String?
+
+  issuedByUserId String?
+  issuedAt       DateTime  @default(now()) @db.Timestamptz(3)
+  /// Anulada: no se borra, se marca. Una factura entregada existió.
+  voidedAt       DateTime? @db.Timestamptz(3)
+  voidReason     String?
+
+  lines    InvoiceLine[]
+  payments Payment[]
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([patientId])
+  @@index([status, issuedAt])
+  @@index([appointmentId])
+  @@map("invoices")
+}
+
+/// Una línea de la factura. El precio y la descripción se CONGELAN al
+/// añadirla: si mañana cambia el catálogo, el papel que se entregó no cambia.
+model InvoiceLine {
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  treatmentId String?
+  treatment   Treatment? @relation(fields: [treatmentId], references: [id])
+
+  description    String
+  quantity       Int @default(1)
+  unitPriceCents Int
+
+  /// Descuento de ESTA línea, marcado a mano por recepción.
+  ///
+  /// Cubre el «si haces esto, esto va gratis»: no es gratis de verdad —lo
+  /// otro sube— así que se guarda el precio real Y lo que se rebajó. Poner la
+  /// línea a $0 perdería para siempre cuánto se regaló.
+  discountCents  Int @default(0)
+  /// Por qué se rebajó. Sin esto, a fin de mes nadie sabe qué se regaló.
+  discountReason String?
+
+  /// Comisión de la clínica en esta línea, copiada al añadirla. Permite que
+  /// una radiografía (100 % clínica) conviva con una limpieza (40/60).
+  commissionPercent Int
+
+  sortOrder Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
 model Payment {
   id String @id @default(cuid())
 
-  /// 1-a-1 con la cita: un pago por cita. Para planes de tratamiento en
-  /// cuotas, la evolución natural es un modelo `Installment` que apunte aquí.
-  appointmentId String      @unique
-  appointment   Appointment @relation(fields: [appointmentId], references: [id])
+  /// Cita de origen. YA NO es 1-a-1: una factura puede pagarse en dos partes,
+  /// así que la misma cita admite varios pagos. El límite ya no es un índice
+  /// único sino la regla «la suma no pasa del total de la factura», que se
+  /// comprueba dentro de la transacción de cobro.
+  appointmentId String?
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+
+  /// Factura contra la que entró este dinero.
+  ///
+  /// Nullable sólo por los cobros anteriores a las facturas; la migración los
+  /// convirtió todos, así que en la práctica siempre viene.
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id])
 
   /// Total cobrado al paciente, en CENTAVOS DE DÓLAR.
   amountCents Int
@@ -745,6 +899,8 @@ model Payment {
   @@index([status, paidAt])
   @@index([paidAt]) // agregaciones del dashboard financiero
   @@index([payoutId])
+  @@index([invoiceId])
+  @@index([appointmentId])
   @@map("payments")
 }
 
@@ -1058,115 +1214,7 @@ model PaymentMethodOption {
   @@map("payment_method_options")
 }
 
-/// ===========================================================================
-///  EXPEDIENTE CLÍNICO
-/// ===========================================================================
-///  Un expediente por paciente. Recoge lo que NO cambia entre visitas:
-///  antecedentes médicos, alergias, odontograma y plan de tratamiento.
-///
-///  EL FLUJO QUE ESTO MODELA
-///  1. El sistema imprime un expediente EN BLANCO.
-///  2. El odontólogo lo rellena a mano durante la consulta.
-///  3. La asistente lo pasa al sistema.
-///  4. El papel se archiva; el sistema conserva la copia consultable.
-///
-///  Por eso el expediente puede existir vacío: se crea al imprimirlo, antes
-///  de que nadie lo haya llenado. Un modelo que exigiera todos los campos al
-///  crearlo haría imposible el paso 1.
-model ClinicalRecord {
-  id        String  @id @default(cuid())
-  patientId String  @unique
-  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
 
-  // --- Antecedentes médicos ------------------------------------------------
-  /// Banderas de riesgo. Son las que cambian el tratamiento o lo contraindican,
-  /// y por eso van como columnas y no dentro de un texto libre: tienen que
-  /// poder consultarse y avisar antes de un procedimiento.
-  hypertension   Boolean @default(false)
-  diabetes       Boolean @default(false)
-  heartDisease   Boolean @default(false)
-  anticoagulants Boolean @default(false)
-  pregnant       Boolean @default(false)
-
-  /// Alergias y medicación habitual. Texto libre: la lista real es infinita.
-  allergies          String?
-  currentMedications String?
-  /// Cualquier otro antecedente relevante.
-  medicalNotes       String?
-
-  /// Motivo de consulta de la primera visita.
-  chiefComplaint String?
-
-  /**
-   * Odontograma: el estado de cada pieza dental.
-   *
-   * Se guarda como JSON con notación FDI ("18", "17"… "48"), no como 32
-   * columnas ni como 32 filas en otra tabla.
-   *
-   * Por qué JSON: el odontograma se lee y se escribe SIEMPRE entero —nadie
-   * consulta "el estado de la pieza 24 de todos los pacientes"—, y una tabla
-   * aparte convertiría cada apertura del expediente en 32 filas que unir.
-   * Además la notación cambia entre adultos y niños (dentición temporal
-   * 55-85), y un esquema rígido de 32 columnas no admitiría eso.
-   *
-   * Forma: { "18": { "estado": "CARIES", "notas": "distal" }, ... }
-   */
-  odontogram Json?
-
-  /// Plan de tratamiento acordado.
-  treatmentPlan String?
-
-  /// Quién lo pasó al sistema y cuándo. El papel lo firma el odontólogo; esto
-  /// registra quién lo transcribió, que es una responsabilidad distinta.
-  createdByUserId String?
-  updatedByUserId String?
-
-  entries ClinicalEntry[]
-
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt DateTime? @db.Timestamptz(3)
-
-  @@map("clinical_records")
-}
-
-/// Una línea de la hoja de evolución: qué se le hizo al paciente y qué día.
-///
-/// Separada del expediente porque crece sin límite: un paciente de ortodoncia
-/// acumula decenas de entradas sobre el mismo expediente.
-model ClinicalEntry {
-  id       String         @id @default(cuid())
-  recordId String
-  record   ClinicalRecord @relation(fields: [recordId], references: [id], onDelete: Cascade)
-
-  /// Fecha de la atención — la del PAPEL, que puede no ser la de hoy: la
-  /// asistente transcribe expedientes con días de retraso.
-  performedOn DateTime @db.Timestamptz(3)
-
-  /// Qué odontólogo atendió. Opcional: un expediente antiguo transcrito puede
-  /// no tener ficha en el sistema.
-  dentistId String?
-  dentist   Dentist? @relation(fields: [dentistId], references: [id], onDelete: SetNull)
-
-  /// Cita asociada, si la hubo. Enlaza la historia clínica con la agenda.
-  appointmentId String?      @unique
-  appointment   Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
-
-  /// Lo que se hizo, tal cual lo escribió el odontólogo.
-  procedure String
-  /// Piezas tratadas, notación FDI: ["16", "17"].
-  teeth     String[]
-  notes     String?
-
-  createdByUserId String?
-
-  createdAt DateTime @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime @updatedAt @db.Timestamptz(3)
-
-  @@index([recordId, performedOn])
-  @@index([dentistId, performedOn])
-  @@map("clinical_entries")
-}
 
 /// ===========================================================================
 ///  SOLICITUD DE CAMBIO DE HORARIO
@@ -1186,6 +1234,15 @@ model ScheduleChangeRequest {
   id        String  @id @default(cuid())
   dentistId String
   dentist   Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+
+  /**
+   * Lunes de la SEMANA a la que aplica el cambio.
+   *
+   * El cambio es de esa semana y sólo de esa: pasada, se vuelve solo al
+   * horario base. Antes se sustituía el base, así que un ajuste puntual
+   * quedaba para siempre y había que acordarse de deshacerlo.
+   */
+  weekStart DateTime @db.Date
 
   /**
    * Horario propuesto: un array de bloques
@@ -1210,9 +1267,43 @@ model ScheduleChangeRequest {
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @db.Timestamptz(3)
 
+  /// Bloques que se aplicaron al aprobarla.
+  overrides DentistScheduleOverride[]
+
   @@index([status, createdAt])
   @@index([dentistId, status])
   @@map("schedule_change_requests")
+}
+
+/// Horario excepcional de UNA semana concreta.
+///
+/// Al aprobar una solicitud, sus bloques se guardan aquí y el horario base
+/// (`DentistSchedule`) queda intacto. Al consultar una semana: si hay filas
+/// para esa semana mandan ellas; si no hay ninguna, rige el base. La ausencia
+/// de filas ES la respuesta, así que no hace falta marcar las semanas
+/// normales.
+model DentistScheduleOverride {
+  id        String  @id @default(cuid())
+  dentistId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+
+  /// Lunes de la semana a la que aplica.
+  weekStart DateTime @db.Date
+
+  /// 0 = domingo … 6 = sábado, igual que en el horario base.
+  weekday     Int
+  startMinute Int
+  endMinute   Int
+
+  /// De qué solicitud salió, para rastrear quién lo pidió y quién lo aceptó.
+  requestId String?
+  request   ScheduleChangeRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([dentistId, weekStart, weekday, startMinute])
+  @@index([dentistId, weekStart])
+  @@map("dentist_schedule_overrides")
 }
 
 /// ===========================================================================

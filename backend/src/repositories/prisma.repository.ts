@@ -14,6 +14,11 @@ import type {
 } from '@/backend/domain/types';
 import { percentChange, splitCents } from '@/backend/domain/money';
 import { calcularComision, calcularPrecio, repartirCobro } from '@/backend/domain/pricing';
+import {
+  recalcularFactura,
+  repartirPago,
+  totalLinea,
+} from '@/backend/repositories/invoice-helpers';
 import { MINUTES_PER_DAY, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
 
 /**
@@ -96,6 +101,114 @@ function toAppointmentWithRelations<
       commissionPercent: addon.commissionPercent,
       notes: addon.notes,
       createdAt: addon.createdAt,
+    })),
+  };
+}
+
+/** Todo lo que necesita una factura para pintarse: líneas, pagos y nombres. */
+const INVOICE_RELATIONS = {
+  patient: { select: { fullName: true } },
+  dentist: { select: { fullName: true } },
+  lines: {
+    select: {
+      id: true,
+      treatmentId: true,
+      description: true,
+      quantity: true,
+      unitPriceCents: true,
+      discountCents: true,
+      discountReason: true,
+      commissionPercent: true,
+    },
+    orderBy: { sortOrder: 'asc' },
+  },
+  payments: {
+    where: { status: 'PAID' },
+    select: {
+      id: true,
+      amountCents: true,
+      amountBs: true,
+      exchangeRate: true,
+      method: true,
+      methodLabel: true,
+      paidAt: true,
+    },
+    orderBy: { paidAt: 'asc' },
+  },
+} as const;
+
+/**
+ * Aplana una factura al contrato del dominio.
+ *
+ * `paidCents` y `balanceCents` se calculan aquí y no se guardan: derivarlos de
+ * los pagos hace imposible que el saldo se quede desfasado respecto al dinero
+ * que de verdad entró.
+ */
+function toInvoice(row: {
+  id: string;
+  number: number;
+  patientId: string;
+  dentistId: string | null;
+  appointmentId: string | null;
+  status: 'OPEN' | 'PAID' | 'VOID';
+  subtotalCents: number;
+  discountCents: number;
+  totalCents: number;
+  clinicShareCents: number;
+  dentistShareCents: number;
+  notes: string | null;
+  issuedAt: Date;
+  patient: { fullName: string };
+  dentist: { fullName: string } | null;
+  lines: Array<{
+    id: string;
+    treatmentId: string | null;
+    description: string;
+    quantity: number;
+    unitPriceCents: number;
+    discountCents: number;
+    discountReason: string | null;
+    commissionPercent: number;
+  }>;
+  payments: Array<{
+    id: string;
+    amountCents: number;
+    amountBs: Prisma.Decimal;
+    exchangeRate: Prisma.Decimal;
+    method: 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE';
+    methodLabel: string | null;
+    paidAt: Date | null;
+  }>;
+}) {
+  const paidCents = row.payments.reduce((suma, p) => suma + p.amountCents, 0);
+
+  return {
+    id: row.id,
+    number: row.number,
+    patientId: row.patientId,
+    patientName: row.patient.fullName,
+    dentistId: row.dentistId,
+    dentistName: row.dentist?.fullName ?? null,
+    appointmentId: row.appointmentId,
+    status: row.status,
+    subtotalCents: row.subtotalCents,
+    discountCents: row.discountCents,
+    totalCents: row.totalCents,
+    clinicShareCents: row.clinicShareCents,
+    dentistShareCents: row.dentistShareCents,
+    paidCents,
+    balanceCents: row.totalCents - paidCents,
+    notes: row.notes,
+    issuedAt: row.issuedAt,
+    lines: row.lines.map((l) => ({ ...l, totalCents: totalLinea(l) })),
+    payments: row.payments.map((p) => ({
+      id: p.id,
+      amountCents: p.amountCents,
+      amountBs: Number(p.amountBs),
+      exchangeRate: Number(p.exchangeRate),
+      method: p.method,
+      methodLabel: p.methodLabel,
+      paidAt: p.paidAt!,
     })),
   };
 }
@@ -815,7 +928,8 @@ export const prismaRepository: DataRepository = {
           include: {
             dentist: { select: { id: true, clinicCommissionPercent: true } },
             treatment: { select: { id: true, clinicKeepsAll: true } },
-            payment: { select: { id: true } },
+            // Lista, no uno: una factura puede pagarse en dos partes.
+            payments: { where: { status: 'PAID' }, select: { amountCents: true } },
             // Los procedimientos añadidos durante la consulta: cada uno con su
             // propio precio y su propia comisión.
             addons: { select: { priceCents: true, commissionPercent: true } },
@@ -824,9 +938,18 @@ export const prismaRepository: DataRepository = {
 
         if (!appointment) return { ok: false as const, reason: 'NOT_FOUND' as const };
 
-        // 2. Una cita, un cobro. Sin esto, dos clics seguidos en "Cobrar"
-        //    duplicarían el ingreso y descuadrarían las comisiones.
-        if (appointment.payment) {
+        /*
+         * 2. No se cobra dos veces lo mismo.
+         *
+         * Antes la regla era «un pago por cita», impuesta por un índice único.
+         * Con el pago en dos partes eso ya no vale, así que la regla pasa a
+         * ser: si la cita YA tiene algún cobro registrado, el segundo hay que
+         * hacerlo desde su factura, que es la que lleva la cuenta del saldo.
+         *
+         * Sigue protegiendo del doble clic en «Cobrar», que era el motivo
+         * original del candado.
+         */
+        if (appointment.payments.length > 0) {
           return { ok: false as const, reason: 'DUPLICATE' as const, field: 'appointmentId' };
         }
 
@@ -988,9 +1111,12 @@ export const prismaRepository: DataRepository = {
       byMethod: [...byMethod.entries()].map(([method, value]) => ({ method, ...value })),
       payments: payments.map((payment) => ({
         id: payment.id,
-        patientName: payment.appointment.patient.fullName,
-        dentistName: payment.appointment.dentist.fullName,
-        treatmentName: payment.appointment.treatment.name,
+        // La cita es opcional: puede haber venta de mostrador sin cita. Se
+        // pone un guion en vez de romper el cierre de caja por un cobro
+        // suelto, que es justo cuando más falta hace que la pantalla abra.
+        patientName: payment.appointment?.patient.fullName ?? '—',
+        dentistName: payment.appointment?.dentist.fullName ?? '—',
+        treatmentName: payment.appointment?.treatment.name ?? 'Venta directa',
         amountCents: payment.amountCents,
         amountBs: Number(payment.amountBs),
         exchangeRate: Number(payment.exchangeRate),
@@ -1007,7 +1133,16 @@ export const prismaRepository: DataRepository = {
       where: { appointmentId: { in: appointmentIds }, status: 'PAID' },
       select: { appointmentId: true },
     });
-    return rows.map((row) => row.appointmentId);
+
+    /*
+     * `appointmentId` pasó a ser opcional al desligar el pago de la cita: un
+     * cobro de mostrador no tiene cita. Aquí se piden por id, así que no
+     * pueden venir nulos, pero se filtran igual para que el tipo lo diga en
+     * vez de forzarlo con un `!`.
+     */
+    return rows
+      .map((row) => row.appointmentId)
+      .filter((id): id is string => id !== null);
   },
 
   async getCashClosing(businessDate) {
@@ -1143,10 +1278,10 @@ export const prismaRepository: DataRepository = {
         deletedAt: null,
         startsAt: { gte: dayStart, lt: dayEnd },
         status: { in: ['CONFIRMED', 'IN_PROGRESS', 'COMPLETED'] },
-        // La relación es 1-a-1 (`payment`, no `payments`). `isNot` cubre las
-        // dos formas de "sin cobrar": que no haya pago, o que lo haya pero
-        // esté devuelto o fallido — en ambos casos el dinero no ha entrado.
-        NOT: { payment: { is: { status: 'PAID' } } },
+        // Ninguno de sus pagos está cobrado. `none` cubre las dos formas de
+        // "sin cobrar": que no haya pago, o que lo haya pero esté devuelto o
+        // fallido — en ambos casos el dinero no ha entrado.
+        payments: { none: { status: 'PAID' } },
       },
       include: APPOINTMENT_RELATIONS,
       orderBy: { startsAt: 'asc' },
@@ -1350,7 +1485,7 @@ export const prismaRepository: DataRepository = {
             id: true,
             dentistId: true,
             dentist: { select: { clinicCommissionPercent: true } },
-            payment: { select: { id: true } },
+            payments: { where: { status: 'PAID' }, select: { id: true } },
           },
         });
 
@@ -1364,7 +1499,7 @@ export const prismaRepository: DataRepository = {
          * coincide con la suma de sus conceptos, y el descuadre no saldría
          * hasta el arqueo.
          */
-        if (appointment.payment) {
+        if (appointment.payments.length > 0) {
           return { ok: false as const, reason: 'DUPLICATE' as const, field: 'appointmentId' };
         }
 
@@ -1752,6 +1887,527 @@ export const prismaRepository: DataRepository = {
     }
   },
 
+  // --- Facturas -------------------------------------------------------------
+
+  async openInvoiceForAppointment({ appointmentId, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        // Si ya existe, se devuelve. Regenerarla borraría los descuentos que
+        // recepción ya hubiera marcado.
+        const existente = await tx.invoice.findFirst({
+          where: { appointmentId, status: { not: 'VOID' } },
+          select: { id: true },
+        });
+        if (existente) return { ok: true as const, data: existente };
+
+        const cita = await tx.appointment.findUnique({
+          where: { id: appointmentId },
+          select: {
+            id: true,
+            patientId: true,
+            dentistId: true,
+            agreedPriceCents: true,
+            dentist: { select: { clinicCommissionPercent: true } },
+            treatment: { select: { id: true, name: true, clinicKeepsAll: true } },
+            addons: {
+              select: {
+                treatmentId: true,
+                priceCents: true,
+                commissionPercent: true,
+                treatment: { select: { name: true } },
+              },
+            },
+          },
+        });
+
+        if (!cita) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+        const factura = await tx.invoice.create({
+          data: {
+            patientId: cita.patientId,
+            dentistId: cita.dentistId,
+            appointmentId: cita.id,
+            issuedByUserId: userId,
+          },
+          select: { id: true },
+        });
+
+        /*
+         * Las líneas salen de la cita: el tratamiento por el que se agendó,
+         * más lo que se añadió en consulta. Cada una con SU comisión, que es
+         * lo que permite que una radiografía (100 % clínica) conviva con una
+         * limpieza (40/60) en el mismo papel.
+         */
+        await tx.invoiceLine.create({
+          data: {
+            invoiceId: factura.id,
+            treatmentId: cita.treatment.id,
+            description: cita.treatment.name,
+            quantity: 1,
+            unitPriceCents: cita.agreedPriceCents,
+            commissionPercent: cita.treatment.clinicKeepsAll
+              ? 100
+              : cita.dentist.clinicCommissionPercent,
+            sortOrder: 0,
+          },
+        });
+
+        for (const [i, addon] of cita.addons.entries()) {
+          await tx.invoiceLine.create({
+            data: {
+              invoiceId: factura.id,
+              treatmentId: addon.treatmentId,
+              description: addon.treatment.name,
+              quantity: 1,
+              unitPriceCents: addon.priceCents,
+              commissionPercent: addon.commissionPercent,
+              sortOrder: i + 1,
+            },
+          });
+        }
+
+        await recalcularFactura(tx, factura.id);
+        return { ok: true as const, data: factura };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async listInvoices(params) {
+    const rows = await prisma.invoice.findMany({
+      where: {
+        ...(params?.status ? { status: params.status } : {}),
+        ...(params?.patientId ? { patientId: params.patientId } : {}),
+      },
+      include: INVOICE_RELATIONS,
+      // Las abiertas primero: son las que piden una acción.
+      orderBy: [{ status: 'asc' }, { issuedAt: 'desc' }],
+      take: params?.limit ?? 100,
+    });
+    return rows.map(toInvoice);
+  },
+
+  async getInvoice(id) {
+    const row = await prisma.invoice.findUnique({ where: { id }, include: INVOICE_RELATIONS });
+    return row ? toInvoice(row) : null;
+  },
+
+  async addInvoiceLine({ invoiceId, treatmentId, description, quantity, unitPriceCents, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const factura = await tx.invoice.findUnique({
+          where: { id: invoiceId },
+          select: {
+            id: true,
+            status: true,
+            dentistId: true,
+            dentist: { select: { clinicCommissionPercent: true } },
+            _count: { select: { lines: true } },
+          },
+        });
+
+        if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        // Una factura anulada no se edita: el papel que se entregó ya no vale.
+        if (factura.status === 'VOID') {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
+        }
+
+        let descripcion = description ?? '';
+        let precio = unitPriceCents ?? 0;
+        let comision = factura.dentist?.clinicCommissionPercent ?? 40;
+
+        if (treatmentId) {
+          const tratamiento = await tx.treatment.findUnique({
+            where: { id: treatmentId },
+            select: {
+              name: true,
+              basePriceCents: true,
+              clinicKeepsAll: true,
+              isPriceVariable: true,
+            },
+          });
+          if (!tratamiento) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+          // Acuerdo aprobado con ese odontólogo, si lo hay.
+          const acuerdo = factura.dentistId
+            ? await tx.dentistTreatment.findUnique({
+                where: {
+                  dentistId_treatmentId: { dentistId: factura.dentistId, treatmentId },
+                },
+                select: { customPriceCents: true, customCommissionPercent: true, status: true },
+              })
+            : null;
+          const aprobado = acuerdo?.status === 'APPROVED' ? acuerdo : null;
+
+          descripcion = tratamiento.name;
+          // El precio del formulario sólo pisa el importe, nunca el reparto.
+          precio = unitPriceCents ?? calcularPrecio(tratamiento, aprobado).priceCents;
+          comision = calcularComision({
+            tratamiento,
+            acuerdo: aprobado,
+            comisionOdontologo: factura.dentist?.clinicCommissionPercent ?? null,
+            comisionPorDefecto: 40,
+          }).clinicPercent;
+        }
+
+        if (!descripcion.trim()) {
+          return { ok: false as const, reason: 'NOT_FOUND' as const };
+        }
+
+        const linea = await tx.invoiceLine.create({
+          data: {
+            invoiceId,
+            treatmentId,
+            description: descripcion,
+            quantity,
+            unitPriceCents: precio,
+            commissionPercent: comision,
+            sortOrder: factura._count.lines,
+          },
+          select: { id: true },
+        });
+
+        await recalcularFactura(tx, invoiceId);
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'invoice.line_added',
+            entityType: 'Invoice',
+            entityId: invoiceId,
+            after: { description: descripcion, unitPriceCents: precio, quantity },
+          },
+        });
+
+        return { ok: true as const, data: linea };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async updateInvoiceLine({ id, quantity, unitPriceCents, discountCents, discountReason, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const linea = await tx.invoiceLine.findUnique({
+          where: { id },
+          select: { invoiceId: true, invoice: { select: { status: true } } },
+        });
+
+        if (!linea) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        if (linea.invoice.status === 'VOID') {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
+        }
+
+        await tx.invoiceLine.update({
+          where: { id },
+          data: { quantity, unitPriceCents, discountCents, discountReason },
+        });
+
+        await recalcularFactura(tx, linea.invoiceId);
+
+        // El descuento deja rastro: a fin de mes hay que poder decir qué se
+        // regaló y a cambio de qué.
+        if (discountCents > 0) {
+          await tx.auditLog.create({
+            data: {
+              userId,
+              action: 'invoice.discount_applied',
+              entityType: 'Invoice',
+              entityId: linea.invoiceId,
+              after: { lineId: id, discountCents, discountReason },
+            },
+          });
+        }
+
+        return { ok: true as const, data: { id } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async removeInvoiceLine({ id, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const linea = await tx.invoiceLine.findUnique({
+          where: { id },
+          select: { invoiceId: true, description: true, invoice: { select: { status: true } } },
+        });
+
+        if (!linea) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        if (linea.invoice.status === 'VOID') {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
+        }
+
+        await tx.invoiceLine.delete({ where: { id } });
+        await recalcularFactura(tx, linea.invoiceId);
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'invoice.line_removed',
+            entityType: 'Invoice',
+            entityId: linea.invoiceId,
+            before: { description: linea.description },
+          },
+        });
+
+        return { ok: true as const, data: { id } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async registerInvoicePayment({
+    invoiceId,
+    amountCents,
+    method,
+    methodLabel,
+    externalReference,
+    exchangeRate,
+    exchangeRateSource,
+    userId,
+  }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const factura = await tx.invoice.findUnique({
+          where: { id: invoiceId },
+          select: {
+            id: true,
+            appointmentId: true,
+            status: true,
+            totalCents: true,
+            clinicShareCents: true,
+            payments: {
+              where: { status: 'PAID' },
+              select: { amountCents: true, clinicShareCents: true },
+            },
+          },
+        });
+
+        if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        if (factura.status === 'VOID') {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
+        }
+
+        const yaCobrado = factura.payments.reduce((s, p) => s + p.amountCents, 0);
+        const saldo = factura.totalCents - yaCobrado;
+
+        /*
+         * No se cobra de más. Sin esto, dos clics seguidos en «Cobrar»
+         * meterían el importe dos veces y la caja del día cuadraría con un
+         * dinero que nadie entregó.
+         */
+        if (saldo <= 0) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'invoiceId' };
+        }
+        if (amountCents > saldo) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'amountCents' };
+        }
+
+        const reparto = repartirPago({
+          amountCents,
+          totalCents: factura.totalCents,
+          clinicShareCents: factura.clinicShareCents,
+          yaCobradoCents: yaCobrado,
+          yaAsignadoClinicaCents: factura.payments.reduce((s, p) => s + p.clinicShareCents, 0),
+        });
+
+        const amountBs = Math.round((amountCents / 100) * exchangeRate * 100) / 100;
+
+        const pago = await tx.payment.create({
+          data: {
+            invoiceId,
+            // Se conserva el vínculo con la cita: los informes que agrupan
+            // por odontólogo siguen pasando por ahí.
+            appointmentId: factura.appointmentId,
+            amountCents,
+            exchangeRate,
+            amountBs,
+            exchangeRateSource,
+            commissionPercentApplied:
+              factura.totalCents === 0
+                ? 0
+                : Math.round((factura.clinicShareCents / factura.totalCents) * 100),
+            clinicShareCents: reparto.clinicShareCents,
+            dentistShareCents: reparto.dentistShareCents,
+            method,
+            methodLabel,
+            status: 'PAID',
+            paidAt: new Date(),
+            externalReference,
+          },
+          select: { id: true },
+        });
+
+        await recalcularFactura(tx, invoiceId);
+
+        // Cobrada del todo implica cita atendida.
+        const nuevoSaldo = saldo - amountCents;
+        if (nuevoSaldo === 0 && factura.appointmentId) {
+          await tx.appointment.update({
+            where: { id: factura.appointmentId },
+            data: { status: 'COMPLETED' },
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'invoice.payment_registered',
+            entityType: 'Invoice',
+            entityId: invoiceId,
+            after: {
+              paymentId: pago.id,
+              amountCents,
+              amountBs,
+              exchangeRate,
+              saldoRestante: nuevoSaldo,
+              // Un pago parcial hay que poder distinguirlo después de uno
+              // completo que se quedó corto por error.
+              esParcial: nuevoSaldo > 0,
+            },
+          },
+        });
+
+        return { ok: true as const, data: { id: pago.id, balanceCents: nuevoSaldo } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async voidInvoice({ id, reason, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const factura = await tx.invoice.findUnique({
+          where: { id },
+          select: { id: true, payments: { where: { status: 'PAID' }, select: { id: true } } },
+        });
+
+        if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+        /*
+         * Una factura con dinero cobrado NO se anula desde aquí.
+         *
+         * Anularla dejaría cobros huérfanos apuntando a un documento sin
+         * validez, y el arqueo del día seguiría contando ese dinero. Para
+         * deshacer un cobro hace falta una devolución, que es otra operación
+         * y deja su propio rastro.
+         */
+        if (factura.payments.length > 0) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'payments' };
+        }
+
+        await tx.invoice.update({
+          where: { id },
+          data: { status: 'VOID', voidedAt: new Date(), voidReason: reason },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'invoice.voided',
+            entityType: 'Invoice',
+            entityId: id,
+            after: { reason },
+          },
+        });
+
+        return { ok: true as const, data: { id } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  // --- Documentos escaneados del paciente ----------------------------------
+
+  async listPatientDocuments(patientId) {
+    return prisma.patientDocument.findMany({
+      where: { patientId, deletedAt: null },
+      // `content` NO se selecciona: un paciente con diez escaneos mandaría
+      // varios MB al navegador sólo por abrir su ficha.
+      select: {
+        id: true,
+        patientId: true,
+        kind: true,
+        fileName: true,
+        mimeType: true,
+        sizeBytes: true,
+        notes: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  },
+
+  async getPatientDocumentFile(id) {
+    const doc = await prisma.patientDocument.findFirst({
+      where: { id, deletedAt: null },
+      select: { fileName: true, mimeType: true, content: true },
+    });
+    return doc;
+  },
+
+  async savePatientDocument({ patientId, kind, fileName, mimeType, content, notes, userId }) {
+    try {
+      const doc = await prisma.patientDocument.create({
+        data: {
+          patientId,
+          kind,
+          fileName,
+          mimeType,
+          sizeBytes: content.byteLength,
+          content: Buffer.from(content),
+          notes,
+          uploadedByUserId: userId,
+        },
+        select: { id: true },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'patient_document.uploaded',
+          entityType: 'PatientDocument',
+          entityId: doc.id,
+          // Ni rastro del contenido: es material clínico y el log se copia.
+          after: { patientId, kind, fileName, sizeBytes: content.byteLength },
+        },
+      });
+
+      return { ok: true, data: doc };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deletePatientDocument({ id, userId }) {
+    try {
+      await prisma.patientDocument.update({
+        where: { id },
+        data: { deletedAt: new Date() },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'patient_document.deleted',
+          entityType: 'PatientDocument',
+          entityId: id,
+        },
+      });
+
+      return { ok: true, data: { id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
   // --- Instrumental --------------------------------------------------------
 
   async listInstruments(params) {
@@ -1846,12 +2502,65 @@ export const prismaRepository: DataRepository = {
 
   // --- Horarios ------------------------------------------------------------
 
-  async listSchedule(dentistId) {
+  async listSchedule(dentistId, weekStart) {
+    /*
+     * Si se pregunta por una SEMANA, primero se mira si tiene excepción.
+     *
+     * Que no haya filas ES la respuesta —esa semana es normal— así que no
+     * hace falta ninguna marca que decir «aquí no hay cambio». Y como la
+     * excepción vive en su propia tabla, pasada la semana se vuelve solo al
+     * base sin que nadie deshaga nada.
+     */
+    if (weekStart) {
+      const excepcion = await prisma.dentistScheduleOverride.findMany({
+        where: { dentistId, weekStart: new Date(`${weekStart}T00:00:00Z`) },
+        select: { weekday: true, startMinute: true, endMinute: true },
+        orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }],
+      });
+
+      if (excepcion.length > 0) return excepcion;
+    }
+
     return prisma.dentistSchedule.findMany({
       where: { dentistId, isActive: true },
       select: { weekday: true, startMinute: true, endMinute: true },
       orderBy: [{ weekday: 'asc' }, { startMinute: 'asc' }],
     });
+  },
+
+  async setBaseSchedule({ dentistId, blocks, userId }) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        // Se reemplaza la semana entera: es lo que se está editando, y un
+        // merge dejaría bloques viejos que nadie quiso conservar.
+        await tx.dentistSchedule.deleteMany({ where: { dentistId } });
+
+        if (blocks.length > 0) {
+          await tx.dentistSchedule.createMany({
+            data: blocks.map((block) => ({
+              dentistId,
+              weekday: block.weekday,
+              startMinute: block.startMinute,
+              endMinute: block.endMinute,
+            })),
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'schedule.base_set',
+            entityType: 'Dentist',
+            entityId: dentistId,
+            after: { blocks: blocks.length },
+          },
+        });
+      });
+
+      return { ok: true, data: { id: dentistId } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
   },
 
   async listScheduleRequests(params) {
@@ -1863,6 +2572,7 @@ export const prismaRepository: DataRepository = {
       select: {
         id: true,
         dentistId: true,
+        weekStart: true,
         proposedBlocks: true,
         reason: true,
         status: true,
@@ -1889,7 +2599,11 @@ export const prismaRepository: DataRepository = {
       id: row.id,
       dentistId: row.dentistId,
       dentistName: row.dentist.fullName,
+      weekStart: row.weekStart.toISOString().slice(0, 10),
       proposedBlocks: row.proposedBlocks as unknown as ScheduleBlock[],
+      // El horario que regiría esa semana sin este cambio. Hoy es el base;
+      // si algún día se permite encadenar excepciones, este es el punto a
+      // cambiar.
       currentBlocks: row.dentist.schedules,
       reason: row.reason,
       status: row.status,
@@ -1899,11 +2613,12 @@ export const prismaRepository: DataRepository = {
     }));
   },
 
-  async createScheduleRequest({ dentistId, proposedBlocks, reason, userId }) {
+  async createScheduleRequest({ dentistId, weekStart, proposedBlocks, reason, userId }) {
     try {
       const created = await prisma.scheduleChangeRequest.create({
         data: {
           dentistId,
+          weekStart: new Date(`${weekStart}T00:00:00Z`),
           proposedBlocks: proposedBlocks as unknown as Prisma.InputJsonValue,
           reason,
           requestedByUserId: userId,
@@ -1927,7 +2642,13 @@ export const prismaRepository: DataRepository = {
       return await prisma.$transaction(async (tx) => {
         const request = await tx.scheduleChangeRequest.findUnique({
           where: { id },
-          select: { id: true, dentistId: true, proposedBlocks: true, status: true },
+          select: {
+            id: true,
+            dentistId: true,
+            weekStart: true,
+            proposedBlocks: true,
+            status: true,
+          },
         });
 
         if (!request) return { ok: false as const, reason: 'NOT_FOUND' as const };
@@ -1956,15 +2677,30 @@ export const prismaRepository: DataRepository = {
         if (status === 'APPROVED') {
           const blocks = request.proposedBlocks as unknown as ScheduleBlock[];
 
-          await tx.dentistSchedule.deleteMany({ where: { dentistId: request.dentistId } });
+          /*
+           * El horario base NO SE TOCA.
+           *
+           * Los bloques aprobados se guardan como la excepción de ESA semana.
+           * La versión anterior sustituía `dentist_schedules`, así que un
+           * «esta semana entro a las 10» quedaba para siempre y había que
+           * acordarse de deshacerlo — que es justo lo que nadie hace.
+           *
+           * Pasada la semana, no hay nada que revertir: al no existir filas
+           * para la siguiente, vuelve a regir el base solo.
+           */
+          await tx.dentistScheduleOverride.deleteMany({
+            where: { dentistId: request.dentistId, weekStart: request.weekStart },
+          });
 
           if (blocks.length > 0) {
-            await tx.dentistSchedule.createMany({
+            await tx.dentistScheduleOverride.createMany({
               data: blocks.map((block) => ({
                 dentistId: request.dentistId,
+                weekStart: request.weekStart,
                 weekday: block.weekday,
                 startMinute: block.startMinute,
                 endMinute: block.endMinute,
+                requestId: request.id,
               })),
             });
           }
@@ -1996,14 +2732,16 @@ export const prismaRepository: DataRepository = {
             id: true,
             appointmentId: true,
             priceCents: true,
-            appointment: { select: { payment: { select: { id: true } } } },
+            appointment: {
+              select: { payments: { where: { status: 'PAID' }, select: { id: true } } },
+            },
           },
         });
 
         if (!addon) return { ok: false as const, reason: 'NOT_FOUND' as const };
 
         // Mismo motivo que al añadir: el cobro ya congeló este importe.
-        if (addon.appointment.payment) {
+        if ((addon.appointment?.payments.length ?? 0) > 0) {
           return { ok: false as const, reason: 'DUPLICATE' as const, field: 'appointmentId' };
         }
 
@@ -2048,7 +2786,9 @@ export const prismaRepository: DataRepository = {
         status: true,
         source: true,
         notes: true,
-        patient: { select: { fullName: true, phoneE164: true } },
+        // Sin `phoneE164`: el teléfono del paciente no es asunto del
+        // odontólogo. Ver el comentario de `DentistAgendaItem`.
+        patient: { select: { fullName: true } },
         treatment: { select: { name: true, durationMinutes: true } },
         room: { select: { name: true, code: true } },
       },
@@ -2066,7 +2806,6 @@ export const prismaRepository: DataRepository = {
       source: row.source,
       notes: row.notes,
       patientName: row.patient.fullName,
-      patientPhone: row.patient.phoneE164,
       treatmentName: row.treatment.name,
       treatmentDurationMinutes: row.treatment.durationMinutes,
       roomName: row.room.name,

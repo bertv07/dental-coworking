@@ -80,7 +80,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
         type="password"
         required
         full
-        hint="Mínimo 12 caracteres. Una frase que recuerdes es mejor que algo corto y raro."
+        hint="Mínimo 6 caracteres. Cuantos más, mejor: una palabra corta se adivina."
         error={errorFor('newPassword')}
       />
 

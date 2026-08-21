@@ -2888,3 +2888,111 @@ a {
   flex-basis: 100%;
   height: var(--space-2);
 }
+
+/* ===========================================================================
+   HOJA IMPRESA — la factura que se le entrega al paciente
+   ===========================================================================
+   Va en su propia pantalla, sin el marco del panel. Los tamaños están en mm
+   porque el destino es papel, no una ventana: en pantalla se ve un poco
+   grande y eso es correcto — lo que importa es cómo sale de la impresora.
+   =========================================================================== */
+
+.print-sheet {
+  max-width: 190mm;
+  margin: 0 auto;
+  padding: 12mm 10mm;
+  background: #fff;
+  color: #111;
+  font-size: 10.5pt;
+  line-height: 1.45;
+}
+
+.print-sheet__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 2rem;
+  padding-bottom: 4mm;
+  border-bottom: 1.5pt solid #111;
+}
+
+.print-sheet__clinic { margin: 0; font-size: 15pt; font-weight: 700; }
+.print-sheet__meta   { margin: 0; font-size: 9pt; color: #555; }
+
+.print-sheet__number       { text-align: right; }
+.print-sheet__number-label { font-size: 8.5pt; letter-spacing: 0.08em; text-transform: uppercase; color: #555; }
+.print-sheet__number-value { font-size: 14pt; font-weight: 700; }
+
+.print-sheet__party {
+  display: flex;
+  gap: 3rem;
+  margin: 5mm 0;
+}
+
+.print-sheet__label {
+  display: block;
+  font-size: 8.5pt;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #555;
+}
+.print-sheet__strong { font-weight: 700; }
+
+.print-sheet__table { width: 100%; border-collapse: collapse; margin-top: 3mm; }
+.print-sheet__table th {
+  text-align: left;
+  font-size: 8.5pt;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #555;
+  border-bottom: 0.75pt solid #999;
+  padding: 2mm 1.5mm;
+}
+.print-sheet__table td {
+  padding: 2mm 1.5mm;
+  border-bottom: 0.5pt solid #ddd;
+  vertical-align: top;
+}
+/* Los importes en columna: alineados a la derecha y con cifras de igual ancho,
+   para poder compararlos de un vistazo. */
+.print-sheet__num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.print-sheet__note { font-size: 8.5pt; color: #666; }
+
+.print-sheet__totals,
+.print-sheet__payments { margin-top: 5mm; margin-left: auto; width: 85mm; }
+
+.print-sheet__total-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1mm 0;
+  font-variant-numeric: tabular-nums;
+}
+.print-sheet__total-row--strong {
+  font-weight: 700;
+  font-size: 12pt;
+  border-top: 1pt solid #111;
+  margin-top: 1mm;
+  padding-top: 1.5mm;
+}
+
+.print-sheet__payments { border-top: 0.5pt solid #ddd; padding-top: 3mm; }
+
+.print-sheet__foot {
+  margin-top: 10mm;
+  padding-top: 3mm;
+  border-top: 0.5pt solid #ddd;
+  font-size: 8.5pt;
+  color: #666;
+  text-align: center;
+}
+
+@media print {
+  /* La hoja ocupa el papel entero: sin márgenes propios que se sumen a los
+     de la impresora. */
+  .print-sheet { max-width: none; margin: 0; padding: 0; }
+
+  /* Nada de fondos oscuros heredados del tema: el papel es blanco. */
+  body { background: #fff; }
+
+  @page { margin: 12mm 10mm; }
+}

@@ -47,6 +47,8 @@ export default async function SchedulesPage() {
 
     const [requests, currentBlocks] = await Promise.all([
       repository.listScheduleRequests({ dentistId: profile.id }),
+      // El BASE, no el de una semana: es el que se enseña como «tu horario
+      // habitual» y del que se parte al proponer un cambio.
       repository.listSchedule(profile.id),
     ]);
 
@@ -71,7 +73,25 @@ export default async function SchedulesPage() {
   }
 
   // --- Recepción y administración: todas ----------------------------------
-  const requests = await repository.listScheduleRequests();
+  const [requests, dentists] = await Promise.all([
+    repository.listScheduleRequests(),
+    repository.listDentists(),
+  ]);
+
+  /*
+   * Horario base de cada odontólogo, para que recepción lo vea y lo edite.
+   *
+   * Una consulta por odontólogo, en paralelo: son doce personas, no doce mil,
+   * y montar una consulta agregada para eso sería complicar sin ganancia.
+   */
+  const bases = await Promise.all(
+    dentists.map(async (dentist) => [
+      dentist.id,
+      await repository.listSchedule(dentist.id),
+    ] as const),
+  );
+  const baseByDentist = Object.fromEntries(bases);
+
   const pendientes = requests.filter((request) => request.status === 'PENDING').length;
 
   return (
@@ -92,6 +112,8 @@ export default async function SchedulesPage() {
           currentBlocks={[]}
           canApprove
           canPropose={false}
+          dentists={dentists.map((d) => ({ id: d.id, fullName: d.fullName }))}
+          baseByDentist={baseByDentist}
         />
       </FadeIn>
     </div>

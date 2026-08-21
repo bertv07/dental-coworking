@@ -303,7 +303,7 @@ export const MOCK_DEV_PASSWORD = 'SuperAdmin2026!';
  * Si todos compartieran clave sería imposible comprobar que un asistente NO
  * ve las finanzas — que es justo lo que hay que verificar.
  *
- * Todas cumplen la política (mínimo 12 caracteres, ver `PASSWORD_POLICY`).
+ * Todas cumplen la política (mínimo 6 caracteres, ver `PASSWORD_POLICY`).
  */
 export const MOCK_CREDENTIALS: Record<string, string> = {
   'admin@dentalcoworking.com.ve': MOCK_DEV_PASSWORD,

@@ -1,19 +1,28 @@
-import { requireSuperAdmin } from '@/backend/auth/guards';
+import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { formatCents } from '@/backend/domain/money';
 import type { DentistEarnings } from '@/backend/domain/types';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { Stat } from '@/frontend/components/ui/primitives';
 import { DentistsManager } from '@/frontend/features/admin/DentistsManager';
+import { DentistRoster } from '@/frontend/features/admin/DentistRoster';
 import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/motion';
 
 /**
  * ===========================================================================
- *  /odontologos — Gestión del cuerpo odontológico (CRUD)
+ *  /odontologos — el cuerpo odontológico
  * ===========================================================================
- *  ACCESO: sólo Super Admin. Esta pantalla define el porcentaje de comisión
- *  de cada persona, es decir, cuánto cobra cada quincena. No es información
- *  que deba ver ni tocar recepción.
+ *  Una ruta, DOS pantallas, porque son dos necesidades distintas:
+ *
+ *   · Super Admin → el CRUD completo. Define la comisión de cada persona, es
+ *     decir cuánto cobra, y ve lo que produjo y lo que se le debe.
+ *   · Asistente → el LISTADO: quién hay, qué hace cada quien y cómo
+ *     localizarlo. Es lo que necesita para agendar y para derivar a alguien
+ *     que pide un cirujano.
+ *
+ *  Recepción NO ve dinero aquí — ni comisión, ni producción, ni deuda. Y no
+ *  se le oculta con CSS: su rama NO CONSULTA esas cifras, así que no llegan
+ *  a su navegador ni siquiera dentro del payload de React.
  * ===========================================================================
  */
 
@@ -21,7 +30,43 @@ export const metadata = { title: 'Odontólogos' };
 export const dynamic = 'force-dynamic';
 
 export default async function DentistsPage() {
-  await requireSuperAdmin();
+  const user = await requireRole('ASSISTANT');
+
+  // --- Recepción: el listado, sin un solo importe -------------------------
+  if (user.role !== 'SUPER_ADMIN') {
+    // Sólo los activos: a recepción no le sirve alguien que ya no atiende, y
+    // reactivarlo es cosa de administración.
+    const dentists = await repository.listDentists();
+
+    return (
+      <div className="page-body">
+        <FadeIn>
+          <PageHead
+            title="Odontólogos"
+            subtitle="Quién atiende y qué hace cada quien"
+          />
+        </FadeIn>
+        <FadeIn delay={0.08}>
+          <DentistRoster
+            /*
+             * Se construye campo a campo en vez de pasar el objeto entero:
+             * `Dentist` lleva `clinicCommissionPercent`, y con un spread se
+             * colaría en el payload aunque la tabla no lo pintara.
+             */
+            dentists={dentists.map((d) => ({
+              id: d.id,
+              fullName: d.fullName,
+              licenseNumber: d.licenseNumber,
+              email: d.email,
+              phone: d.phone,
+              specialties: d.specialties,
+              isActive: d.isActive,
+            }))}
+          />
+        </FadeIn>
+      </div>
+    );
+  }
 
   const to = new Date();
   const from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);

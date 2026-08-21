@@ -439,6 +439,21 @@ const scheduleBlockSchema = z
  * frágil que serializar una vez.
  */
 export const scheduleRequestSchema = z.object({
+  /**
+   * Lunes de la semana a la que aplica el cambio.
+   *
+   * Obligatorio: sin él no se sabe de qué semana se habla, y el cambio
+   * volvería a ser permanente — que es justo lo que se está corrigiendo.
+   */
+  weekStart: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Indica la semana')
+    .refine((valor) => {
+      // Tiene que ser LUNES: es la llave con la que se guarda y se busca. Un
+      // miércoles crearía una "semana" que nadie encontraría al consultar.
+      return new Date(`${valor}T12:00:00Z`).getUTCDay() === 1;
+    }, 'La semana tiene que empezar en lunes'),
+
   proposedBlocks: z
     .string()
     .transform((value, ctx) => {
@@ -759,86 +774,60 @@ export const paymentMethodSchema = z.object({
 
 export type PaymentMethodFormInput = z.infer<typeof paymentMethodSchema>;
 
+
+// --- Horario base que fija recepción ----------------------------------------
+
 /**
- * Expediente clínico transcrito por la asistente.
+ * Horario BASE de un odontólogo, el que rige mientras nadie pida un cambio.
  *
- * Casi todo es opcional a propósito: el papel llega a medio llenar y hay que
- * poder guardarlo igual. Un formulario que exigiera todos los campos obligaría
- * a inventarse datos clínicos para poder guardar, que es peor que un
- * expediente incompleto.
+ * A diferencia de la solicitud, NO lleva semana: es el de siempre.
  */
-export const clinicalRecordSchema = z.object({
-  patientId: cuidSchema,
-
-  // Banderas de riesgo. Van como casillas y no dentro del texto libre porque
-  // tienen que poder consultarse antes de un procedimiento.
-  hypertension: z.coerce.boolean().default(false),
-  diabetes: z.coerce.boolean().default(false),
-  heartDisease: z.coerce.boolean().default(false),
-  anticoagulants: z.coerce.boolean().default(false),
-  pregnant: z.coerce.boolean().default(false),
-
-  allergies: z.union([safeTextSchema(500), z.literal('')]).optional().transform((v) => v || null),
-  currentMedications: z.union([safeTextSchema(500), z.literal('')]).optional().transform((v) => v || null),
-  medicalNotes: z.union([safeTextSchema(1000), z.literal('')]).optional().transform((v) => v || null),
-  chiefComplaint: z.union([safeTextSchema(500), z.literal('')]).optional().transform((v) => v || null),
-  treatmentPlan: z.union([safeTextSchema(2000), z.literal('')]).optional().transform((v) => v || null),
-
-  /**
-   * Odontograma serializado desde el formulario.
-   *
-   * Llega como JSON en un campo oculto porque son 32 piezas: mandarlas como 32
-   * campos sueltos haría el formulario ilegible y el parseo frágil.
-   *
-   * Se valida la FORMA, no sólo que sea JSON: sin esto, cualquiera podría
-   * guardar un objeto arbitrario en una columna que luego se pinta.
-   */
-  odontogram: z
+export const baseScheduleSchema = z.object({
+  blocks: z
     .string()
-    .optional()
-    .transform((raw) => {
-      if (!raw) return null;
+    .transform((value, ctx) => {
       try {
-        return JSON.parse(raw) as unknown;
+        return JSON.parse(value) as unknown;
       } catch {
-        return null;
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Horario mal formado' });
+        return z.NEVER;
       }
     })
-    .pipe(
-      z
-        .record(
-          // Clave: notación FDI de dos dígitos.
-          z.string().regex(/^[1-8][1-8]$/),
-          z.object({
-            estado: z.enum([
-              'SANO', 'CARIES', 'OBTURADO', 'CORONA',
-              'AUSENTE', 'EXTRACCION', 'IMPLANTE', 'ENDODONCIA',
-            ]),
-            notas: safeTextSchema(120).optional(),
-          }),
-        )
-        .nullable(),
+    .pipe(z.array(scheduleBlockSchema).max(21, 'Demasiados bloques'))
+    /*
+     * Se permite vacío: alguien puede quedarse sin horario si se va una
+     * temporada. Lo que no se permite es que se pise a sí mismo — dos bloques
+     * solapados el mismo día harían ambiguo qué ofrecer.
+     */
+    .refine(
+      (blocks) =>
+        !blocks.some((a, i) =>
+          blocks.some(
+            (b, j) =>
+              i !== j &&
+              a.weekday === b.weekday &&
+              a.startMinute < b.endMinute &&
+              b.startMinute < a.endMinute,
+          ),
+        ),
+      { message: 'Hay bloques que se solapan el mismo día' },
     ),
 });
 
-export type ClinicalRecordFormInput = z.infer<typeof clinicalRecordSchema>;
+// --- Documento escaneado del paciente ---------------------------------------
 
-/** Una línea de la hoja de evolución. */
-export const clinicalEntrySchema = z.object({
+/**
+ * Datos que acompañan a un PDF escaneado.
+ *
+ * El archivo NO se valida aquí: viaja como `File` en el `FormData` y lo
+ * comprueba la acción (tipo y tamaño), porque Zod no puede mirar dentro de un
+ * binario.
+ */
+export const patientDocumentSchema = z.object({
   patientId: cuidSchema,
-  /** Fecha del PAPEL, no la de hoy: se transcribe con días de retraso. */
-  performedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida'),
-  dentistId: z.union([cuidSchema, z.literal('')]).optional().transform((v) => v || null),
-  procedure: safeTextSchema(300).pipe(z.string().min(3, 'Describe el procedimiento')),
-  /** Piezas tratadas, separadas por coma o espacio: "16, 17". */
-  teeth: z
-    .string()
+  kind: z.enum(['EXPEDIENTE', 'CONSENTIMIENTO', 'RADIOGRAFIA', 'OTRO']).default('EXPEDIENTE'),
+  notes: z
+    .union([safeTextSchema(300), z.literal('')])
     .optional()
-    .transform((raw) =>
-      (raw ?? '')
-        .split(/[\s,]+/)
-        .map((t) => t.trim())
-        .filter((t) => /^[1-8][1-8]$/.test(t)),
-    ),
-  notes: z.union([safeTextSchema(500), z.literal('')]).optional().transform((v) => v || null),
+    .transform((value) => (value ? value : null)),
 });

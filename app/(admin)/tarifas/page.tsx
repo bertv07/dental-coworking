@@ -4,6 +4,7 @@ import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { Card, Notice } from '@/frontend/components/ui/primitives';
 import { TariffsManager } from '@/frontend/features/admin/TariffsManager';
+import { TariffList } from '@/frontend/features/admin/TariffList';
 
 /**
  * ===========================================================================
@@ -12,18 +13,23 @@ import { TariffsManager } from '@/frontend/features/admin/TariffsManager';
  *  «Los precios varían de acuerdo al tratamiento, y también según el
  *  odontólogo.»
  *
- *  Una ruta, DOS vistas, igual que `/agenda`:
+ *  Una ruta, TRES vistas, porque son tres trabajos distintos:
  *
  *   · Odontólogo → sólo SUS tarifas, y lo que envía queda PENDIENTE.
+ *   · Asistente → sólo los precios ya APROBADOS, en lectura. Recepción cotiza
+ *     y factura, así que necesita saber que con la Dra. X la exodoncia son
+ *     $50 y no $30. Lo que NO ve es el REPARTO: cuánto de eso se queda la
+ *     clínica y cuánto el odontólogo es una negociación entre ellos.
  *   · Super Admin → las de todos, con aprobación y rechazo.
  *
- *  El recorte no se hace con un parámetro de la URL sino con el id de la
- *  sesión: `listDentistTreatments({ dentistId })` no llega a leer de Postgres
- *  las tarifas de los demás, así que no hay nada que filtrar después.
+ *  El recorte del odontólogo no se hace con un parámetro de la URL sino con
+ *  el id de la sesión: `listDentistTreatments({ dentistId })` no llega a leer
+ *  de Postgres las tarifas de los demás, así que no hay nada que filtrar.
  *
- *  ⚠️  Recepción NO entra aquí. La página trata de cuánto cobra cada
- *  odontólogo, que es la misma razón por la que `/odontologos` es sólo del
- *  administrador.
+ *  ⚠️  A recepción no se le esconde la columna del reparto: su rama construye
+ *   las filas campo a campo y el porcentaje no viaja. Ocultarlo con CSS lo
+ *   dejaría en el payload de React, legible con las herramientas del
+ *   navegador.
  * ===========================================================================
  */
 
@@ -33,17 +39,43 @@ export const dynamic = 'force-dynamic';
 export default async function TariffsPage() {
   const user = await requireAuth();
 
-  // Asistente: ni ve ni propone. No es su decisión ni su información.
+  // --- Recepción: los precios aprobados, para poder cotizar ---------------
   if (user.role === 'ASSISTANT') {
+    const agreements = await repository.listDentistTreatments({ status: 'APPROVED' });
+
     return (
       <div className="page-body">
-        <PageHead title="Tarifas" />
-        <Card>
-          <Notice tone="warning">
-            Esta sección define cuánto cobra cada odontólogo, así que sólo la abre la
-            administración.
+        <FadeIn>
+          <PageHead
+            title="Tarifas"
+            subtitle="Precios pactados por odontólogo, para cotizar y facturar"
+          />
+        </FadeIn>
+
+        <FadeIn delay={0.06}>
+          <Notice tone="info">
+            Sólo aparecen las tarifas <strong>ya aprobadas</strong>: son las que se
+            cobran de verdad. Lo que no esté aquí se cobra al precio de lista.
           </Notice>
-        </Card>
+        </FadeIn>
+
+        <FadeIn delay={0.1}>
+          <TariffList
+            /*
+             * Campo a campo, sin `customCommissionPercent`: el reparto no es
+             * asunto del mostrador y no debe viajar al navegador.
+             */
+            tariffs={agreements
+              .filter((a) => a.customPriceCents !== null)
+              .map((a) => ({
+                id: a.id,
+                dentistName: a.dentistName,
+                treatmentName: a.treatmentName,
+                listPriceCents: a.treatmentBasePriceCents,
+                priceCents: a.customPriceCents as number,
+              }))}
+          />
+        </FadeIn>
       </div>
     );
   }

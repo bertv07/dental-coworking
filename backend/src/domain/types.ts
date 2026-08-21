@@ -231,6 +231,88 @@ export interface WhatsAppMessage {
 
 // --- Vistas compuestas (lo que consume la UI) ------------------------------
 
+export type InvoiceStatus = 'OPEN' | 'PAID' | 'VOID';
+
+/** Una línea de la factura. Precio y descripción congelados al añadirla. */
+export interface InvoiceLine {
+  id: string;
+  treatmentId: string | null;
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+  /** Rebaja de ESTA línea, marcada a mano por recepción. */
+  discountCents: number;
+  discountReason: string | null;
+  commissionPercent: number;
+  /** `quantity * unitPrice - discount`. Lo que suma esta línea al total. */
+  totalCents: number;
+}
+
+/** Un cobro concreto contra la factura. Puede haber varios. */
+export interface InvoicePayment {
+  id: string;
+  amountCents: number;
+  amountBs: number;
+  exchangeRate: number;
+  method: PaymentMethod;
+  methodLabel: string | null;
+  paidAt: Date;
+}
+
+/**
+ * Factura interna de la clínica. NO es fiscal.
+ *
+ * Es el comprobante que se le entrega al paciente y el documento que recepción
+ * edita cuando en la consulta se hace algo más de lo previsto.
+ */
+export interface Invoice {
+  id: string;
+  number: number;
+  patientId: string;
+  patientName: string;
+  dentistId: string | null;
+  dentistName: string | null;
+  appointmentId: string | null;
+  status: InvoiceStatus;
+  subtotalCents: number;
+  discountCents: number;
+  totalCents: number;
+  clinicShareCents: number;
+  dentistShareCents: number;
+  /** Suma de lo cobrado hasta ahora. */
+  paidCents: number;
+  /** `total - paid`. Lo que falta por cobrar. */
+  balanceCents: number;
+  notes: string | null;
+  issuedAt: Date;
+  lines: InvoiceLine[];
+  payments: InvoicePayment[];
+}
+
+export type PatientDocumentKind = 'EXPEDIENTE' | 'CONSENTIMIENTO' | 'RADIOGRAFIA' | 'OTRO';
+
+/**
+ * Un papel escaneado y anexado a la ficha del paciente.
+ *
+ * El expediente lo rellena EL PACIENTE a mano y el consentimiento lo firma;
+ * recepción sólo escanea y anexa. No se transcribe nada — el original es el
+ * papel firmado.
+ *
+ * ⚠️  NO lleva `content`. El binario sólo viaja por la ruta que lo sirve, y
+ *  meterlo en este tipo lo arrastraría a cada listado: un paciente con diez
+ *  escaneos mandaría varios MB al navegador sólo por abrir su ficha.
+ */
+export interface PatientDocument {
+  id: string;
+  patientId: string;
+  kind: PatientDocumentKind;
+  fileName: string;
+  mimeType: string;
+  sizeBytes: number;
+  notes: string | null;
+  createdAt: Date;
+}
+
 /** Estado de todo lo que necesita el visto bueno de otra persona. */
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 
@@ -275,8 +357,15 @@ export interface ScheduleChangeRequest {
   id: string;
   dentistId: string;
   dentistName: string;
+  /**
+   * Lunes de la SEMANA a la que aplica, 'YYYY-MM-DD'.
+   *
+   * El cambio es de esa semana y sólo de esa: pasada, se vuelve solo al
+   * horario base sin que nadie tenga que deshacer nada.
+   */
+  weekStart: string;
   proposedBlocks: ScheduleBlock[];
-  /** El horario que tiene HOY, para poder comparar al decidir. */
+  /** El horario que regiría esa semana sin este cambio, para comparar. */
   currentBlocks: ScheduleBlock[];
   reason: string | null;
   status: ApprovalStatus;
@@ -356,7 +445,13 @@ export interface AppointmentWithRelations extends Appointment {
  * Cita tal y como la ve SU odontólogo.
  *
  * Es deliberadamente más pobre que `AppointmentWithRelations`: no lleva
- * `agreedPriceCents` ni los ids de las relaciones. El odontólogo cobra por
+ * `agreedPriceCents`, NI EL TELÉFONO DEL PACIENTE, ni los ids de las
+ * relaciones.
+ *
+ * El teléfono es dato de contacto de la clínica, no del odontólogo: quien
+ * llama al paciente para confirmar o reprogramar es recepción. Igual que con
+ * el precio, no se oculta en la pantalla — no se selecciona en la consulta,
+ * así que no llega al navegador y no hay nada que filtrar por descuido. El odontólogo cobra por
  * liquidación mensual, no por cita, así que la tarifa no le aporta nada en la
  * agenda; y un tipo que no tiene el campo hace imposible enviarlo sin querer.
  *
@@ -372,7 +467,6 @@ export interface DentistAgendaItem {
   source: AppointmentSource;
   notes: string | null;
   patientName: string;
-  patientPhone: string;
   treatmentName: string;
   treatmentDurationMinutes: number;
   roomName: string;

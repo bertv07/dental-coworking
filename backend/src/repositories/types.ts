@@ -9,6 +9,10 @@ import type {
   DentistEarnings,
   DentistInstrument,
   DentistTreatmentAgreement,
+  Invoice,
+  InvoiceStatus,
+  PatientDocument,
+  PatientDocumentKind,
   ScheduleBlock,
   ScheduleChangeRequest,
   FinancialSummary,
@@ -587,6 +591,116 @@ export interface DataRepository {
     userId: string;
   }): Promise<WriteResult<{ id: string; totalCents: number }>>;
 
+  // --- Facturas -------------------------------------------------------------
+
+  /**
+   * Abre la factura de una cita, creándola si no existe.
+   *
+   * Las líneas salen del tratamiento de la cita más los procedimientos que se
+   * le añadieron en consulta. Si ya existe, se devuelve tal cual: volver a
+   * generarla borraría los descuentos que recepción ya hubiera marcado.
+   */
+  openInvoiceForAppointment(params: {
+    appointmentId: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  listInvoices(params?: {
+    status?: InvoiceStatus;
+    patientId?: string;
+    limit?: number;
+  }): Promise<Invoice[]>;
+
+  getInvoice(id: string): Promise<Invoice | null>;
+
+  /** Añade una línea. El precio y la comisión los decide el SERVIDOR. */
+  addInvoiceLine(params: {
+    invoiceId: string;
+    treatmentId: string | null;
+    /** Sólo para líneas escritas a mano. */
+    description: string | null;
+    quantity: number;
+    /** Precio pactado. `null` = el que corresponda por reglas. */
+    unitPriceCents: number | null;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /**
+   * Ajusta una línea: cantidad, precio o DESCUENTO.
+   *
+   * El descuento lo marca recepción a mano — es el «si haces esto, esto va
+   * gratis», que no es gratis porque lo otro sube.
+   */
+  updateInvoiceLine(params: {
+    id: string;
+    quantity: number;
+    unitPriceCents: number;
+    discountCents: number;
+    discountReason: string | null;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  removeInvoiceLine(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
+
+  /**
+   * Registra un cobro contra la factura. Puede ser PARCIAL.
+   *
+   * «Sólo se guarda lo que se pague ese día»: cada pago lleva su fecha y su
+   * tasa, así que el arqueo de cada jornada cuenta lo que de verdad entró en
+   * ella. La factura queda OPEN hasta que el saldo llega a cero.
+   */
+  registerInvoicePayment(params: {
+    invoiceId: string;
+    amountCents: number;
+    method: 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE';
+    methodLabel: string | null;
+    externalReference: string | null;
+    exchangeRate: number;
+    exchangeRateSource: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string; balanceCents: number }>>;
+
+  /** Anula la factura. No se borra: el papel se entregó. */
+  voidInvoice(params: {
+    id: string;
+    reason: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  // --- Documentos escaneados del paciente ----------------------------------
+
+  /** Los documentos de un paciente. SIN el binario: sólo la ficha de cada uno. */
+  listPatientDocuments(patientId: string): Promise<PatientDocument[]>;
+
+  /**
+   * El archivo en sí, para servirlo por HTTP.
+   *
+   * Va aparte de `listPatientDocuments` porque el binario sólo hace falta
+   * cuando alguien lo abre. Traerlo en el listado mandaría megas al navegador
+   * por el simple hecho de entrar a la ficha.
+   */
+  getPatientDocumentFile(id: string): Promise<{
+    fileName: string;
+    mimeType: string;
+    content: Uint8Array;
+  } | null>;
+
+  savePatientDocument(params: {
+    patientId: string;
+    kind: PatientDocumentKind;
+    fileName: string;
+    mimeType: string;
+    content: Uint8Array;
+    notes: string | null;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /** Borrado lógico: un documento clínico que existió no se destruye. */
+  deletePatientDocument(params: {
+    id: string;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
   // --- Instrumental del odontólogo -----------------------------------------
 
   /** Instrumental, opcionalmente el de un solo odontólogo. */
@@ -608,8 +722,29 @@ export interface DataRepository {
 
   // --- Horarios y sus cambios ----------------------------------------------
 
-  /** Horario semanal vigente de un odontólogo. */
-  listSchedule(dentistId: string): Promise<ScheduleBlock[]>;
+  /**
+   * Horario de un odontólogo.
+   *
+   * Sin `weekStart` devuelve el BASE, que es el que pone recepción y el que
+   * rige mientras nadie diga lo contrario.
+   *
+   * Con `weekStart` devuelve el que rige ESA semana: la excepción aprobada si
+   * la hay, y el base si no. Que no haya excepción ES la respuesta — por eso
+   * no existe ninguna marca de «esta semana es normal».
+   */
+  listSchedule(dentistId: string, weekStart?: string): Promise<ScheduleBlock[]>;
+
+  /**
+   * Recepción fija el horario BASE de un odontólogo.
+   *
+   * Reemplaza la semana entera: es lo que se está editando, y un merge
+   * dejaría bloques viejos que nadie quiso conservar.
+   */
+  setBaseSchedule(params: {
+    dentistId: string;
+    blocks: ScheduleBlock[];
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
 
   listScheduleRequests(params?: {
     dentistId?: string;
@@ -619,21 +754,25 @@ export interface DataRepository {
   /**
    * El odontólogo propone una semana nueva.
    *
-   * Sólo puede haber UNA pendiente por persona —lo fuerza un índice único
-   * parcial en Postgres—: dos solicitudes esperando dejarían a recepción sin
-   * saber cuál es la buena.
+   * Sólo puede haber UNA pendiente por persona Y SEMANA —lo fuerza un índice
+   * único parcial en Postgres—: dos solicitudes para la misma semana dejarían
+   * a recepción sin saber cuál es la buena. Para semanas distintas sí puede
+   * tener varias, que es un caso legítimo.
    */
   createScheduleRequest(params: {
     dentistId: string;
+    /** Lunes de la semana a la que aplica, 'YYYY-MM-DD'. */
+    weekStart: string;
     proposedBlocks: ScheduleBlock[];
     reason: string | null;
     userId: string;
   }): Promise<WriteResult<{ id: string }>>;
 
   /**
-   * Aprueba o rechaza. Al aprobar, el horario propuesto SUSTITUYE al vigente
-   * en la misma transacción: aprobar sin aplicar dejaría al odontólogo
-   * creyendo que su horario cambió cuando el bot sigue ofreciendo el viejo.
+   * Aprueba o rechaza. Al aprobar, los bloques se guardan como la excepción
+   * DE ESA SEMANA, en la misma transacción — el horario base no se toca.
+   * Aprobar sin aplicar dejaría al odontólogo creyendo que su horario cambió
+   * mientras el bot sigue ofreciendo el viejo.
    */
   reviewScheduleRequest(params: {
     id: string;

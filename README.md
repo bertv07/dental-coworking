@@ -31,11 +31,13 @@ Asistente → `/inicio`, Odontólogo → `/agenda`.
 | `/pacientes` | ✅ | ✅ | 🔒 |
 | `/pacientes/{id}/expediente` — historia clínica | ✅ | ✅ | 🔒 |
 | `/tasa-cambio` | ✅ | ✅ | 🔒 |
-| `/tarifas` — precios por odontólogo | ✅ aprueba | 🔒 | sólo las suyas, propone |
+| `/tarifas` — precios por odontólogo | ✅ aprueba | precios aprobados, sin reparto | sólo las suyas, propone |
+| `/facturas` — facturación | ✅ | ✅ | 🔒 |
 | `/horarios` — cambios de horario | ✅ aprueba | ✅ aprueba | los suyos, propone |
 | `/instrumental` — su material | ✅ el de todos | 🔒 | el suyo |
 | `/cambiar-clave` — su propia contraseña | ✅ | ✅ | ✅ |
-| `/odontologos`, `/tratamientos`, `/consultorios`, `/configuracion` | ✅ | 🔒 | 🔒 |
+| `/odontologos` | ✅ CRUD y comisiones | listado, sin dinero | 🔒 |
+| `/tratamientos`, `/consultorios`, `/configuracion` | ✅ | 🔒 | 🔒 |
 | Barra superior: buscador, mensajes, notificaciones | ✅ | ✅ | — |
 | Sidebar: tarjeta «Precios en USD» | ✅ | ✅ | — |
 
@@ -44,13 +46,21 @@ secciones que su rol no abre (`/pacientes`, `/whatsapp`, `/tasa-cambio`), y
 los avisos hablan de pacientes de toda la clínica. **No se ocultan con CSS: no
 se consultan**, así que esos datos no llegan a su navegador.
 
-> **`/tarifas` rompe la escalera de roles, a propósito.** Es la única sección
-> que el odontólogo abre y el asistente no. Los permisos casi siempre se
-> acumulan (asistente ⊃ odontólogo), pero aquí no aplica: la página trata de
-> cuánto cobra cada odontólogo, así que la abren el interesado y quien
-> aprueba. Recepción queda fuera. Por eso `NavLink` tiene `hiddenForRoles`:
-> sin él habría que elegir entre esconderle la página al odontólogo o
-> enseñarle a recepción un enlace que la rebota.
+> **Qué ve recepción del dinero de los odontólogos: nada.** Entra en
+> `/odontologos` y en `/tarifas` porque necesita saber **a quién** y **a
+> cuánto** — para agendar, derivar a un cirujano, cotizar y facturar. Lo que
+> no ve es el REPARTO: qué porcentaje se queda la clínica y cuánto le
+> corresponde a cada quien. Eso es una negociación entre la clínica y cada
+> persona, y no hace falta para el mostrador.
+>
+> No está oculto con CSS ni con condicionales en la vista: **su rama de cada
+> página construye las filas campo a campo y esos números no se consultan**.
+> Lo que no viaja no se lee abriendo las herramientas del navegador.
+>
+> `/instrumental` sí rompe la escalera de roles: lo abren el odontólogo (es su
+> material) y el administrador, pero no recepción. Para eso existe
+> `hiddenForRoles` en `NavLink` — sin él habría que elegir entre esconderle la
+> página al odontólogo o enseñarle a recepción un enlace que la rebota.
 
 > Para cambiarlas, edita `MOCK_CREDENTIALS` en
 > [`backend/src/mock/data.ts`](backend/src/mock/data.ts) y vuelve a ejecutar
@@ -66,11 +76,14 @@ reprogramación, cambio de estado y cobro.
 
 **El odontólogo** ve un **calendario semanal de sus propias citas**, y puede
 agendarse citas a sí mismo con el botón «Agendar» (ver «La doctora agenda sus
-propias citas»). Lo que no puede es cobrar ni cambiar estados. De cada cita muestra hora, paciente, tratamiento, consultorio, origen
-y si está confirmada. Se navega entre semanas con `?semana=YYYY-MM-DD` y al
-pinchar una cita se abre el detalle con el teléfono y las notas de recepción.
+propias citas»). Lo que no puede es cobrar ni cambiar estados.
 
-Dos cosas que **no** tiene, a propósito:
+De cada cita muestra hora, paciente, tratamiento, consultorio, origen y si
+está confirmada, en formato de 12 horas (`8 am`, `12 m`, `3 pm`). Se navega
+entre semanas con `?semana=YYYY-MM-DD` y al pinchar una cita se abre el
+detalle con las notas de recepción.
+
+Tres cosas que **no** tiene, a propósito:
 
 - **Ningún importe.** No es que la columna esté oculta: la consulta
   (`listDentistAgenda`) no selecciona `agreedPriceCents`, así que el precio no
@@ -84,6 +97,11 @@ Dos cosas que **no** tiene, a propósito:
   Agendar sí puede, y no es contradictorio: crear una cita suya es organizar su
   propio trabajo; cambiarle el estado a una existente implica una conversación
   con el paciente que la lleva recepción.
+
+- **El teléfono del paciente.** Lo pidió la clínica: quien llama para
+  confirmar o reprogramar es recepción. Igual que con el precio, no se oculta
+  en la pantalla — `listDentistAgenda` no lo selecciona, así que no sale de
+  Postgres.
 
 ---
 
@@ -716,7 +734,7 @@ la redacción original a la derecha para poder contrastarlas con lo pedido.
 | ✅ | *«poder editar una cita en caso de hacerle más cosas»* | Procedimientos añadidos — ver abajo |
 | ✅ | *«9am a 6»* | Jornada por defecto en `scripts/configurar-clinica.mjs` |
 | ✅ | *«zelle binance»* | Medios de pago configurables en `/configuracion`, con Zelle y Binance como entradas propias |
-| ⏳ | *«odontólogos para asistente»* | `/odontologos` sigue siendo sólo de Super Admin: define cuánto cobra cada quien. Falta decidir **qué** parte necesita recepción (¿el listado y los horarios, sin las comisiones?) |
+| ✅ | *«odontólogos para asistente»* | Recepción ve el **listado**: quién atiende, sus especialidades y cómo localizarlo. Sin comisión, sin producción y sin deuda — y no ocultos, sino **no consultados**. El CRUD con las comisiones sigue siendo del administrador |
 | ✅ | *«cada odontólogo tenga su inventario»* | `/instrumental`. Son SUS instrumentos (fórceps, turbina, cureta), no un almacén de insumos: lista de bienes con dueño, cantidad, estado y último servicio |
 | ⏳ | *«cirujanos y tal»* | Las especialidades ya existen y el campo ahora **sugiere las que están en uso**, para que no convivan «CIRUGÍA ORAL» y «cirujano». Falta, si lo quieres: que la especialidad restrinja qué tratamientos puede hacer cada quien |
 | ✅ | *«agendar desde los odontólogos, escribir al bot y también disponible en la web»* | Las dos vías: **por el bot** (le escribe por WhatsApp, `docs/PROMPT-N8N.md` §5) y **desde el panel** (botón «Agendar» en su calendario). No hay formulario público para pacientes: de eso se encarga el bot |
