@@ -1,5 +1,11 @@
-import { Badge, Card, EmptyState } from '@/frontend/components/ui/primitives';
-import { Avatar } from '@/frontend/components/ui/primitives';
+'use client';
+
+import { useState, useTransition } from 'react';
+import { updateDentistAction } from '@/app/actions/admin.actions';
+import { Modal } from '@/frontend/components/motion';
+import { TextField, FormFooter } from '@/frontend/components/ui/form';
+import { Badge, Card, EmptyState, Notice, Avatar } from '@/frontend/components/ui/primitives';
+import { IconEdit } from '@/frontend/components/ui/icons';
 
 /**
  * ===========================================================================
@@ -17,8 +23,14 @@ import { Avatar } from '@/frontend/components/ui/primitives';
  *   NO CONSULTA esas cifras. Este componente ni siquiera recibe un campo
  *   donde pudieran venir, así que no hay forma de que se filtren al HTML.
  *
- *  Tampoco es editable. Dar de alta a alguien implica fijarle la comisión, y
- *  eso vuelve a ser cosa de administración.
+ *  SÍ puede EDITAR: corregir un teléfono mal tecleado, añadir una especialidad
+ *  o actualizar un correo es trabajo de mostrador y no tenía por qué esperar
+ *  al administrador.
+ *
+ *  Lo que no puede es dar de ALTA ni cambiar la COMISIÓN. Crear a alguien
+ *  implica fijarle cuánto cobra, y eso vuelve a ser de administración. El
+ *  formulario de aquí ni siquiera tiene ese campo, y el servidor reescribe el
+ *  porcentaje con el guardado por si alguien lo manda a mano.
  * ===========================================================================
  */
 
@@ -33,7 +45,45 @@ export interface FichaOdontologo {
   isActive: boolean;
 }
 
-export function DentistRoster({ dentists }: { dentists: FichaOdontologo[] }) {
+export function DentistRoster({
+  dentists,
+  knownSpecialties = [],
+}: {
+  dentists: FichaOdontologo[];
+  /** Especialidades ya en uso, para sugerirlas y no inventar variantes. */
+  knownSpecialties?: string[];
+}) {
+  const [isPending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [fieldError, setFieldError] = useState<{ field: string; message: string } | null>(
+    null,
+  );
+  const [editing, setEditing] = useState<FichaOdontologo | null>(null);
+
+  function submit(formData: FormData) {
+    if (!editing) return;
+    setError(null);
+    setFieldError(null);
+    startTransition(async () => {
+      const result = await updateDentistAction(
+        editing.id,
+        Object.fromEntries(formData.entries()),
+      );
+      if (result.ok) {
+        setEditing(null);
+        return;
+      }
+      if (result.field) {
+        setFieldError({ field: result.field, message: result.error ?? 'Valor inválido' });
+        return;
+      }
+      setError(result.error ?? 'No se pudo guardar');
+    });
+  }
+
+  const errorFor = (field: string) =>
+    fieldError?.field === field ? fieldError.message : undefined;
+
   if (dentists.length === 0) {
     return (
       <Card>
@@ -43,11 +93,14 @@ export function DentistRoster({ dentists }: { dentists: FichaOdontologo[] }) {
   }
 
   return (
-    <Card
-      title="Cuerpo odontológico"
-      subtitle={`${dentists.length} en activo`}
-      flush
-    >
+    <>
+      {error && <Notice tone="danger">{error}</Notice>}
+
+      <Card
+        title="Cuerpo odontológico"
+        subtitle={`${dentists.length} en activo`}
+        flush
+      >
       <div className="table-wrap">
         <table className="table table--cards">
           <thead>
@@ -56,6 +109,7 @@ export function DentistRoster({ dentists }: { dentists: FichaOdontologo[] }) {
               <th>Especialidades</th>
               <th>Registro</th>
               <th>Contacto</th>
+              <th style={{ textAlign: 'right' }} />
             </tr>
           </thead>
           <tbody>
@@ -87,11 +141,94 @@ export function DentistRoster({ dentists }: { dentists: FichaOdontologo[] }) {
                   <div className="mono">{dentist.phone}</div>
                   <div className="subtle">{dentist.email}</div>
                 </td>
+                <td style={{ textAlign: 'right' }}>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => setEditing(dentist)}
+                    aria-label={`Editar ${dentist.fullName}`}
+                  >
+                    <IconEdit size={14} />
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
-    </Card>
+          </table>
+        </div>
+      </Card>
+
+      <Modal
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        title="Editar odontólogo"
+        subtitle={editing?.fullName}
+        footer={
+          <FormFooter
+            isPending={isPending}
+            onCancel={() => setEditing(null)}
+            formId="roster-form"
+          />
+        }
+      >
+        {editing && (
+          <form id="roster-form" action={submit} className="form-grid" key={editing.id}>
+            <TextField
+              label="Nombre completo"
+              name="fullName"
+              required
+              defaultValue={editing.fullName}
+              error={errorFor('fullName')}
+            />
+            <TextField
+              label="Nº de colegio"
+              name="licenseNumber"
+              required
+              defaultValue={editing.licenseNumber}
+              error={errorFor('licenseNumber')}
+            />
+            <TextField
+              label="Correo electrónico"
+              name="email"
+              type="email"
+              required
+              defaultValue={editing.email}
+              error={errorFor('email')}
+            />
+            <TextField
+              label="Teléfono"
+              name="phone"
+              required
+              defaultValue={editing.phone}
+              error={errorFor('phone')}
+            />
+            <TextField
+              label="Especialidades"
+              name="specialties"
+              required
+              full
+              hint="Separadas por comas. Reutiliza las que ya existen: el bot busca por ellas."
+              suggestions={knownSpecialties}
+              defaultValue={editing.specialties.join(', ')}
+              error={errorFor('specialties')}
+            />
+
+            {/*
+              El checkbox de activo va oculto con su valor actual: el esquema
+              lo exige y aquí no se está decidiendo dar de baja a nadie, que es
+              una acción con más consecuencias y vive en administración.
+            */}
+            <input type="hidden" name="isActive" value={String(editing.isActive)} />
+
+            <div className="form-grid--full">
+              <Notice tone="info">
+                La comisión no se toca desde aquí: la fija administración en su propia
+                pantalla.
+              </Notice>
+            </div>
+          </form>
+        )}
+      </Modal>
+    </>
   );
 }

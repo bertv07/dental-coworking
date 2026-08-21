@@ -77,6 +77,11 @@ interface AgendaManagerProps {
   paidAppointmentIds: string[];
   /** Medios de pago configurados; se ofrecen tal cual al cobrar. */
   paymentMethods: PaymentMethodOption[];
+  /**
+   * Paciente con el que abrir el alta directamente, si se llegó desde su
+   * ficha. `null` = entrada normal a la agenda.
+   */
+  preselectedPatientId?: string | null;
 }
 
 /** Estados a los que se puede pasar con un clic desde la tabla. */
@@ -121,6 +126,7 @@ export function AgendaManager({
   commissionByDentist,
   paidAppointmentIds,
   paymentMethods,
+  preselectedPatientId = null,
 }: AgendaManagerProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -154,6 +160,19 @@ export function AgendaManager({
   const editing = crud.mode.kind === 'edit' ? crud.mode.item : null;
   const errorFor = (field: string) =>
     crud.fieldName === field ? crud.fieldError ?? undefined : undefined;
+
+  /*
+   * Se llegó desde la ficha de un paciente: se abre el alta con él puesto.
+   *
+   * Se ajusta durante el render y una sola vez —`abierto` deja de ser falso—
+   * en vez de con un efecto: así el modal ya sale abierto en el primer
+   * pintado, sin el parpadeo de ver la agenda y que salte encima.
+   */
+  const [abiertoPorPaciente, setAbiertoPorPaciente] = useState(false);
+  if (preselectedPatientId && !abiertoPorPaciente) {
+    setAbiertoPorPaciente(true);
+    crud.openCreate();
+  }
 
   /**
    * Abre la factura de una cita y navega a ella.
@@ -434,13 +453,22 @@ export function AgendaManager({
           </Notice>
         )}
 
-        <form id="crud-form" action={crud.submit} className="form-grid" key={editing?.id ?? 'new'}>
+        <form
+          id="crud-form"
+          action={crud.submit}
+          className="form-grid"
+          key={editing?.id ?? preselectedPatientId ?? 'new'}
+        >
           <SelectField
             label="Paciente"
             name="patientId"
             required
             full
-            defaultValue={editing?.patientId}
+            /*
+             * Al reprogramar, el de la cita. Al llegar desde la ficha de un
+             * paciente, ése. En un alta normal, ninguno.
+             */
+            defaultValue={editing?.patientId ?? preselectedPatientId ?? undefined}
             options={patients.map((patient) => ({
               value: patient.id,
               label: `${patient.fullName} — ${patient.phoneE164}`,

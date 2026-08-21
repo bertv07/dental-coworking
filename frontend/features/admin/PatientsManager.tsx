@@ -178,6 +178,20 @@ export function PatientsManager({
                               `Link` y no `<a>`: navega sin recargar el panel
                               entero, que es lo que hacía el enlace anterior.
                             */}
+                            {/*
+                              El paso siguiente de una venta en persona: entra
+                              alguien, se le busca o se le da de alta, y de
+                              aquí directo a agendarle. Sin este botón había
+                              que ir al menú, abrir la agenda y volver a
+                              buscarlo en el desplegable.
+                            */}
+                            <Link
+                              href={`/agenda?paciente=${patient.id}`}
+                              className="btn btn--primary btn--sm"
+                              title={`Agendar cita a ${patient.fullName}`}
+                            >
+                              Agendar
+                            </Link>
                             <Link
                               href={`/pacientes/${patient.id}/expediente`}
                               className="btn btn--ghost btn--sm"

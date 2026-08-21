@@ -410,6 +410,18 @@ export async function createDentistAction(input: unknown): Promise<ActionResult>
   }
 }
 
+/**
+ * Edita la ficha de un odontólogo.
+ *
+ * Recepción también entra: corrige un teléfono mal tecleado, añade una
+ * especialidad o actualiza un correo, que es trabajo de mostrador y no tenía
+ * por qué esperar al administrador.
+ *
+ * Lo que NO puede tocar es la COMISIÓN. Si el formulario viene de recepción,
+ * el porcentaje se descarta y se conserva el que ya tenía — no se confía en
+ * que el campo no venga, porque una Server Action es un endpoint público y
+ * se le puede mandar cualquier cosa con curl.
+ */
 export async function updateDentistAction(
   id: string,
   input: unknown,
@@ -417,10 +429,48 @@ export async function updateDentistAction(
   const parsedId = cuidSchema.safeParse(id);
   if (!parsedId.success) return { ok: false, error: 'Identificador inválido' };
 
-  return runAction({
-    minimumRole: 'SUPER_ADMIN',
+  const authorization = await checkApiRole('ASSISTANT');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error:
+        authorization.status === 401
+          ? 'Tu sesión expiró. Vuelve a iniciar sesión.'
+          : 'No tienes permiso para esto.',
+    };
+  }
+
+  const esAdministrador = authorization.user.role === 'SUPER_ADMIN';
+
+  // La comisión vigente, para poder devolverla intacta si edita recepción.
+  const actual = esAdministrador
+    ? null
+    : await repository.findDentistById(parsedId.data);
+
+  if (!esAdministrador && !actual) {
+    return { ok: false, error: 'Ese odontólogo ya no existe.' };
+  }
+
+  /*
+   * Se INYECTA la comisión guardada antes de validar, en vez de dejar que
+   * llegue del formulario.
+   *
+   * Dos motivos: el esquema la exige —y el formulario de recepción no la
+   * pinta, así que no la enviaría— y sobre todo, si viniera del cliente
+   * habría que confiar en ella. Reescribirla aquí hace imposible cambiarla
+   * desde recepción, mande lo que mande.
+   */
+  const entrada = esAdministrador
+    ? input
+    : {
+        ...(typeof input === 'object' && input !== null ? input : {}),
+        clinicCommissionPercent: actual!.clinicCommissionPercent,
+      };
+
+  const result = await runAction({
+    minimumRole: 'ASSISTANT',
     schema: dentistFormSchema,
-    input,
+    input: entrada,
     revalidate: '/odontologos',
     auditAction: 'dentist.updated',
     /*
@@ -434,6 +484,14 @@ export async function updateDentistAction(
      */
     handler: (data) => repository.updateDentist(parsedId.data, toDentistInput(data)),
   });
+
+  // Si chocó un campo único, se explica QUIÉN lo ocupa (ver `explicarChoque`).
+  const validation = dentistFormSchema.safeParse(entrada);
+  if (!result.ok && result.field && validation.success) {
+    return explicarChoque(validation.data, result.field);
+  }
+
+  return result;
 }
 
 /** Devuelve al servicio a alguien que estaba dado de baja. */
@@ -460,7 +518,15 @@ export async function deleteDentistAction(id: string): Promise<ActionResult> {
 }
 
 // ===========================================================================
-//  TRATAMIENTOS Y PRECIOS  (sólo Super Admin)
+//  TRATAMIENTOS Y PRECIOS
+//
+//  Asistente o superior: recepción cotiza por teléfono y factura, así que es
+//  la primera en enterarse de que un precio cambió. Obligarla a pedírselo al
+//  administrador significaba cobrar con la lista vieja hasta que alguien se
+//  acordara.
+//
+//  La COMISIÓN sigue siendo del administrador, y se toca en `/odontologos`:
+//  cuánto cuesta algo y cómo se reparte son dos decisiones distintas.
 // ===========================================================================
 
 /** Convierte la entrada del formulario al shape que espera el repositorio. */
@@ -479,7 +545,7 @@ function toTreatmentInput(data: z.infer<typeof treatmentFormSchema>) {
 
 export async function createTreatmentAction(input: unknown): Promise<ActionResult> {
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: treatmentFormSchema,
     input,
     revalidate: '/tratamientos',
@@ -496,7 +562,7 @@ export async function updateTreatmentAction(
   if (!parsedId.success) return { ok: false, error: 'Identificador inválido' };
 
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: treatmentFormSchema,
     input,
     revalidate: '/tratamientos',
@@ -509,7 +575,7 @@ export async function updateTreatmentAction(
 
 export async function deleteTreatmentAction(id: string): Promise<ActionResult> {
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: cuidSchema,
     input: id,
     revalidate: '/tratamientos',

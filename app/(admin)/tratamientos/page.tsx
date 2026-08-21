@@ -1,4 +1,4 @@
-import { requireSuperAdmin } from '@/backend/auth/guards';
+import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { env } from '@/backend/config/env';
 import { formatCents } from '@/backend/domain/money';
@@ -11,7 +11,16 @@ import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/m
  * ===========================================================================
  *  /tratamientos — Configuración de precios
  * ===========================================================================
- *  ACCESO: sólo Super Admin.
+ *  ACCESO: asistente o superior.
+ *
+ *  Recepción también los edita: es quien cotiza por teléfono y quien factura,
+ *  así que cuando un precio cambia es la primera en enterarse. Obligarla a
+ *  pedirle al administrador que lo toque significaba cobrar con la lista
+ *  vieja hasta que alguien se acordara.
+ *
+ *  Lo que sigue siendo del administrador es la COMISIÓN, que se define en
+ *  `/odontologos`: cuánto cuesta un tratamiento y cómo se reparte son dos
+ *  decisiones distintas.
  *
  *  Cada cambio de precio queda registrado en `TreatmentPriceHistory` y en
  *  `audit_logs` (ver `prismaRepository.updateTreatment`). Poder responder
@@ -27,7 +36,7 @@ export const metadata = { title: 'Precios' };
 export const dynamic = 'force-dynamic';
 
 export default async function TreatmentsPage() {
-  await requireSuperAdmin();
+  await requireRole('ASSISTANT');
 
   const treatments = await repository.listTreatments({ includeInactive: true });
   const active = treatments.filter((treatment) => treatment.isActive);

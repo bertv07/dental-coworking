@@ -52,7 +52,7 @@ export default async function AgendaPage({ searchParams }: { searchParams: Searc
   return user.role === 'DENTIST' ? (
     <DentistWeekView userId={user.id} searchParams={await searchParams} />
   ) : (
-    <ClinicAgendaView />
+    <ClinicAgendaView searchParams={await searchParams} />
   );
 }
 
@@ -286,7 +286,26 @@ function formatWeekLabel(firstKey: string, lastKey: string): string {
    Vista de recepción / administración — agenda completa y editable
    ========================================================================== */
 
-async function ClinicAgendaView() {
+async function ClinicAgendaView({
+  searchParams,
+}: {
+  searchParams: Record<string, string | string[] | undefined>;
+}) {
+  /*
+   * `?paciente=…` abre el alta con ese paciente ya elegido.
+   *
+   * Es el segundo paso de una venta en persona: se viene de su ficha, así que
+   * volver a buscarlo en un desplegable de 200 nombres sería repetir trabajo
+   * que ya se hizo.
+   *
+   * Se valida como cuid antes de pasarlo: viene de la URL, y un valor basura
+   * dejaría el desplegable en un estado que no corresponde a nadie.
+   */
+  const preselected =
+    typeof searchParams.paciente === 'string' && /^c[a-z0-9]{20,30}$/i.test(searchParams.paciente)
+      ? searchParams.paciente
+      : null;
+
   const from = new Date();
   const to = new Date(from.getTime() + 14 * 24 * 60 * 60 * 1000);
 
@@ -342,6 +361,7 @@ async function ClinicAgendaView() {
           commissionByDentist={commissionByDentist}
           paidAppointmentIds={paidAppointmentIds}
           paymentMethods={paymentMethods}
+          preselectedPatientId={preselected}
         />
       </FadeIn>
     </div>

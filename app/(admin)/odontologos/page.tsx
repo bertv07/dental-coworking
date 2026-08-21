@@ -39,6 +39,11 @@ export default async function DentistsPage() {
     // Sólo los activos: a recepción no le sirve alguien que ya no atiende, y
     // reactivarlo es cosa de administración.
     const dentists = await repository.listDentists();
+    // Para sugerirlas al editar: si conviven «CIRUGÍA ORAL» y «cirujano», el
+    // bot deja de encontrar al especialista que le piden.
+    const knownSpecialties = [
+      ...new Set(dentists.flatMap((d) => d.specialties)),
+    ].sort();
 
     return (
       <div className="page-body">
@@ -64,6 +69,7 @@ export default async function DentistsPage() {
               specialties: d.specialties,
               isActive: d.isActive,
             }))}
+            knownSpecialties={knownSpecialties}
           />
         </FadeIn>
       </div>

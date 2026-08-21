@@ -62,7 +62,29 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       { href: '/inicio', label: 'Inicio', Icon: IconHome, minimumRole: 'ASSISTANT' },
       // /dashboard es el panel FINANCIERO y su guard exige SUPER_ADMIN.
       { href: '/dashboard', label: 'Dashboard', Icon: IconDashboard, minimumRole: 'SUPER_ADMIN' },
+
+      /*
+       * PACIENTES y AGENDA, en ese orden y arriba del todo.
+       *
+       * Es el orden de una VENTA EN PERSONA, que es el caso más común del
+       * mostrador: entra alguien sin cita → se busca o se da de alta → se le
+       * agenda → se factura. Con la agenda primero había que subir y bajar
+       * por el menú con cada paciente que cruza la puerta.
+       *
+       * Desde la ficha del paciente hay un botón «Agendar» que salta al paso
+       * siguiente con él ya elegido, así que en el uso normal ni se vuelve al
+       * menú.
+       */
+      { href: '/pacientes', label: 'Pacientes', Icon: IconUsers, minimumRole: 'ASSISTANT' },
       { href: '/agenda', label: 'Agenda', Icon: IconCalendar, minimumRole: 'DENTIST' },
+
+      // El resto del recorrido del mostrador: cobrar y cerrar el día.
+      { href: '/facturas', label: 'Facturas', Icon: IconTag, minimumRole: 'ASSISTANT' },
+      { href: '/caja', label: 'Caja', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
+      { href: '/whatsapp', label: 'WhatsApp', Icon: IconChat, minimumRole: 'ASSISTANT' },
+
+      // Consulta, no trabajo diario: van después.
+      //
       // Tres vistas: el odontólogo propone las suyas, recepción consulta los
       // precios para cotizar, el administrador aprueba.
       { href: '/tarifas', label: 'Tarifas', Icon: IconTag, minimumRole: 'DENTIST' },
@@ -77,11 +99,6 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
         minimumRole: 'DENTIST',
         hiddenForRoles: ['ASSISTANT'],
       },
-      // Facturación: el trabajo diario del mostrador, junto a la caja.
-      { href: '/facturas', label: 'Facturas', Icon: IconTag, minimumRole: 'ASSISTANT' },
-      { href: '/caja', label: 'Caja', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
-      { href: '/whatsapp', label: 'WhatsApp', Icon: IconChat, minimumRole: 'ASSISTANT' },
-      { href: '/pacientes', label: 'Pacientes', Icon: IconUsers, minimumRole: 'ASSISTANT' },
     ],
   },
   {
@@ -90,7 +107,9 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // Recepción ve el listado (quién hay y qué hace); el administrador, el
       // CRUD con las comisiones.
       { href: '/odontologos', label: 'Odontólogos', Icon: IconStethoscope, minimumRole: 'ASSISTANT' },
-      { href: '/tratamientos', label: 'Precios', Icon: IconTag, minimumRole: 'SUPER_ADMIN' },
+      // Recepción también los edita: es quien cotiza y factura, así que es la
+      // primera en enterarse de que un precio cambió.
+      { href: '/tratamientos', label: 'Precios', Icon: IconTag, minimumRole: 'ASSISTANT' },
       { href: '/tasa-cambio', label: 'Tasa de cambio', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
       { href: '/consultorios', label: 'Consultorios', Icon: IconRoom, minimumRole: 'SUPER_ADMIN' },
       { href: '/configuracion', label: 'Configuración', Icon: IconSettings, minimumRole: 'SUPER_ADMIN' },
