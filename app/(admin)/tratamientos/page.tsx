@@ -4,6 +4,7 @@ import { env } from '@/backend/config/env';
 import { formatCents } from '@/backend/domain/money';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { Stat } from '@/frontend/components/ui/primitives';
+import { PriceImport } from '@/frontend/features/admin/PriceImport';
 import { TreatmentsManager } from '@/frontend/features/admin/TreatmentsManager';
 import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/motion';
 
@@ -111,6 +112,10 @@ export default async function TreatmentsPage() {
           treatments={treatments}
           defaultCommissionPercent={env.DEFAULT_CLINIC_COMMISSION_PERCENT}
         />
+
+      <FadeIn delay={0.16}>
+        <PriceImport />
+      </FadeIn>
       </FadeIn>
     </div>
   );

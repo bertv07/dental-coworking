@@ -907,6 +907,27 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async importTreatmentPrices({ filas }) {
+    let creados = 0;
+    for (const fila of filas) {
+      const existente = treatments.find((t) => t.code === fila.code);
+      if (existente) {
+        Object.assign(existente, fila);
+      } else {
+        treatments.push({
+          id: newId('trmt'),
+          description: null,
+          isPriceVariable: false,
+          clinicKeepsAll: false,
+          isActive: true,
+          ...fila,
+        });
+        creados += 1;
+      }
+    }
+    return { creados, actualizados: filas.length - creados };
+  },
+
   // --- Facturas -------------------------------------------------------------
   //  La demo no factura: emitir, descontar y cobrar en partes son operaciones
   //  con dinero de verdad, y una versión en memoria que se pierde al

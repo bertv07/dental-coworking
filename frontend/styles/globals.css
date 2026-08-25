@@ -2996,3 +2996,149 @@ a {
 
   @page { margin: 12mm 10mm; }
 }
+
+/* ===========================================================================
+   PÁGINAS PÚBLICAS — portada y política de privacidad
+   ===========================================================================
+   Las ve un paciente desde el móvil, casi siempre llegando de Facebook o de
+   WhatsApp. No comparten nada con el panel: ni menú, ni tablas densas, ni la
+   escala de tipografía pensada para trabajar ocho horas seguidas.
+   =========================================================================== */
+
+.landing {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 3rem 1.25rem 4rem;
+}
+
+.landing__hero { padding: 2rem 0 3rem; }
+
+.landing__eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+}
+
+.landing__title {
+  margin: 0;
+  font-size: clamp(2rem, 7vw, 3rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+
+.landing__lead {
+  margin: 1rem 0 0;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+  color: var(--color-text-muted, #5b6e72);
+  max-width: 34rem;
+}
+
+.landing__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 2rem;
+}
+
+/* El botón de WhatsApp es la acción principal de toda la página: es como
+   pide cita el 90 % de los pacientes. */
+.landing__cta {
+  display: inline-block;
+  padding: 0.85rem 1.5rem;
+  border-radius: 6px;
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+}
+.landing__cta:hover { opacity: 0.9; }
+
+.landing__cta--ghost {
+  background: transparent;
+  color: var(--color-text, inherit);
+  border: 1px solid var(--color-border);
+}
+
+.landing__section {
+  padding: 2rem 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.landing__h2 {
+  margin: 0 0 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted, #5b6e72);
+}
+
+.landing__services {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: 0.5rem;
+}
+
+.landing__service {
+  padding: 0.65rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 0.9375rem;
+}
+
+.landing__facts { margin: 0; display: grid; gap: 1rem; }
+.landing__fact dt {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted, #5b6e72);
+}
+.landing__fact dd { margin: 0.15rem 0 0; font-size: 1rem; }
+
+.landing__foot {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.8125rem;
+  color: var(--color-text-muted, #5b6e72);
+}
+.landing__foot p { margin: 0.25rem 0; }
+
+/* --- Política de privacidad ------------------------------------------------
+   Ancho de lectura corto a propósito: es un texto largo que alguien lee de
+   arriba abajo, no una pantalla que se escanea. */
+
+.legal {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 3rem 1.25rem 4rem;
+  line-height: 1.65;
+}
+
+.legal__head { padding-bottom: 1.5rem; border-bottom: 1px solid var(--color-border); }
+.legal__title { margin: 0; font-size: 1.875rem; font-weight: 700; letter-spacing: -0.015em; }
+.legal__meta { margin: 0.35rem 0 0; font-size: 0.875rem; color: var(--color-text-muted, #5b6e72); }
+
+.legal__section { padding: 1.75rem 0; border-bottom: 1px solid var(--color-border); }
+.legal__section h2 { margin: 0 0 0.75rem; font-size: 1.125rem; font-weight: 650; }
+.legal__section h3 { margin: 1.25rem 0 0.5rem; font-size: 0.9375rem; font-weight: 600; }
+.legal__section p  { margin: 0.75rem 0; }
+.legal__section ul { margin: 0.75rem 0; padding-left: 1.25rem; }
+.legal__section li { margin: 0.4rem 0; }
+
+.legal__foot { padding-top: 1.5rem; font-size: 0.9375rem; }
+
+@media (max-width: 34rem) {
+  .landing__actions { flex-direction: column; }
+  .landing__cta { text-align: center; }
+}

@@ -629,6 +629,28 @@ export interface DataRepository {
     userId: string;
   }): Promise<WriteResult<{ id: string; totalCents: number }>>;
 
+  /**
+   * Aplica una lista de precios importada, en UNA transacción.
+   *
+   * Upsert por `code`: el código es la llave estable con la que n8n identifica
+   * cada tratamiento, así que reimportar el mismo archivo actualiza en vez de
+   * duplicar.
+   *
+   * Todo o nada: si una fila falla a mitad, la lista quedaría medio vieja y
+   * medio nueva, y nadie sabría por dónde se cortó.
+   */
+  importTreatmentPrices(params: {
+    filas: Array<{
+      code: string;
+      name: string;
+      category: string;
+      basePriceCents: number;
+      durationMinutes: number;
+      bufferMinutes: number;
+    }>;
+    userId: string;
+  }): Promise<{ creados: number; actualizados: number }>;
+
   // --- Facturas -------------------------------------------------------------
 
   /**

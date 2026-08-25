@@ -1934,6 +1934,85 @@ export const prismaRepository: DataRepository = {
     }
   },
 
+  async importTreatmentPrices({ filas, userId }) {
+    return prisma.$transaction(async (tx) => {
+      /*
+       * Se lee el precio ANTERIOR de cada uno, no sólo qué códigos existen:
+       * un precio que cambia por Excel tiene que dejar el mismo rastro en el
+       * historial que uno cambiado a mano. Si no, el día que alguien pregunte
+       * desde cuándo la limpieza cuesta $35 la respuesta sería «no consta»
+       * justo en el caso en que cambiaron sesenta precios de una vez.
+       */
+      const previos = new Map(
+        (
+          await tx.treatment.findMany({
+            where: { code: { in: filas.map((f) => f.code) } },
+            select: { id: true, code: true, basePriceCents: true },
+          })
+        ).map((t) => [t.code, t]),
+      );
+
+      for (const fila of filas) {
+        await tx.treatment.upsert({
+          where: { code: fila.code },
+          /*
+           * Al ACTUALIZAR no se toca `isActive`: si alguien desactivó un
+           * tratamiento a mano, reimportar la lista no debe resucitarlo sin
+           * que nadie lo haya decidido.
+           */
+          update: {
+            name: fila.name,
+            category: fila.category,
+            basePriceCents: fila.basePriceCents,
+            durationMinutes: fila.durationMinutes,
+            bufferMinutes: fila.bufferMinutes,
+          },
+          create: { ...fila, isActive: true },
+        });
+
+        const previo = previos.get(fila.code);
+        if (previo && previo.basePriceCents !== fila.basePriceCents) {
+          await tx.treatmentPriceHistory.create({
+            data: {
+              treatmentId: previo.id,
+              oldPriceCents: previo.basePriceCents,
+              newPriceCents: fila.basePriceCents,
+              changedByUserId: userId,
+              reason: 'Importación desde Excel',
+            },
+          });
+        }
+      }
+
+      const creados = filas.filter((f) => !previos.has(f.code)).length;
+
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'treatment.prices_imported',
+          entityType: 'Treatment',
+          /*
+           * `entityId` es obligatorio y aquí no hay UNA entidad: el cambio
+           * afecta a toda la lista. Se marca como importación en lote para
+           * que al buscar en la auditoría se distinga de un cambio de precio
+           * suelto, que sí lleva el id del tratamiento.
+           */
+          entityId: 'IMPORTACION_LOTE',
+          // Un cambio masivo de precios tiene que poder reconstruirse después:
+          // se guardan los códigos y los importes aplicados.
+          after: {
+            total: filas.length,
+            creados,
+            actualizados: filas.length - creados,
+            precios: filas.map((f) => ({ code: f.code, cents: f.basePriceCents })),
+          },
+        },
+      });
+
+      return { creados, actualizados: filas.length - creados };
+    });
+  },
+
   // --- Facturas -------------------------------------------------------------
 
   async openInvoiceForAppointment({ appointmentId, userId }) {

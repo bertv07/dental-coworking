@@ -25,7 +25,15 @@ import { NextResponse, type NextRequest } from 'next/server';
  * abre alguien que no puede entrar. Su protección no es la sesión sino el
  * token de un solo uso que llega por correo, más el límite por correo.
  */
-const PUBLIC_PATHS = ['/login', '/sin-permiso', '/recuperar', '/restablecer'];
+const PUBLIC_PATHS = ['/login', '/sin-permiso', '/recuperar', '/restablecer', '/privacidad'];
+
+/**
+ * Rutas públicas que hay que comparar EXACTAS, no por prefijo.
+ *
+ * `/` es la portada. Con la comparación por prefijo de arriba sería inútil:
+ * todas las rutas empiezan por «/», así que el panel entero quedaría abierto.
+ */
+const PUBLIC_EXACT = ['/'];
 
 /**
  * Rutas exentas de la validación de Origin.
@@ -83,7 +91,8 @@ export function middleware(request: NextRequest) {
   //  con cualquier contenido y pasar de aquí. Lo que le espera después es
   //  `requireAuth()`, que sí verifica la firma en el servidor. La ganancia
   //  es evitar renderizar una página entera para luego descartarla.
-  const isPublicPath = PUBLIC_PATHS.some((path) => pathname.startsWith(path));
+  const isPublicPath =
+    PUBLIC_EXACT.includes(pathname) || PUBLIC_PATHS.some((path) => pathname.startsWith(path));
   const isApiRoute = pathname.startsWith('/api');
 
   if (!isPublicPath && !isApiRoute) {
