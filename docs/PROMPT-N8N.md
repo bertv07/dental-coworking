@@ -124,6 +124,7 @@ Respuesta:
     "phone": "+584141234567",
     "aiEnabled": true,
     "aiDisabledReason": null,
+    "aiAutoResumeAt": null,
     "needsHumanAttention": false,
     "patientId": "c..." | null,
     "patientName": "Juan Pablo Marcano" | null,
@@ -142,6 +143,19 @@ generes ni envíes nada.** Significa que una persona del equipo tomó ese chat
 desde el panel. Que el bot siga contestando en paralelo es el peor fallo
 posible de este sistema: el paciente recibe dos respuestas que se contradicen.
 
+**El bot puede volver solo.** Cuando la IA se apaga porque recepción escribió
+en el chat o porque el propio bot escaló (§3.6), el sistema anota en
+`aiAutoResumeAt` a partir de cuándo puede volver — por defecto 4 horas de
+silencio, configurable en el panel.
+
+No tienes que hacer NADA con ese campo: cuando llegue el momento, este mismo
+endpoint te devolverá `aiEnabled: true` y seguirás el flujo normal. Se te
+enseña sólo para que el flujo pueda registrarlo y para poder depurar por qué
+un chat sigue mudo.
+
+`aiAutoResumeAt: null` con `aiEnabled: false` significa que la IA la apagó una
+persona a mano: ese chat NO vuelve solo y hay que respetarlo.
+
 No cachees este dato. El interruptor lo mueve una persona en cualquier
 momento; una copia de hace treinta segundos ya puede estar equivocada.
 
@@ -158,13 +172,22 @@ Cuerpo: `{}` (se firma igual, aunque vaya vacío).
     "currency": { "base": "USD", "quote": "VES", "rate": 771.07,
                   "source": "BCV", "fetchedAt": "...", "stale": false },
     "treatments": [
-      { "code": "LIMPIEZA", "name": "Limpieza dental (profilaxis)",
-        "description": "...", "durationMinutes": 45,
+      { "code": "CONSULTA", "name": "Consulta y valoración",
+        "category": "DIAGNÓSTICO",
+        "description": "Evaluación + diagnóstico + presupuesto. Incluye limpieza, ultrasonido, profilaxis, desmanchador y flúor.",
+        "durationMinutes": 45,
         "priceCents": 3000, "priceUsd": 30, "priceBs": 23132.14,
         "isPriceVariable": false },
-      { "code": "ENDO", "name": "Tratamiento de conducto",
-        "durationMinutes": 90, "priceUsd": 120,
-        "isPriceVariable": true }
+      { "code": "BASE_CAV_M", "name": "Base cavitaria — caries pequeña con base",
+        "category": "OPERATORIA",
+        "description": "Caries pequeña ($35) más base cavitaria ($10).",
+        "durationMinutes": 60, "priceUsd": 45,
+        "isPriceVariable": false },
+      { "code": "ENDO_BI", "name": "Endodoncia birradicular",
+        "category": "ENDODONCIA",
+        "description": "Dos tratamientos de conducto.",
+        "durationMinutes": 120, "priceUsd": 140,
+        "isPriceVariable": false }
     ],
     "dentists": [
       { "id": "c...", "name": "Dra. Gabriela Ferreira",
@@ -222,6 +245,22 @@ sola:**
 > Si el paciente ya eligió odontólogo y ese odontólogo tiene ese tratamiento
 > en su `prices`, **cotiza ESE precio**. Si no lo tiene —o el array está
 > vacío—, cotiza el de `treatments`, que es el precio de lista.
+
+#### Precios compuestos
+
+Algunos precios de la clínica son una suma: «caries pequeña $35 + $10 de
+base». En el catálogo eso NO llega como dos entradas que haya que sumar —
+llega ya sumado en `priceUsd`, y el desglose está en `description`.
+
+Cotiza **siempre el total** de `priceUsd`. La descripción sirve para explicar
+de qué se compone si el paciente pregunta por qué son $45 y no $35, no para
+recalcular nada. Nunca sumes dos tratamientos por tu cuenta: si un caso
+necesita dos cosas a la vez y no existe un código que lo cubra, es `handoff`.
+
+`category` agrupa la lista igual que la hoja de la clínica (DIAGNÓSTICO,
+OPERATORIA, ENDODONCIA, CIRUGÍA, PERIODONCIA, ESTÉTICA). Úsala para responder
+«¿cuánto cuesta una endodoncia?» enumerando las de esa categoría con su
+precio, en vez de adivinar por el nombre.
 
 Cómo se traduce en la conversación:
 

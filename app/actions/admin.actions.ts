@@ -1262,6 +1262,7 @@ export async function updateClinicSettingsAction(input: unknown): Promise<Action
           slotMinutes: data.slotMinutes,
           displayCurrency: data.displayCurrency,
           preferredRateSource: data.preferredRateSource,
+          aiAutoResumeHours: data.aiAutoResumeHours,
         },
         userId,
       ),

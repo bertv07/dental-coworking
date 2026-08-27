@@ -62,6 +62,34 @@ function formatTime(date: Date): string {
   }).format(date);
 }
 
+/**
+ * «vuelve a las 3:40 p. m.» o «vuelve mañana a las 8:00 a. m.».
+ *
+ * Se dice la hora concreta y no «en 4 horas» a propósito: recepción necesita
+ * saber si el bot va a retomar el chat antes o después de que cierre la
+ * clínica, y eso una cuenta atrás no lo responde.
+ */
+function formatVuelta(date: Date): string {
+  /*
+   * El «mismo día» se compara EN CARACAS, no en la hora del servidor.
+   *
+   * El servidor corre en UTC: a las 9 de la noche en la clínica allí ya es el
+   * día siguiente, y comparar con `getDate()` haría decir «vuelve el 27» de
+   * algo que pasa esta misma tarde.
+   */
+  return formatDay(date) === formatDay(new Date())
+    ? `a las ${formatTime(date)}`
+    : `el ${formatDay(date)} a las ${formatTime(date)}`;
+}
+
+function formatDay(date: Date): string {
+  return new Intl.DateTimeFormat('es-VE', {
+    day: 'numeric',
+    month: 'long',
+    timeZone: 'America/Caracas',
+  }).format(date);
+}
+
 function getInitials(name: string): string {
   return name
     .split(' ')
@@ -342,6 +370,25 @@ export function WhatsAppMonitor({
                       Motivo: <strong>{selected.aiDisabledReason}</strong>
                     </>
                   )}
+                  {/*
+                    Se dice si el bot vuelve solo y cuándo. Antes esto no se
+                    veía en ninguna parte: había que acordarse de encenderlo, y
+                    el chat se quedaba mudo para siempre.
+                  */}
+                  <div style={{ marginTop: '0.4rem' }}>
+                    {selected.aiAutoResumeAt ? (
+                      <>
+                        El bot vuelve solo{' '}
+                        <strong>{formatVuelta(new Date(selected.aiAutoResumeAt))}</strong> si
+                        el chat sigue en silencio.
+                      </>
+                    ) : (
+                      <>
+                        No vuelve solo: la apagó una persona, así que sigue apagada
+                        hasta que la enciendas aquí.
+                      </>
+                    )}
+                  </div>
                 </Notice>
               )}
 

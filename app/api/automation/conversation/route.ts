@@ -82,6 +82,14 @@ export async function POST(request: NextRequest) {
       phone: state.phoneE164,
       aiEnabled: state.aiEnabled,
       aiDisabledReason: state.aiDisabledReason,
+      /*
+       * Cuándo vuelve la IA sola, en ISO, o `null` si no vuelve.
+       *
+       * El bot no tiene que hacer nada con esto —cuando le toque volver,
+       * `aiEnabled` ya llegará en `true`—, pero permite que el flujo lo
+       * registre y que se pueda depurar por qué un chat sigue mudo.
+       */
+      aiAutoResumeAt: state.aiAutoResumeAt ? state.aiAutoResumeAt.toISOString() : null,
       needsHumanAttention: state.needsHumanAttention,
       patientId: state.patientId,
       patientName: state.patientName,

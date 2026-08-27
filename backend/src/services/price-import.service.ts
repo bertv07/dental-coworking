@@ -31,6 +31,14 @@ export interface FilaImportada {
   code: string;
   name: string;
   category: string;
+  /**
+   * El detalle largo: qué incluye, de qué se compone el precio.
+   *
+   * Va aparte del nombre porque es lo que el bot lee para cotizar. «Base
+   * cavitaria — caries pequeña» no le dice que son $35 más $10 de base;
+   * la descripción sí.
+   */
+  description: string | null;
   priceCents: number;
   durationMinutes: number;
   bufferMinutes: number;
@@ -39,12 +47,31 @@ export interface FilaImportada {
   error?: string;
   /** Precio que tiene ahora, si ya existe. Para poder comparar. */
   precioActualCents?: number;
+  /**
+   * Qué cambia además del precio: «el nombre», «la categoría»…
+   *
+   * Se enseña en la vista previa porque una fila marcada como «Cambia» con el
+   * mismo precio a los lados parece un error del sistema si no se dice qué es
+   * lo que cambia.
+   */
+  tambienCambia?: string[];
 }
 
-/** Lo que el catálogo actual necesita aportar para poder comparar. */
+/**
+ * Lo que el catálogo actual necesita aportar para poder comparar.
+ *
+ * No basta con el precio: si sólo se mirara ése, corregir un nombre mal
+ * escrito en la hoja y volver a subirla no haría nada, y quien lo hizo se
+ * quedaría pensando que el archivo no entró.
+ */
 export interface TratamientoExistente {
   code: string;
   basePriceCents: number;
+  name: string;
+  category: string;
+  description: string | null;
+  durationMinutes: number;
+  bufferMinutes: number;
 }
 
 /**
@@ -56,8 +83,10 @@ export interface TratamientoExistente {
  */
 const COLUMNAS: Record<string, string[]> = {
   code: ['codigo', 'código', 'code', 'clave'],
-  name: ['nombre', 'tratamiento', 'descripcion', 'descripción', 'name'],
+  name: ['nombre', 'tratamiento', 'name'],
   category: ['categoria', 'categoría', 'category', 'grupo'],
+  // Columna aparte del nombre: es la que el bot usa para cotizar bien.
+  description: ['descripcion', 'descripción', 'detalle', 'notas', 'nota', 'incluye'],
   price: ['precio', 'precio usd', 'precio ($)', 'precio $', 'price', 'costo'],
   duration: ['duracion', 'duración', 'minutos', 'duration'],
   buffer: ['buffer', 'margen', 'limpieza'],
@@ -210,10 +239,11 @@ export async function leerArchivoDePrecios(
   }
 
   const colCategory = columnaDe('category');
+  const colDescription = columnaDe('description');
   const colDuration = columnaDe('duration');
   const colBuffer = columnaDe('buffer');
 
-  const porCodigo = new Map(existentes.map((t) => [t.code, t.basePriceCents]));
+  const porCodigo = new Map(existentes.map((t) => [t.code, t]));
   const vistos = new Set<string>();
   const filas: FilaImportada[] = [];
 
@@ -233,6 +263,7 @@ export async function leerArchivoDePrecios(
       code,
       name,
       category: leer(colCategory) || 'GENERAL',
+      description: leer(colDescription) || null,
       priceCents: 0,
       durationMinutes: Number(leer(colDuration)) || 30,
       bufferMinutes: Number(leer(colBuffer)) || 10,
@@ -286,12 +317,32 @@ export async function leerArchivoDePrecios(
     }
 
     const actual = porCodigo.get(code);
+
+    if (actual === undefined) {
+      filas.push({ ...base, priceCents, estado: 'NUEVO' });
+      continue;
+    }
+
+    // Qué más cambia aparte del precio. La duración y el margen entran aquí
+    // porque mueven la agenda: un tratamiento que pasa de 30 a 60 minutos
+    // cambia cuántas citas caben en la tarde.
+    const tambienCambia: string[] = [];
+    if (actual.name !== base.name) tambienCambia.push('el nombre');
+    if (actual.category !== base.category) tambienCambia.push('la categoría');
+    if ((actual.description ?? null) !== base.description) {
+      tambienCambia.push('la descripción');
+    }
+    if (actual.durationMinutes !== base.durationMinutes) tambienCambia.push('la duración');
+    if (actual.bufferMinutes !== base.bufferMinutes) tambienCambia.push('el margen entre citas');
+
+    const cambiaPrecio = actual.basePriceCents !== priceCents;
+
     filas.push({
       ...base,
       priceCents,
-      precioActualCents: actual,
-      estado:
-        actual === undefined ? 'NUEVO' : actual === priceCents ? 'SIN_CAMBIO' : 'ACTUALIZA',
+      precioActualCents: actual.basePriceCents,
+      tambienCambia: tambienCambia.length > 0 ? tambienCambia : undefined,
+      estado: cambiaPrecio || tambienCambia.length > 0 ? 'ACTUALIZA' : 'SIN_CAMBIO',
     });
   }
 

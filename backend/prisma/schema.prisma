@@ -49,8 +49,8 @@ datasource db {
 /// (ver `backend/src/auth/guards.ts`); el rol en el cliente es solo cosmético.
 enum UserRole {
   SUPER_ADMIN // Acceso total: finanzas, personal, precios, monitor de WhatsApp
-  ASSISTANT   // Operativo: agenda y pacientes. Sin acceso a finanzas globales
-  DENTIST     // Solo su propia agenda y sus propias liquidaciones
+  ASSISTANT // Operativo: agenda y pacientes. Sin acceso a finanzas globales
+  DENTIST // Solo su propia agenda y sus propias liquidaciones
 }
 
 enum UserStatus {
@@ -59,12 +59,12 @@ enum UserStatus {
 }
 
 enum AppointmentStatus {
-  PENDING     // Creada por el bot, aún sin confirmar por el paciente
-  CONFIRMED   // Confirmada
+  PENDING // Creada por el bot, aún sin confirmar por el paciente
+  CONFIRMED // Confirmada
   IN_PROGRESS // Paciente en el consultorio
-  COMPLETED   // Atendida → habilita el cobro
-  CANCELLED   // Cancelada con aviso
-  NO_SHOW     // El paciente no llegó
+  COMPLETED // Atendida → habilita el cobro
+  CANCELLED // Cancelada con aviso
+  NO_SHOW // El paciente no llegó
 }
 
 /// Quién originó la cita. Clave para medir el desempeño real del bot.
@@ -92,12 +92,12 @@ enum PaymentStatus {
 /// Estado de la liquidación al odontólogo (el 60%).
 enum PayoutStatus {
   ACCRUED // Devengado: la clínica lo debe pero aún no lo ha pagado
-  PAID    // Ya transferido al odontólogo
+  PAID // Ya transferido al odontólogo
   ON_HOLD // Retenido (disputa, ajuste pendiente)
 }
 
 enum MessageDirection {
-  INBOUND  // Paciente → clínica
+  INBOUND // Paciente → clínica
   OUTBOUND // Clínica → paciente
 }
 
@@ -106,8 +106,8 @@ enum MessageDirection {
 /// Estado de entrega de un mensaje saliente.
 enum WhatsAppDeliveryStatus {
   PENDING /// Guardado, pendiente de que el proveedor lo entregue
-  SENT    /// Entregado al proveedor correctamente
-  FAILED  /// El proveedor lo rechazó; `deliveryError` explica por qué
+  SENT /// Entregado al proveedor correctamente
+  FAILED /// El proveedor lo rechazó; `deliveryError` explica por qué
 }
 
 /// Estado de una pieza del instrumental de un odontólogo.
@@ -121,7 +121,7 @@ enum InstrumentCondition {
 /// Estado de una solicitud que necesita el visto bueno de otra persona.
 /// La usan las propuestas de precio y los cambios de horario.
 enum ApprovalStatus {
-  PENDING  /// Esperando revisión
+  PENDING /// Esperando revisión
   APPROVED /// Aprobada y aplicada
   REJECTED /// Rechazada; el motivo queda en la solicitud
 }
@@ -129,7 +129,7 @@ enum ApprovalStatus {
 /// Estado de una factura interna de la clínica.
 /// Qué es el papel que se escaneó y se anexó al paciente.
 enum PatientDocumentKind {
-  EXPEDIENTE     /// Historia clínica rellenada por el paciente
+  EXPEDIENTE /// Historia clínica rellenada por el paciente
   CONSENTIMIENTO /// Consentimiento informado firmado
   RADIOGRAFIA
   OTRO
@@ -155,13 +155,13 @@ enum MessageAuthor {
 /// Cuenta de acceso al panel. Separada de `Dentist` a propósito: no todos los
 /// odontólogos necesitan login, y un admin no es un odontólogo.
 model User {
-  id           String     @id @default(cuid())
-  email        String     @unique
+  id           String   @id @default(cuid())
+  email        String   @unique
   /// Hash Argon2id. NUNCA la contraseña en claro.
   /// El campo se excluye explícitamente en cada `select` de la capa de datos.
   passwordHash String
   fullName     String
-  role         UserRole   @default(ASSISTANT)
+  role         UserRole @default(ASSISTANT)
 
   /// Teléfono de WhatsApp del personal, en E.164.
   ///
@@ -171,8 +171,8 @@ model User {
   ///
   /// Único cuando está presente: dos cuentas con el mismo número harían
   /// ambigua esa identificación.
-  phoneE164 String? @unique
-  status       UserStatus @default(ACTIVE)
+  phoneE164 String?    @unique
+  status    UserStatus @default(ACTIVE)
 
   // --- Controles anti fuerza bruta -----------------------------------------
   /// Intentos fallidos consecutivos. Se resetea en cada login exitoso.
@@ -204,7 +204,7 @@ model User {
   /// Enlaces de recuperación de contraseña emitidos para esta cuenta.
   passwordResetTokens PasswordResetToken[]
 
-  auditLogs AuditLog[]
+  auditLogs    AuditLog[]
   /// Arqueos de caja firmados por esta persona.
   cashClosings CashClosing[]
 
@@ -253,7 +253,7 @@ model AuditLog {
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   /// Verbo en formato `recurso.accion`, ej: "treatment.price_updated".
-  action String
+  action     String
   /// Tipo y id de la entidad afectada, ej: ("Treatment", "clx123").
   entityType String
   entityId   String
@@ -278,9 +278,9 @@ model AuditLog {
 /// Credencial para sistemas externos (n8n, bot de WhatsApp).
 /// Se guarda solo el HASH de la llave, igual que una contraseña.
 model AutomationApiKey {
-  id    String @id @default(cuid())
+  id        String @id @default(cuid())
   /// Nombre legible, ej: "n8n - flujo de agendamiento".
-  label String
+  label     String
   /// Prefijo público (primeros 8 caracteres) para identificar la llave en
   /// la UI y en logs sin exponer el secreto completo.
   keyPrefix String @unique
@@ -353,7 +353,7 @@ model Dentist {
   userId String? @unique
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  fullName String
+  fullName      String
   /// Registro profesional / licencia. Único para evitar duplicados.
   licenseNumber String  @unique
   email         String  @unique
@@ -372,27 +372,27 @@ model Dentist {
 
   isActive Boolean @default(true)
 
-  schedules     DentistSchedule[]
-  timeOff       TimeOff[]
-  appointments  Appointment[]
-  payouts       DentistPayout[]
-  treatments    DentistTreatment[]
+  schedules    DentistSchedule[]
+  timeOff      TimeOff[]
+  appointments Appointment[]
+  payouts      DentistPayout[]
+  treatments   DentistTreatment[]
 
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt DateTime? @db.Timestamptz(3)
-
-  @@index([isActive, deletedAt])
-  @@map("dentists")
-  invoices        Invoice[]
+  createdAt         DateTime                  @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime                  @updatedAt @db.Timestamptz(3)
+  deletedAt         DateTime?                 @db.Timestamptz(3)
+  invoices          Invoice[]
   /// Solicitudes de cambio de horario que ha hecho.
-  scheduleRequests ScheduleChangeRequest[]
+  scheduleRequests  ScheduleChangeRequest[]
   /// Horarios excepcionales de semanas concretas.
   scheduleOverrides DentistScheduleOverride[]
   /// Consultorios asignados en fijo a este odontólogo.
-  assignedRooms Room[]
+  assignedRooms     Room[]
   /// Su instrumental. Suyo: se lo lleva si se va.
-  instruments DentistInstrument[]
+  instruments       DentistInstrument[]
+
+  @@index([isActive, deletedAt])
+  @@map("dentists")
 }
 
 /// Una pieza del instrumental de un odontólogo.
@@ -406,7 +406,7 @@ model DentistInstrument {
   dentistId String
   dentist   Dentist @relation(fields: [dentistId], references: [id], onDelete: Cascade)
 
-  name String
+  name     String
   /// Agrupa la lista ("ROTATORIO", "CIRUGÍA"). Libre: el instrumental de un
   /// cirujano y el de un ortodoncista no comparten taxonomía.
   category String?
@@ -482,7 +482,7 @@ model TimeOff {
 // ===========================================================================
 
 model Patient {
-  id       String  @id @default(cuid())
+  id       String @id @default(cuid())
   fullName String
 
   /// Teléfono en E.164 (+573001234567). ÚNICO y en formato normalizado:
@@ -490,19 +490,19 @@ model Patient {
   /// normalización acabas con el mismo paciente duplicado 4 veces.
   phoneE164 String @unique
 
-  email       String?
-  documentId  String? @unique // Cédula / identificación
-  birthDate   DateTime? @db.Date
-  notes       String?
+  email      String?
+  documentId String?   @unique // Cédula / identificación
+  birthDate  DateTime? @db.Date
+  notes      String?
 
   /// Consentimiento explícito para mensajería automatizada (habeas data).
   /// Sin esto, el bot no debe iniciar conversación.
-  marketingConsent   Boolean   @default(false)
-  consentGrantedAt   DateTime? @db.Timestamptz(3)
+  marketingConsent Boolean   @default(false)
+  consentGrantedAt DateTime? @db.Timestamptz(3)
 
   /// Expediente clínico. Uno por paciente, creado al imprimirlo.
-  invoices       Invoice[]
-  documents      PatientDocument[]
+  invoices  Invoice[]
+  documents PatientDocument[]
 
   appointments  Appointment[]
   conversations WhatsAppConversation[]
@@ -528,7 +528,7 @@ model Treatment {
   code String @unique // "ORTHO_CTRL"
 
   description String?
-  category    String  // "ORTODONCIA" | "PREVENTIVO" | "ENDODONCIA" | ...
+  category    String // "ORTODONCIA" | "PREVENTIVO" | "ENDODONCIA" | ...
 
   /// Precio de lista en CENTAVOS. Ver nota (1) al inicio del archivo.
   basePriceCents Int
@@ -562,14 +562,14 @@ model Treatment {
   dentistOverrides DentistTreatment[]
   invoiceLines     InvoiceLine[]
 
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime           @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime?          @db.Timestamptz(3)
+  /// Veces que se ha añadido a una cita ya existente.
+  addons    AppointmentAddon[]
 
   @@index([category, isActive])
   @@map("treatments")
-  /// Veces que se ha añadido a una cita ya existente.
-  addons AppointmentAddon[]
 }
 
 /// Historial de precios. Cada cambio desde el panel de "Configuración de
@@ -580,8 +580,8 @@ model TreatmentPriceHistory {
   treatmentId String
   treatment   Treatment @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
 
-  oldPriceCents Int
-  newPriceCents Int
+  oldPriceCents   Int
+  newPriceCents   Int
   /// Quién lo cambió (id de User). Sin FK dura para no bloquear el borrado
   /// de usuarios; la trazabilidad completa vive en `AuditLog`.
   changedByUserId String?
@@ -603,7 +603,7 @@ model DentistTreatment {
   treatment   Treatment @relation(fields: [treatmentId], references: [id], onDelete: Cascade)
 
   /// Si es null, se usa `Treatment.basePriceCents`.
-  customPriceCents Int?
+  customPriceCents        Int?
   /// Si es null, se usa `Dentist.clinicCommissionPercent`.
   customCommissionPercent Int?
 
@@ -669,7 +669,7 @@ model Appointment {
   /// precio mañana, esta cita mantiene el que se le prometió al paciente.
   agreedPriceCents Int
 
-  notes           String?
+  notes              String?
   cancellationReason String?
 
   /// Idempotencia: n8n reintenta ante timeouts de red. Si el bot manda dos
@@ -682,19 +682,19 @@ model Appointment {
   payments Payment[]
   invoices Invoice[]
 
-  createdAt DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
-  deletedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime           @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime           @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime?          @db.Timestamptz(3)
+  /// Procedimientos añadidos sobre la marcha durante la consulta.
+  addons    AppointmentAddon[]
 
   /// Índices orientados a las consultas reales del sistema:
   @@index([dentistId, startsAt]) // agenda de un odontólogo
-  @@index([roomId, startsAt])    // ocupación de un consultorio
+  @@index([roomId, startsAt]) // ocupación de un consultorio
   @@index([patientId, startsAt]) // historial del paciente
-  @@index([status, startsAt])    // "citas de hoy pendientes"
-  @@index([startsAt])            // rango del dashboard financiero
+  @@index([status, startsAt]) // "citas de hoy pendientes"
+  @@index([startsAt]) // rango del dashboard financiero
   @@map("appointments")
-  /// Procedimientos añadidos sobre la marcha durante la consulta.
-  addons AppointmentAddon[]
 }
 
 // ===========================================================================
@@ -804,7 +804,7 @@ model InvoiceLine {
   treatment   Treatment? @relation(fields: [treatmentId], references: [id])
 
   description    String
-  quantity       Int @default(1)
+  quantity       Int    @default(1)
   unitPriceCents Int
 
   /// Descuento de ESTA línea, marcado a mano por recepción.
@@ -812,7 +812,7 @@ model InvoiceLine {
   /// Cubre el «si haces esto, esto va gratis»: no es gratis de verdad —lo
   /// otro sube— así que se guarda el precio real Y lo que se rebajó. Poner la
   /// línea a $0 perdería para siempre cuánto se regaló.
-  discountCents  Int @default(0)
+  discountCents  Int     @default(0)
   /// Por qué se rebajó. Sin esto, a fin de mes nadie sabe qué se regaló.
   discountReason String?
 
@@ -851,23 +851,23 @@ model Payment {
   // --- Snapshot cambiario ------------------------------------------------
   /// Tasa Bs/USD aplicada en ESTE cobro. Se congela: si mañana el BCV
   /// publica otra, este pago conserva la que se usó realmente.
-  exchangeRate Decimal @db.Decimal(18, 4)
+  exchangeRate       Decimal @db.Decimal(18, 4)
   /// Monto equivalente en bolívares al momento del cobro. Se guarda además
   /// de calcularse porque el redondeo a Bs es el importe que de verdad
   /// entró en caja, y recalcularlo después daría un número distinto.
-  amountBs Decimal @db.Decimal(18, 2)
+  amountBs           Decimal @db.Decimal(18, 2)
   /// Fuente de la tasa: "BCV" o "PARALELO".
-  exchangeRateSource String @default("BCV")
+  exchangeRateSource String  @default("BCV")
 
   // --- Snapshot del reparto (ver nota 4 al inicio) -------------------------
   /// Porcentaje aplicado en ESTE pago. Copiado del odontólogo al cobrar.
   commissionPercentApplied Int
   /// Parte de la clínica, en centavos. Calculado en el servidor.
-  clinicShareCents  Int
+  clinicShareCents         Int
   /// Parte del odontólogo, en centavos.
   /// INVARIANTE: clinicShareCents + dentistShareCents == amountCents.
   /// Garantizado por `splitCents()` y por un CHECK constraint en SQL.
-  dentistShareCents Int
+  dentistShareCents        Int
 
   method PaymentMethod
 
@@ -963,6 +963,19 @@ model WhatsAppConversation {
   aiToggledAt       DateTime? @db.Timestamptz(3)
   aiDisabledReason  String?
 
+  /// A partir de cuándo el bot puede volver solo.
+  ///
+  /// Se rellena cuando la IA se apaga SOLA —porque un agente escribió o
+  /// porque el bot escaló el chat—, nunca cuando alguien la apaga a mano
+  /// desde el panel: esa es una decisión humana y se respeta hasta que otra
+  /// persona la deshaga.
+  ///
+  /// Existe porque en la práctica nadie vuelve a encenderla: el chat se
+  /// atiende, se cierra y el bot se queda mudo para siempre en ese número.
+  /// La reactivación se resuelve cuando el paciente vuelve a escribir, sin
+  /// tarea programada de por medio.
+  aiAutoResumeAt DateTime? @db.Timestamptz(3)
+
   /// Contador de mensajes sin responder por un humano: alimenta el badge
   /// "requiere atención" del monitor.
   unreadCount Int @default(0)
@@ -979,6 +992,8 @@ model WhatsAppConversation {
 
   /// Orden natural del monitor: lo más reciente arriba.
   @@index([lastMessageAt(sort: Desc)])
+  /// Se consulta en cada mensaje entrante para saber si el bot ya puede volver.
+  @@index([aiAutoResumeAt])
   @@index([needsHumanAttention, lastMessageAt])
   @@index([aiEnabled])
   @@map("whatsapp_conversations")
@@ -1033,7 +1048,6 @@ model WhatsAppMessage {
   @@map("whatsapp_messages")
 }
 
-
 // ===========================================================================
 //  TIPO DE CAMBIO
 // ===========================================================================
@@ -1086,7 +1100,7 @@ model ClinicSettings {
   id String @id @default("singleton")
 
   /// Datos que aparecen en informes y comprobantes.
-  clinicName String @default("Dental Coworking")
+  clinicName String  @default("Dental Coworking")
   taxId      String? // RIF
   address    String?
   phone      String?
@@ -1097,7 +1111,7 @@ model ClinicSettings {
   defaultCommissionPercent Int @default(40)
 
   /// Jornada, en minutos desde medianoche (hora local de la clínica).
-  openingMinute Int @default(480)  // 08:00
+  openingMinute Int @default(480) // 08:00
   closingMinute Int @default(1080) // 18:00
 
   /// Granularidad de la agenda en minutos.
@@ -1108,6 +1122,14 @@ model ClinicSettings {
 
   /// Fuente de tasa preferida para convertir a bolívares.
   preferredRateSource String @default("BCV")
+
+  /// Horas de silencio tras las que el bot vuelve solo a un chat que se
+  /// apagó automáticamente. `0` desactiva el regreso automático.
+  ///
+  /// Cuatro horas por defecto: lo bastante para que nadie se lo encuentre
+  /// contestando encima mientras atiende, y lo bastante poco para que el
+  /// paciente que escribe al día siguiente reciba respuesta.
+  aiAutoResumeHours Int @default(4)
 
   updatedAt       DateTime @updatedAt @db.Timestamptz(3)
   updatedByUserId String?
@@ -1139,7 +1161,7 @@ model CashClosing {
   businessDate String @db.VarChar(10)
 
   closedByUserId String
-  closedBy       User   @relation(fields: [closedByUserId], references: [id])
+  closedBy       User     @relation(fields: [closedByUserId], references: [id])
   closedAt       DateTime @default(now()) @db.Timestamptz(3)
 
   /// Totales según los cobros registrados en ese día.
@@ -1214,8 +1236,6 @@ model PaymentMethodOption {
   @@map("payment_method_options")
 }
 
-
-
 /// ===========================================================================
 ///  SOLICITUD DE CAMBIO DE HORARIO
 /// ===========================================================================
@@ -1237,7 +1257,6 @@ model ScheduleChangeRequest {
 
   /**
    * Lunes de la SEMANA a la que aplica el cambio.
-   *
    * El cambio es de esa semana y sólo de esa: pasada, se vuelve solo al
    * horario base. Antes se sustituía el base, así que un ajuste puntual
    * quedaba para siempre y había que acordarse de deshacerlo.
@@ -1247,7 +1266,6 @@ model ScheduleChangeRequest {
   /**
    * Horario propuesto: un array de bloques
    * `[{ "weekday": 1, "startMinute": 540, "endMinute": 1080 }, ...]`.
-   *
    * Va como JSON y no como filas porque se aprueba o se rechaza ENTERO. Con
    * filas sueltas, una aprobación parcial dejaría al odontólogo con una
    * semana que él nunca propuso.

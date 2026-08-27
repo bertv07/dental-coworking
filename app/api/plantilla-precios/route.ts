@@ -36,6 +36,10 @@ export async function GET() {
     { header: 'Precio', key: 'price', width: 12 },
     { header: 'Duración', key: 'duration', width: 11 },
     { header: 'Buffer', key: 'buffer', width: 10 },
+    // La descripción viaja en la plantilla porque es lo que lee el bot para
+    // cotizar: si se quedara fuera, bajar el archivo y volver a subirlo
+    // borraría de un golpe todo lo que explica cada precio.
+    { header: 'Descripción', key: 'description', width: 74 },
   ];
 
   hoja.getRow(1).font = { bold: true };
@@ -53,6 +57,7 @@ export async function GET() {
       price: t.basePriceCents / 100,
       duration: t.durationMinutes,
       buffer: t.bufferMinutes,
+      description: t.description ?? '',
     });
   }
 

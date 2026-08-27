@@ -160,7 +160,7 @@ export function PriceImport() {
         <div style={{ marginTop: '1.5rem' }}>
           <div className="row row--wrap" style={{ gap: '0.5rem', marginBottom: '0.75rem' }}>
             <Badge tone="success">{vista.resumen.nuevos} nuevos</Badge>
-            <Badge tone="warning">{vista.resumen.actualizan} cambian de precio</Badge>
+            <Badge tone="warning">{vista.resumen.actualizan} cambian</Badge>
             <Badge tone="neutral">{vista.resumen.sinCambio} igual</Badge>
             {vista.resumen.errores > 0 && (
               <Badge tone="danger">{vista.resumen.errores} con error</Badge>
@@ -201,6 +201,11 @@ export function PriceImport() {
                           {f.error}
                         </div>
                       )}
+                      {f.tambienCambia && (
+                        <div className="text-xs subtle">
+                          También cambia {f.tambienCambia.join(', ')}
+                        </div>
+                      )}
                     </td>
                     <td className="table__num mono" data-label="Precio">
                       {f.estado === 'ERROR' ? (
@@ -212,14 +217,19 @@ export function PriceImport() {
                             comparación que hace que un «$30 → $300» salte a la
                             vista antes de aplicarlo.
                           */}
-                          {f.estado === 'ACTUALIZA' && f.precioActualCents !== undefined && (
-                            <span
-                              className="subtle"
-                              style={{ textDecoration: 'line-through', marginRight: '0.4rem' }}
-                            >
-                              {formatCents(f.precioActualCents)}
-                            </span>
-                          )}
+                          {/* El precio anterior sólo si de verdad cambia: una
+                              fila que sólo corrige el nombre enseñaría el
+                              mismo importe tachado a su propio lado. */}
+                          {f.estado === 'ACTUALIZA' &&
+                            f.precioActualCents !== undefined &&
+                            f.precioActualCents !== f.priceCents && (
+                              <span
+                                className="subtle"
+                                style={{ textDecoration: 'line-through', marginRight: '0.4rem' }}
+                              >
+                                {formatCents(f.precioActualCents)}
+                              </span>
+                            )}
                           <strong>{formatCents(f.priceCents)}</strong>
                         </>
                       )}

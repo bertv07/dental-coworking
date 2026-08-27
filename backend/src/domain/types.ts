@@ -202,6 +202,11 @@ export interface WhatsAppConversation {
   aiToggledByUserId: string | null;
   aiToggledAt: Date | null;
   aiDisabledReason: string | null;
+  /**
+   * Cuándo vuelve el bot solo. `null` = no vuelve hasta que lo encienda
+   * alguien, porque lo apagó una persona a propósito.
+   */
+  aiAutoResumeAt: Date | null;
   unreadCount: number;
   needsHumanAttention: boolean;
   lastMessageAt: Date | null;

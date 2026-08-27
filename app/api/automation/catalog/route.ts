@@ -148,7 +148,19 @@ export async function POST(request: NextRequest) {
         // "Limpieza" a "Profilaxis" en el panel no rompe el flujo de n8n.
         code: treatment.code,
         name: treatment.name,
+        /*
+         * La descripción es lo que permite cotizar bien una combinación.
+         * «Base cavitaria — caries pequeña con base» no dice de qué se
+         * compone; la descripción sí: «caries pequeña ($35) más base ($10)».
+         * Sin ella el bot sólo puede repetir el total.
+         */
         description: treatment.description,
+        /*
+         * La categoría agrupa la lista igual que en la hoja de la clínica
+         * (endodoncia, cirugía, operatoria…). Con ella el bot puede responder
+         * «¿cuánto cuesta una endodoncia?» sin adivinar por el nombre.
+         */
+        category: treatment.category,
         durationMinutes: treatment.durationMinutes,
         priceCents: treatment.basePriceCents,
         priceUsd: treatment.basePriceCents / 100,

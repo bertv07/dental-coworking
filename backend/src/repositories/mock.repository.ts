@@ -204,6 +204,7 @@ const mockSettings = {
   slotMinutes: 30,
   displayCurrency: 'USD',
   preferredRateSource: 'BCV',
+  aiAutoResumeHours: 4,
   updatedAt: new Date(),
 };
 
@@ -916,7 +917,6 @@ export const mockRepository: DataRepository = {
       } else {
         treatments.push({
           id: newId('trmt'),
-          description: null,
           isPriceVariable: false,
           clinicKeepsAll: false,
           isActive: true,
@@ -1324,6 +1324,7 @@ export const mockRepository: DataRepository = {
         aiToggledByUserId: null,
         aiToggledAt: null,
         aiDisabledReason: null,
+        aiAutoResumeAt: null,
         unreadCount: 0,
         needsHumanAttention: false,
         lastMessageAt: null,
@@ -1352,6 +1353,7 @@ export const mockRepository: DataRepository = {
       phoneE164: conversation.phoneE164,
       aiEnabled: conversation.aiEnabled,
       aiDisabledReason: conversation.aiDisabledReason,
+      aiAutoResumeAt: conversation.aiAutoResumeAt,
       needsHumanAttention: conversation.needsHumanAttention,
       patientId: patient?.id ?? null,
       patientName: patient?.fullName ?? conversation.displayName,

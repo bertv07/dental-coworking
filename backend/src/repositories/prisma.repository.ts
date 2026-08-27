@@ -270,6 +270,24 @@ function resolveContact(
   return { role: 'UNKNOWN', name: null, dentistId: null };
 }
 
+/**
+ * Cuándo puede volver el bot a un chat que se acaba de apagar SOLO.
+ *
+ * Devuelve `null` si la clínica desactivó el regreso automático
+ * (`aiAutoResumeHours = 0`): entonces el chat se queda con la IA apagada
+ * hasta que una persona la encienda, que es como funcionaba antes.
+ */
+async function calcularRegresoDelBot(desde: Date): Promise<Date | null> {
+  const settings = await prisma.clinicSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { aiAutoResumeHours: true },
+  });
+
+  const horas = settings?.aiAutoResumeHours ?? 4;
+  if (horas <= 0) return null;
+  return new Date(desde.getTime() + horas * 60 * 60 * 1000);
+}
+
 export const prismaRepository: DataRepository = {
   // --- Autenticación -------------------------------------------------------
 
@@ -1948,6 +1966,8 @@ export const prismaRepository: DataRepository = {
           await tx.treatment.findMany({
             where: { code: { in: filas.map((f) => f.code) } },
             select: { id: true, code: true, basePriceCents: true },
+            // (nombre, categoría y descripción se comparan en la vista
+            // previa; aquí sólo hace falta el precio para el historial)
           })
         ).map((t) => [t.code, t]),
       );
@@ -1963,6 +1983,7 @@ export const prismaRepository: DataRepository = {
           update: {
             name: fila.name,
             category: fila.category,
+            description: fila.description,
             basePriceCents: fila.basePriceCents,
             durationMinutes: fila.durationMinutes,
             bufferMinutes: fila.bufferMinutes,
@@ -3100,6 +3121,7 @@ export const prismaRepository: DataRepository = {
         aiToggledByUserId: conversation.aiToggledByUserId,
         aiToggledAt: conversation.aiToggledAt,
         aiDisabledReason: conversation.aiDisabledReason,
+        aiAutoResumeAt: conversation.aiAutoResumeAt,
         unreadCount: conversation.unreadCount,
         needsHumanAttention: conversation.needsHumanAttention,
         lastMessageAt: conversation.lastMessageAt,
@@ -3122,10 +3144,14 @@ export const prismaRepository: DataRepository = {
 
   async createOutboundMessage({ conversationId, body, userId }) {
     try {
+      // Se calcula ANTES de la transacción: es una lectura de configuración
+      // que no debe alargar el bloqueo sobre la conversación.
+      const regreso = await calcularRegresoDelBot(new Date());
+
       const result = await prisma.$transaction(async (tx) => {
         const conversation = await tx.whatsAppConversation.findUnique({
           where: { id: conversationId },
-          select: { id: true, phoneE164: true, aiEnabled: true },
+          select: { id: true, phoneE164: true, aiEnabled: true, aiAutoResumeAt: true },
         });
         if (!conversation) return null;
 
@@ -3167,6 +3193,21 @@ export const prismaRepository: DataRepository = {
                   aiDisabledReason: 'Un agente tomó la conversación',
                 }
               : {}),
+            /*
+             * Y cuándo vuelve solo.
+             *
+             * Se refresca en CADA mensaje del agente, no sólo en el primero:
+             * así la cuenta atrás corre desde la última vez que habló un
+             * humano y el bot no se mete en mitad de una conversación que
+             * alguien sigue atendiendo.
+             *
+             * Sólo aplica a los chats que se apagaron solos: si `aiEnabled`
+             * ya era false por decisión de una persona, ese chat no tiene
+             * fecha de regreso y aquí tampoco se le pone.
+             */
+            ...(conversation.aiEnabled || conversation.aiAutoResumeAt
+              ? { aiAutoResumeAt: regreso }
+              : {}),
           },
         });
 
@@ -3195,6 +3236,14 @@ export const prismaRepository: DataRepository = {
         aiToggledByUserId: userId,
         aiToggledAt: new Date(),
         aiDisabledReason: aiEnabled ? null : reason,
+        /*
+         * Decisión humana: sin fecha de regreso, en los dos sentidos.
+         *
+         * Si una persona APAGA la IA a mano, el bot no debe reaparecer solo
+         * cuatro horas después contradiciendo lo que decidió. Y si la
+         * ENCIENDE, la cuenta atrás que hubiera sobra.
+         */
+        aiAutoResumeAt: null,
         // Al reactivar la IA se limpia la marca de escalamiento.
         ...(aiEnabled ? { needsHumanAttention: false } : {}),
       },
@@ -3214,6 +3263,7 @@ export const prismaRepository: DataRepository = {
       aiToggledByUserId: updated.aiToggledByUserId,
       aiToggledAt: updated.aiToggledAt,
       aiDisabledReason: updated.aiDisabledReason,
+      aiAutoResumeAt: updated.aiAutoResumeAt,
       unreadCount: updated.unreadCount,
       needsHumanAttention: updated.needsHumanAttention,
       lastMessageAt: updated.lastMessageAt,
@@ -3256,11 +3306,85 @@ export const prismaRepository: DataRepository = {
     });
 
     if (existing) {
+      /*
+       * ---------------------------------------------------------------
+       *  AQUÍ VUELVE EL BOT
+       * ---------------------------------------------------------------
+       *  Esta función es lo primero que consulta la automatización con cada
+       *  mensaje entrante, así que es el sitio natural para resolverlo: si
+       *  el chat lleva callado el tiempo acordado, la IA se enciende en ese
+       *  mismo instante y el mensaje que acaba de llegar ya se atiende.
+       *
+       *  Se hace aquí y no con una tarea programada a propósito: una tarea
+       *  cada cinco minutos encendería chats que nadie va a mirar, y habría
+       *  que montarla y vigilarla. Esto no necesita infraestructura y ocurre
+       *  justo cuando importa — cuando el paciente vuelve a escribir.
+       */
+      const ahora = new Date();
+      if (
+        !existing.aiEnabled &&
+        existing.aiAutoResumeAt !== null &&
+        existing.aiAutoResumeAt <= ahora
+      ) {
+        const [reactivada] = await prisma.$transaction([
+          prisma.whatsAppConversation.update({
+            where: { id: existing.id },
+            data: {
+              aiEnabled: true,
+              aiAutoResumeAt: null,
+              aiDisabledReason: null,
+              aiToggledAt: ahora,
+              // Nadie la encendió: la encendió el propio silencio del chat.
+              aiToggledByUserId: null,
+              needsHumanAttention: false,
+            },
+            include: { patient: { select: { id: true, fullName: true } } },
+          }),
+          prisma.auditLog.create({
+            data: {
+              userId: null,
+              action: 'whatsapp.ai_auto_resumed',
+              entityType: 'WhatsAppConversation',
+              entityId: existing.id,
+              before: {
+                aiEnabled: false,
+                aiDisabledReason: existing.aiDisabledReason,
+              },
+              after: {
+                aiEnabled: true,
+                motivo: 'El chat quedó en silencio el tiempo configurado',
+              },
+            },
+          }),
+        ]);
+
+        return {
+          conversationId: reactivada.id,
+          phoneE164: reactivada.phoneE164,
+          aiEnabled: true,
+          aiDisabledReason: null,
+          aiAutoResumeAt: null,
+          needsHumanAttention: false,
+          patientId: reactivada.patient?.id ?? null,
+          patientName: reactivada.patient?.fullName ?? reactivada.displayName,
+          isNewConversation: false,
+          contact: {
+            ...contact,
+            role:
+              contact.role === 'UNKNOWN' && reactivada.patient
+                ? ('PATIENT' as const)
+                : contact.role,
+            name: contact.name ?? reactivada.patient?.fullName ?? reactivada.displayName,
+          },
+        };
+      }
+
       return {
         conversationId: existing.id,
         phoneE164: existing.phoneE164,
         aiEnabled: existing.aiEnabled,
         aiDisabledReason: existing.aiDisabledReason,
+        aiAutoResumeAt: existing.aiAutoResumeAt,
         needsHumanAttention: existing.needsHumanAttention,
         patientId: existing.patient?.id ?? null,
         patientName: existing.patient?.fullName ?? existing.displayName,
@@ -3296,6 +3420,7 @@ export const prismaRepository: DataRepository = {
       phoneE164: created.phoneE164,
       aiEnabled: created.aiEnabled,
       aiDisabledReason: created.aiDisabledReason,
+      aiAutoResumeAt: created.aiAutoResumeAt,
       needsHumanAttention: created.needsHumanAttention,
       patientId: patient?.id ?? null,
       patientName: patient?.fullName ?? created.displayName,
@@ -3367,6 +3492,8 @@ export const prismaRepository: DataRepository = {
     });
     if (!conversation) return null;
 
+    const regreso = await calcularRegresoDelBot(new Date());
+
     const updated = await prisma.whatsAppConversation.update({
       where: { id: conversation.id },
       data: {
@@ -3379,6 +3506,10 @@ export const prismaRepository: DataRepository = {
         // `aiToggledByUserId` queda en null: no lo apagó una persona.
         aiToggledByUserId: null,
         needsHumanAttention: true,
+        // Tampoco lo apagó una persona aquí, así que también vuelve solo. Si
+        // nadie atiende el escalamiento, el bot retoma el chat en vez de
+        // dejar al paciente hablando con una pared.
+        aiAutoResumeAt: regreso,
       },
       select: { id: true, aiEnabled: true },
     });

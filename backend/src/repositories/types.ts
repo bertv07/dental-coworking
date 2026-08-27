@@ -211,6 +211,11 @@ export interface ClinicSettingsInput {
   slotMinutes: number;
   displayCurrency: string;
   preferredRateSource: string;
+  /**
+   * Horas de silencio tras las que el bot vuelve solo a un chat que se apagó
+   * automáticamente. `0` desactiva el regreso automático.
+   */
+  aiAutoResumeHours: number;
 }
 
 export interface ClinicSettings extends ClinicSettingsInput {
@@ -644,6 +649,8 @@ export interface DataRepository {
       code: string;
       name: string;
       category: string;
+      /** Lo que incluye o de qué se compone el precio. Lo lee el bot. */
+      description: string | null;
       basePriceCents: number;
       durationMinutes: number;
       bufferMinutes: number;
@@ -910,6 +917,8 @@ export interface DataRepository {
     phoneE164: string;
     aiEnabled: boolean;
     aiDisabledReason: string | null;
+    /** Cuándo vuelve el bot solo, o `null` si no vuelve sin intervención. */
+    aiAutoResumeAt: Date | null;
     needsHumanAttention: boolean;
     patientId: string | null;
     patientName: string | null;

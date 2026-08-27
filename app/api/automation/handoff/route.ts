@@ -39,9 +39,16 @@ import {
  *   · Reclamo, queja o discusión sobre un cobro.
  *   · El modelo no entiende tras dos intentos.
  *
- *  Reactivar la IA es una decisión HUMANA, desde el panel. El bot no puede
- *  volver a encenderse solo: si pudiera, se reactivaría en mitad de la
- *  conversación que un agente está atendiendo.
+ *  ---------------------------------------------------------------------
+ *  CÓMO VUELVE LA IA
+ *  ---------------------------------------------------------------------
+ *  De dos maneras: alguien la enciende en el panel, o vuelve sola tras unas
+ *  horas de silencio (`aiAutoResumeAt`, configurable; 4 h por defecto).
+ *
+ *  El silencio es la condición que lo hace seguro: mientras el agente esté
+ *  escribiendo, la cuenta atrás se reinicia con cada mensaje suyo, así que el
+ *  bot no puede reaparecer en mitad de una conversación atendida. Y si nadie
+ *  llega a atender el escalamiento, el paciente deja de hablarle a una pared.
  *
  *  ---------------------------------------------------------------------
  *  CUERPO

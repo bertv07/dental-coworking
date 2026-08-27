@@ -31,6 +31,7 @@ interface SettingsFormProps {
     slotMinutes: number;
     displayCurrency: string;
     preferredRateSource: string;
+    aiAutoResumeHours: number;
   };
 }
 
@@ -193,6 +194,31 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         <Notice tone="info">
           Cambiar la fuente de tasa NO altera los cobros ya registrados: cada pago guarda la
           tasa que se le aplicó.
+        </Notice>
+      </Card>
+
+      <Card
+        title="Bot de WhatsApp"
+        subtitle="Cuándo vuelve a responder solo después de que lo atienda una persona"
+      >
+        <div className="form-grid">
+          <TextField
+            label="Horas hasta que el bot vuelva"
+            name="aiAutoResumeHours"
+            type="number"
+            min={0}
+            max={168}
+            defaultValue={String(settings.aiAutoResumeHours)}
+            hint="0 = no vuelve solo nunca"
+          />
+        </div>
+
+        <Notice tone="info">
+          Cuando recepción escribe en un chat, el bot se calla para no contestar por
+          encima. Pasadas estas horas <strong>sin un solo mensaje</strong>, vuelve a
+          atender ese número solo. Si alguien apaga la IA a mano desde el chat, ese
+          chat NO vuelve solo: esa decisión se respeta hasta que la deshaga una
+          persona.
         </Notice>
       </Card>
 

@@ -80,7 +80,15 @@ export async function previewPriceImportAction(formData: FormData): Promise<Prev
   try {
     // El catálogo actual, para poder decir «esta sube de $30 a $45».
     const existentes = (await repository.listTreatments({ includeInactive: true })).map(
-      (t) => ({ code: t.code, basePriceCents: t.basePriceCents }),
+      (t) => ({
+        code: t.code,
+        basePriceCents: t.basePriceCents,
+        name: t.name,
+        category: t.category,
+        description: t.description,
+        durationMinutes: t.durationMinutes,
+        bufferMinutes: t.bufferMinutes,
+      }),
     );
 
     const { filas, error } = await leerArchivoDePrecios(
@@ -162,6 +170,8 @@ export async function applyPriceImportAction(filas: unknown): Promise<ApplyResul
         code: f.code,
         name: f.name,
         category: f.category,
+        // Se recorta aquí: es texto libre que llega de un archivo.
+        description: f.description ? f.description.slice(0, 500) : null,
         basePriceCents: f.priceCents,
         durationMinutes: Math.min(Math.max(f.durationMinutes, 5), 480),
         bufferMinutes: Math.min(Math.max(f.bufferMinutes, 0), 120),

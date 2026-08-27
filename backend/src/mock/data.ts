@@ -663,6 +663,9 @@ function generateConversations(): {
       aiEnabled: script.aiEnabled,
       aiToggledByUserId: script.aiEnabled ? null : MOCK_USERS[0]!.id,
       aiToggledAt: script.aiEnabled ? null : addMinutes(lastMessageAt, -10),
+      // La demo no simula el regreso automático del bot: se ve mejor con los
+      // chats en el estado en que los dejó la persona.
+      aiAutoResumeAt: null,
       aiDisabledReason: script.disabledReason ?? null,
       unreadCount: script.needsHuman ? randomInt(1, 3) : 0,
       needsHumanAttention: script.needsHuman,

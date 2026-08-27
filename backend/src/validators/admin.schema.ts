@@ -643,6 +643,16 @@ export const clinicSettingsSchema = z
     displayCurrency: z.enum(['USD', 'VES']),
     /** Fuente de tasa para convertir a bolívares. */
     preferredRateSource: z.enum(['BCV', 'PARALELO']),
+
+    /**
+     * Horas de silencio tras las que el bot vuelve solo a un chat que se
+     * apagó automáticamente. `0` = no vuelve nunca solo.
+     *
+     * Tope de 168 (una semana): más allá, el chat está muerto y encender el
+     * bot ahí sólo serviría para contestar una conversación que ya nadie
+     * recuerda.
+     */
+    aiAutoResumeHours: z.coerce.number().int().min(0).max(168),
   })
   // Una jornada que cierra antes de abrir dejaría la agenda sin huecos y
   // el motivo sería invisible desde la UI.
