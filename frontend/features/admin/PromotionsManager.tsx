@@ -8,6 +8,7 @@ import {
   deletePromotionAction,
 } from '@/app/actions/promotion.actions';
 import { Badge, Card, EmptyState, Notice } from '@/frontend/components/ui/primitives';
+import { Modal } from '@/frontend/components/motion';
 
 /**
  * ===========================================================================
@@ -101,7 +102,7 @@ export function PromotionsManager({ promotions, treatments }: Props) {
           </button>
         }
       >
-        {error && <Notice tone="danger">{error}</Notice>}
+        {error && !abierto && <Notice tone="danger">{error}</Notice>}
 
         <Notice tone="info">
           Esto <strong>no descuenta solo</strong>. Sirve para que el bot pueda ofrecerla
@@ -195,8 +196,31 @@ export function PromotionsManager({ promotions, treatments }: Props) {
         )}
       </Card>
 
-      {abierto && (
-        <Card title={editando ? 'Editar promoción' : 'Nueva promoción'}>
+      {/* En modal: con la tabla llena, una tarjeta al final de la página se
+          abre fuera de la vista y parece que el botón no hace nada. */}
+      <Modal
+        open={abierto}
+        onClose={() => setAbierto(false)}
+        title={editando ? 'Editar promoción' : 'Nueva promoción'}
+        subtitle="Lo que se ofrece; el descuento se sigue marcando en cada factura"
+        footer={
+          <div className="row" style={{ gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn--ghost" onClick={() => setAbierto(false)}>
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              form="promo-form"
+              className="btn btn--primary"
+              disabled={isPending}
+            >
+              {isPending ? 'Guardando…' : 'Guardar'}
+            </button>
+          </div>
+        }
+      >
+          {error && <Notice tone="danger">{error}</Notice>}
+
           <form id="promo-form" action={guardar} className="form-grid">
             {editando && <input type="hidden" name="id" value={editando.id} />}
 
@@ -340,18 +364,6 @@ export function PromotionsManager({ promotions, treatments }: Props) {
               Activa (el bot la ofrece)
             </label>
 
-            <div className="row form-grid--full" style={{ gap: '0.5rem' }}>
-              <button type="submit" className="btn btn--primary" disabled={isPending}>
-                {isPending ? 'Guardando…' : 'Guardar'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={() => setAbierto(false)}
-              >
-                Cancelar
-              </button>
-            </div>
           </form>
 
           {/* Sugerencias de códigos reales: escribirlos de memoria es la vía
@@ -363,8 +375,7 @@ export function PromotionsManager({ promotions, treatments }: Props) {
               </option>
             ))}
           </datalist>
-        </Card>
-      )}
+      </Modal>
     </>
   );
 }

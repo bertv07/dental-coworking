@@ -9,6 +9,7 @@ import {
   resendStaffCredentialsAction,
 } from '@/app/actions/staff.actions';
 import { Badge, Card, EmptyState, Notice } from '@/frontend/components/ui/primitives';
+import { Modal } from '@/frontend/components/motion';
 
 /**
  * ===========================================================================
@@ -132,7 +133,9 @@ export function StaffUsersManager({ users, dentistsSinCuenta, currentUserId }: P
           </button>
         }
       >
-        {error && <Notice tone="danger">{error}</Notice>}
+        {/* Con el modal abierto, el error va DENTRO: aquí quedaría detrás
+            del velo y quien guarda no vería por qué no se guardó. */}
+        {error && !abierto && <Notice tone="danger">{error}</Notice>}
         {aviso && <Notice tone="info">{aviso}</Notice>}
 
         {users.length === 0 ? (
@@ -227,8 +230,34 @@ export function StaffUsersManager({ users, dentistsSinCuenta, currentUserId }: P
         )}
       </Card>
 
-      {abierto && (
-        <Card title={editando ? `Editar ${editando.fullName}` : 'Nueva cuenta'}>
+      {/*
+        En MODAL y no en una tarjeta debajo de la lista.
+        Estaba debajo, y con quince cuentas en la tabla el formulario nacía a
+        mil píxeles de la vista: pulsabas «Nueva cuenta» y no pasaba nada.
+      */}
+      <Modal
+        open={abierto}
+        onClose={() => setAbierto(false)}
+        title={editando ? `Editar ${editando.fullName}` : 'Nueva cuenta'}
+        subtitle="La contraseña la genera el sistema y se envía por correo"
+        footer={
+          <div className="row" style={{ gap: '0.5rem', justifyContent: 'flex-end' }}>
+            <button type="button" className="btn btn--ghost" onClick={() => setAbierto(false)}>
+              Cancelar
+            </button>
+            <button
+              type="submit"
+              form="staff-form"
+              className="btn btn--primary"
+              disabled={isPending}
+            >
+              {isPending ? 'Guardando…' : editando ? 'Guardar' : 'Crear y enviar la clave'}
+            </button>
+          </div>
+        }
+      >
+          {error && <Notice tone="danger">{error}</Notice>}
+
           <Notice tone="info">
             La contraseña <strong>la genera el sistema</strong> y se envía por correo. No
             se escribe aquí ni se muestra en ninguna pantalla. Quien la reciba está
@@ -332,21 +361,8 @@ export function StaffUsersManager({ users, dentistsSinCuenta, currentUserId }: P
               </label>
             )}
 
-            <div className="row form-grid--full" style={{ gap: '0.5rem' }}>
-              <button type="submit" className="btn btn--primary" disabled={isPending}>
-                {isPending ? 'Guardando…' : editando ? 'Guardar' : 'Crear y enviar la clave'}
-              </button>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={() => setAbierto(false)}
-              >
-                Cancelar
-              </button>
-            </div>
           </form>
-        </Card>
-      )}
+      </Modal>
     </>
   );
 }

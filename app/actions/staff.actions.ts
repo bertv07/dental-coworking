@@ -112,12 +112,17 @@ function leer(formData: FormData) {
   });
 }
 
-/** El aviso cuando la cuenta se creó pero el correo no salió. */
-function avisoDeCorreo(delivery: { status: string; reason?: string }, quien: string) {
+/**
+ * El aviso cuando la operación salió bien pero el correo no.
+ *
+ * `hecho` es la frase ya conjugada —«La cuenta quedó creada»— y no un sujeto
+ * suelto: al construirlo con un verbo fijo salía «La cuenta quedó creado».
+ */
+function avisoDeCorreo(delivery: { status: string; reason?: string }, hecho: string) {
   if (delivery.status === 'SENT') return undefined;
   return delivery.status === 'PENDING'
-    ? `${quien} quedó creado, pero el envío de correo no está configurado (STAFF_EMAIL_WEBHOOK_URL). Tendrás que restablecerle la clave para que pueda entrar.`
-    : `${quien} quedó creado, pero el correo no se pudo enviar (${delivery.reason}). Restablécele la clave cuando el correo funcione.`;
+    ? `${hecho}, pero el envío de correo no está configurado (STAFF_EMAIL_WEBHOOK_URL). Tendrás que usar «Clave nueva» cuando lo configures para que pueda entrar.`
+    : `${hecho}, pero el correo no se pudo enviar (${delivery.reason}). Usa «Clave nueva» cuando el correo funcione.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +189,11 @@ export async function createStaffUserAction(formData: FormData): Promise<StaffRe
     });
 
     revalidatePath('/usuarios');
-    return { ok: true, id: result.data.id, warning: avisoDeCorreo(delivery, 'La cuenta') };
+    return {
+      ok: true,
+      id: result.data.id,
+      warning: avisoDeCorreo(delivery, 'La cuenta quedó creada'),
+    };
   } catch (error) {
     console.error(
       JSON.stringify({
@@ -352,7 +361,7 @@ export async function resendStaffCredentialsAction(id: unknown): Promise<StaffRe
     if (delivery.status !== 'SENT') {
       return {
         ok: true,
-        warning: avisoDeCorreo(delivery, 'La clave se cambió, pero el correo no salió. La cuenta'),
+        warning: avisoDeCorreo(delivery, 'La clave se cambió'),
       };
     }
 
