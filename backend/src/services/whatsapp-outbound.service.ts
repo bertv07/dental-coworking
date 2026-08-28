@@ -57,6 +57,8 @@ export async function deliverMessage(params: {
   body: string;
   conversationId: string;
   messageId: string;
+  /** El archivo que acompaña al mensaje, si lo lleva. */
+  media?: { mediaId: string; mimeType: string; filename: string } | null;
 }): Promise<DeliveryOutcome> {
   const webhookUrl = process.env.WHATSAPP_OUTBOUND_WEBHOOK_URL;
 
@@ -74,6 +76,25 @@ export async function deliverMessage(params: {
     messageId: params.messageId,
     to: params.phoneE164,
     body: params.body,
+    /*
+     * El adjunto va por REFERENCIA, no por valor.
+     *
+     * n8n pide el archivo con `POST /api/automation/media` —firmado con este
+     * mismo HMAC—, lo sube a la Media API de Meta y manda el mensaje por
+     * `media_id`. Mandarlo aquí en base64 lo inflaría un 33 % y dejaría
+     * radiografías de pacientes en el historial de ejecuciones de n8n.
+     *
+     * Van los dos identificadores porque el endpoint acepta cualquiera: así
+     * el flujo no tiene que arrastrar el que no usa.
+     */
+    media: params.media
+      ? {
+          mediaId: params.media.mediaId,
+          messageId: params.messageId,
+          mimeType: params.media.mimeType,
+          filename: params.media.filename,
+        }
+      : null,
   });
 
   // Misma firma HMAC que los endpoints entrantes: n8n ya sabe verificarla,

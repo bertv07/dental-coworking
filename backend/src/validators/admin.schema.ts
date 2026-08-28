@@ -107,6 +107,21 @@ export const dentistFormSchema = z.object({
    */
   clinicCommissionPercent: percentSchema,
 
+  /**
+   * Fecha de nacimiento. Opcional y vacía por defecto.
+   *
+   * Un `<input type="date">` manda cadena vacía cuando no se rellena, y eso
+   * no es una fecha inválida: es «no lo sé». Se convierte a `null` en vez de
+   * romper el alta por un dato que a nadie le hace falta para trabajar.
+   */
+  birthDate: z
+    .string()
+    .trim()
+    .max(10)
+    .optional()
+    .transform((v) => (v ? new Date(`${v}T00:00:00Z`) : null))
+    .refine((d) => d === null || !Number.isNaN(d.getTime()), { message: 'Fecha inválida' }),
+
   isActive: z.coerce.boolean().default(true),
 
   /**
@@ -642,7 +657,7 @@ export const clinicSettingsSchema = z
     /** Moneda en la que se muestran los importes por defecto. */
     displayCurrency: z.enum(['USD', 'VES']),
     /** Fuente de tasa para convertir a bolívares. */
-    preferredRateSource: z.enum(['BCV', 'PARALELO']),
+    preferredRateSource: z.enum(['BCV', 'PARALELO', 'EURO']),
 
     /**
      * Horas de silencio tras las que el bot vuelve solo a un chat que se

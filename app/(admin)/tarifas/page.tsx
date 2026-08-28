@@ -5,6 +5,7 @@ import { FadeIn } from '@/frontend/components/motion';
 import { Card, Notice } from '@/frontend/components/ui/primitives';
 import { TariffsManager } from '@/frontend/features/admin/TariffsManager';
 import { TariffList } from '@/frontend/features/admin/TariffList';
+import { ListPricesPanel } from '@/frontend/features/admin/ListPricesPanel';
 
 /**
  * ===========================================================================
@@ -41,7 +42,22 @@ export default async function TariffsPage() {
 
   // --- Recepción: los precios aprobados, para poder cotizar ---------------
   if (user.role === 'ASSISTANT') {
-    const agreements = await repository.listDentistTreatments({ status: 'APPROVED' });
+    const [agreements, treatments] = await Promise.all([
+      repository.listDentistTreatments({ status: 'APPROVED' }),
+      repository.listTreatments(),
+    ]);
+
+    /*
+     * Cuántas odontólogas tienen precio propio para cada tratamiento.
+     *
+     * Se cuenta aquí para poder avisarlo en la tabla: cambiar el precio de
+     * lista de algo que cinco odontólogas cobran distinto no mueve lo que
+     * cobran ellas, y conviene verlo antes de tocarlo.
+     */
+    const pactadasPorTratamiento = agreements.reduce<Record<string, number>>((acc, a) => {
+      if (a.customPriceCents !== null) acc[a.treatmentId] = (acc[a.treatmentId] ?? 0) + 1;
+      return acc;
+    }, {});
 
     return (
       <div className="page-body">
@@ -60,6 +76,23 @@ export default async function TariffsPage() {
         </FadeIn>
 
         <FadeIn delay={0.1}>
+          {/*
+            Los precios de lista, editables aquí mismo. Es la otra mitad de la
+            misma pregunta: qué cuesta de base y qué cuesta con cada una.
+          */}
+          <ListPricesPanel
+            treatments={treatments.map((t) => ({
+              id: t.id,
+              code: t.code,
+              name: t.name,
+              category: t.category,
+              basePriceCents: t.basePriceCents,
+              pactadas: pactadasPorTratamiento[t.id] ?? 0,
+            }))}
+          />
+        </FadeIn>
+
+        <FadeIn delay={0.14}>
           <TariffList
             /*
              * Campo a campo, sin `customCommissionPercent`: el reparto no es
@@ -157,6 +190,23 @@ export default async function TariffsPage() {
       </FadeIn>
 
       <FadeIn delay={0.08}>
+        {/* Los precios de lista también aquí: el administrador aprueba
+            tarifas mirando contra qué se comparan. */}
+        <ListPricesPanel
+          treatments={treatments.map((t) => ({
+            id: t.id,
+            code: t.code,
+            name: t.name,
+            category: t.category,
+            basePriceCents: t.basePriceCents,
+            pactadas: agreements.filter(
+              (a) => a.treatmentId === t.id && a.customPriceCents !== null,
+            ).length,
+          }))}
+        />
+      </FadeIn>
+
+      <FadeIn delay={0.12}>
         <TariffsManager
           agreements={agreements}
           treatments={treatments}

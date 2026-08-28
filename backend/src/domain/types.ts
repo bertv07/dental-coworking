@@ -75,6 +75,8 @@ export interface Dentist {
   specialties: string[];
   /** Porcentaje que retiene la clínica (0-100). El resto va al odontólogo. */
   clinicCommissionPercent: number;
+  /** Sólo día y mes se usan: es para felicitar, no para calcular nada. */
+  birthDate: Date | null;
   isActive: boolean;
   createdAt: Date;
   deletedAt: Date | null;
@@ -221,6 +223,15 @@ export interface WhatsAppMessage {
   author: MessageAuthor;
   body: string;
   mediaUrl: string | null;
+  /** MIME del adjunto: decide si se pinta como foto, audio o enlace. */
+  mediaType: string | null;
+  /**
+   * Id del archivo guardado en el panel, cuando lo envió la clínica.
+   *
+   * Los que ENTRAN traen `mediaUrl` (una URL de WhatsApp); los que SALEN
+   * traen esto, y se piden a `/api/whatsapp/adjuntos/:id` con la sesión.
+   */
+  attachmentId: string | null;
   sentAt: Date;
   /** Sólo relevante en OUTBOUND: si el proveedor llegó a entregarlo. */
   deliveryStatus?: DeliveryStatus;
@@ -522,4 +533,63 @@ export interface ConversationListItem extends WhatsAppConversation {
   patientName: string | null;
   lastMessagePreview: string | null;
   lastMessageAuthor: MessageAuthor | null;
+}
+
+/**
+ * Lo mínimo para listar recetarios: sin `elements`, que puede ser grande.
+ *
+ * La lista de una odontóloga con seis recetarios traería seis hojas enteras
+ * de JSON para pintar seis nombres. Los elementos sólo se cargan al abrir uno.
+ */
+export interface PrescriptionTemplateSummary {
+  id: string;
+  dentistId: string | null;
+  dentistName: string | null;
+  name: string;
+  widthPx: number;
+  heightPx: number;
+  /** Cuántos elementos tiene, para poder decir «vacío» sin cargarlos. */
+  elementCount: number;
+  updatedAt: Date;
+}
+
+export interface PrescriptionTemplateFull extends PrescriptionTemplateSummary {
+  /** Sin tipar aquí a propósito: lo valida `prescriptionElementsSchema`. */
+  elements: unknown;
+}
+
+export type PromotionBenefit = 'FREE_TREATMENT' | 'PERCENT_OFF' | 'AMOUNT_OFF';
+
+export interface Promotion {
+  id: string;
+  name: string;
+  description: string | null;
+  /** Qué hay que hacerse para que aplique. Vacío = siempre. */
+  requiredTreatmentCodes: string[];
+  benefitKind: PromotionBenefit;
+  benefitTreatmentCode: string | null;
+  /** Porcentaje (1-100) o centavos, según `benefitKind`. */
+  benefitValue: number;
+  botPitch: string | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
+  isActive: boolean;
+}
+
+/** Una cuenta del panel, tal como la ve el administrador. */
+export interface StaffUser {
+  id: string;
+  email: string;
+  fullName: string;
+  role: UserRole;
+  status: 'ACTIVE' | 'SUSPENDED';
+  phoneE164: string | null;
+  birthDate: Date | null;
+  /** Si aún no ha cambiado la clave temporal que se le envió. */
+  mustChangePassword: boolean;
+  lastLoginAt: Date | null;
+  /** Ficha de odontólogo enlazada, si la tiene. */
+  dentistId: string | null;
+  dentistName: string | null;
+  createdAt: Date;
 }

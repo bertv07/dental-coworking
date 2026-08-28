@@ -36,6 +36,7 @@ import {
 } from '@/backend/services/staff-invite.service';
 import { clinicDayKey, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
 import { scheduleAppointment } from '@/backend/services/scheduling.service';
+import { resolveRateSource } from '@/backend/services/exchange-rate.service';
 
 /**
  * ===========================================================================
@@ -573,6 +574,72 @@ export async function updateTreatmentAction(
   });
 }
 
+/**
+ * Cambia SÓLO el precio de un tratamiento.
+ *
+ * Existe aparte de `updateTreatmentAction` porque se usa desde Tarifas, donde
+ * lo único que se toca es el importe. Obligar a mandar el formulario entero
+ * —código, categoría, duración, buffer— desde una tabla de precios haría que
+ * un campo que ni se muestra pudiera pisarse con un valor viejo.
+ *
+ * Lee el tratamiento actual y sólo le cambia el precio, así que el historial
+ * de precios y la auditoría se escriben igual que en la pantalla de siempre.
+ */
+export async function updateTreatmentPriceAction(input: {
+  id: string;
+  priceUsd: number;
+}): Promise<ActionResult> {
+  const authorization = await checkApiRole('ASSISTANT');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error:
+        authorization.status === 401
+          ? 'Tu sesión expiró. Vuelve a iniciar sesión.'
+          : 'No tienes permiso para cambiar precios.',
+    };
+  }
+
+  const parsed = z
+    .object({
+      id: cuidSchema,
+      // Mismo techo que el importador: por encima de eso casi siempre es un
+      // separador decimal mal puesto, no un precio.
+      priceUsd: z.coerce.number().min(0).max(100_000),
+    })
+    .safeParse(input);
+
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? 'Precio inválido' };
+  }
+
+  const actual = (await repository.listTreatments({ includeInactive: true })).find(
+    (t) => t.id === parsed.data.id,
+  );
+  if (!actual) return { ok: false, error: 'Ese tratamiento ya no existe.' };
+
+  const result = await repository.updateTreatment(
+    parsed.data.id,
+    {
+      name: actual.name,
+      code: actual.code,
+      category: actual.category,
+      basePriceCents: Math.round(parsed.data.priceUsd * 100),
+      durationMinutes: actual.durationMinutes,
+      bufferMinutes: actual.bufferMinutes,
+      isActive: actual.isActive,
+    },
+    authorization.user.id,
+  );
+
+  if (!result.ok) return { ok: false, error: 'No se pudo cambiar el precio.' };
+
+  // Las dos pantallas donde se ve, y el catálogo que lee el bot.
+  revalidatePath('/tratamientos');
+  revalidatePath('/tarifas');
+  return { ok: true };
+}
+
 export async function deleteTreatmentAction(id: string): Promise<ActionResult> {
   return runAction({
     minimumRole: 'ASSISTANT',
@@ -637,6 +704,109 @@ export async function createAppointmentAction(input: unknown): Promise<ActionRes
     auditAction: 'appointment.created_from_panel',
     handler: (data) => repository.createAppointmentFromPanel(data),
   });
+}
+
+/**
+ * Alta de una cita con VARIOS tratamientos.
+ *
+ * «A veces una persona se hace más de una cosa»: viene a una limpieza, se le
+ * ve una caries y se le hace también. La cita sigue teniendo un tratamiento
+ * principal —el que fija la duración y el hueco en la agenda— y el resto
+ * entran como procedimientos añadidos, que es como ya se cobraban.
+ *
+ * POR QUÉ NO SE MANDA EL PRECIO DE LOS EXTRAS
+ * Lo decide el servidor, tratamiento a tratamiento: precio pactado con esa
+ * odontóloga si lo hay, y si no el de lista. Si el precio viajara desde el
+ * navegador, se podría agendar una corona a un dólar.
+ *
+ * Si un extra falla, la cita YA está creada y se dice cuáles entraron. Es
+ * preferible a deshacer la cita entera: el hueco ya está apartado y el
+ * paciente delante.
+ */
+export async function createAppointmentWithExtrasAction(
+  input: unknown,
+): Promise<ActionResult> {
+  const authorization = await checkApiRole('ASSISTANT');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error:
+        authorization.status === 401
+          ? 'Tu sesión expiró. Vuelve a iniciar sesión.'
+          : 'No tienes permiso para agendar.',
+    };
+  }
+
+  const datos = (typeof input === 'object' && input !== null ? input : {}) as Record<
+    string,
+    unknown
+  >;
+
+  /*
+   * Llegan como texto separado por comas.
+   *
+   * El formulario los manda así porque `Object.fromEntries` —lo que usa el
+   * panel para armar el payload— se queda con la última de las claves
+   * repetidas, así que varios inputs con el mismo nombre perderían todos
+   * menos uno.
+   */
+  const extras = z
+    .array(cuidSchema)
+    .max(20, 'Demasiados tratamientos en una sola cita')
+    .safeParse(
+      typeof datos.extraTreatmentIds === 'string'
+        ? datos.extraTreatmentIds.split(',').map((x) => x.trim()).filter(Boolean)
+        : (datos.extraTreatmentIds ?? []),
+    );
+  if (!extras.success) {
+    return { ok: false, error: extras.error.issues[0]?.message ?? 'Tratamientos inválidos' };
+  }
+
+  const validation = appointmentFormSchema.safeParse(datos);
+  if (!validation.success) {
+    const issue = validation.error.issues[0];
+    return {
+      ok: false,
+      field: issue?.path[0] as string | undefined,
+      error: issue?.message ?? 'Datos inválidos',
+    };
+  }
+
+  const creada = await repository.createAppointmentFromPanel(validation.data);
+  if (!creada.ok) {
+    return {
+      ok: false,
+      // `createAppointmentFromPanel` no distingue el choque de horario: lo
+      // reporta como NOT_FOUND igual que un id que no existe.
+      error: 'No se pudo crear la cita. Revisa que el hueco siga libre.',
+    };
+  }
+
+  // Los extras, uno a uno y con el precio que decide el servidor.
+  const fallidos: string[] = [];
+  for (const treatmentId of extras.data) {
+    const añadido = await repository.addAppointmentAddon({
+      appointmentId: creada.data.id,
+      treatmentId,
+      priceCents: null,
+      notes: null,
+      userId: authorization.user.id,
+    });
+    if (!añadido.ok) fallidos.push(treatmentId);
+  }
+
+  revalidatePath('/agenda');
+
+  if (fallidos.length > 0) {
+    return {
+      ok: true,
+      warning:
+        `La cita quedó creada, pero ${fallidos.length} de los tratamientos añadidos no ` +
+        'entraron. Añádelos desde «Procedimientos» en la propia cita.',
+    };
+  }
+
+  return { ok: true };
 }
 
 export async function updateAppointmentAction(
@@ -1286,7 +1456,7 @@ export async function refreshExchangeRateAction(source: unknown): Promise<Action
     return { ok: false, error: 'No tienes permiso para actualizar la tasa.' };
   }
 
-  const parsed = z.enum(['BCV', 'PARALELO']).safeParse(source);
+  const parsed = z.enum(['BCV', 'PARALELO', 'EURO']).safeParse(source);
   if (!parsed.success) return { ok: false, error: 'Fuente inválida' };
 
   const { refreshRate } = await import('@/backend/services/exchange-rate.service');
@@ -1298,7 +1468,10 @@ export async function refreshExchangeRateAction(source: unknown): Promise<Action
 
   revalidatePath('/tasa-cambio');
   revalidatePath('/dashboard');
-  return { ok: true, message: `Tasa ${parsed.data} actualizada: ${rate.rate} Bs/USD` };
+  // La unidad cambia con la fuente: el euro son bolívares por EURO, no por
+  // dólar. Decir «Bs/USD» siempre haría dudar de si se actualizó la correcta.
+  const unidad = parsed.data === 'EURO' ? 'Bs/EUR' : 'Bs/USD';
+  return { ok: true, message: `Tasa ${parsed.data} actualizada: ${rate.rate} ${unidad}` };
 }
 
 // ===========================================================================
@@ -1343,7 +1516,7 @@ export async function registerPaymentAction(input: unknown): Promise<ActionResul
       import('@/backend/services/exchange-rate.service'),
     ]);
 
-    const source = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
+    const source = resolveRateSource(settings.preferredRateSource);
     const rate = await getCurrentRate(source);
 
     // Sin tasa no se puede registrar el importe en bolívares, y ése es el

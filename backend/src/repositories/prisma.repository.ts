@@ -288,6 +288,28 @@ async function calcularRegresoDelBot(desde: Date): Promise<Date | null> {
   return new Date(desde.getTime() + horas * 60 * 60 * 1000);
 }
 
+/**
+ * El reparto por defecto de la clínica, leído de los ajustes.
+ *
+ * Se cachea un minuto: lo consultan las tres rutas que calculan comisión y es
+ * un valor que cambia dos veces al año. Sin caché, cada línea de cada factura
+ * añadiría una consulta a `clinic_settings` para leer el mismo número.
+ */
+let comisionCache: { valor: number; hasta: number } | null = null;
+
+async function comisionPorDefectoDeLaClinica(): Promise<number> {
+  if (comisionCache && comisionCache.hasta > Date.now()) return comisionCache.valor;
+
+  const ajustes = await prisma.clinicSettings.findUnique({
+    where: { id: 'singleton' },
+    select: { defaultCommissionPercent: true },
+  });
+
+  const valor = ajustes?.defaultCommissionPercent ?? 60;
+  comisionCache = { valor, hasta: Date.now() + 60_000 };
+  return valor;
+}
+
 export const prismaRepository: DataRepository = {
   // --- Autenticación -------------------------------------------------------
 
@@ -548,6 +570,45 @@ export const prismaRepository: DataRepository = {
       },
       orderBy: { fullName: 'asc' },
     });
+  },
+
+  async listStaffBirthdays(month) {
+    /*
+     * SQL en crudo porque hay que filtrar por MES, y Prisma no sabe expresar
+     * `EXTRACT(MONTH FROM ...)` en un `where`. Traerse todo el personal para
+     * filtrar en memoria funcionaría hoy con quince personas y sería una
+     * tontería en cuanto crezca.
+     *
+     * El `LEFT JOIN` + `IS NULL` es lo que evita el duplicado: la odontóloga
+     * que además tiene cuenta ya salió por la primera mitad de la unión.
+     */
+    const filas = await prisma.$queryRaw<
+      Array<{ id: string; name: string; role: string; day: number }>
+    >`
+      SELECT d.id, d."fullName" AS name, 'Odontólogo' AS role,
+             EXTRACT(DAY FROM d."birthDate")::int AS day
+        FROM dentists d
+       WHERE d."birthDate" IS NOT NULL
+         AND d."deletedAt" IS NULL
+         AND EXTRACT(MONTH FROM d."birthDate") = ${month}
+
+      UNION ALL
+
+      SELECT u.id, u."fullName" AS name,
+             CASE u.role WHEN 'SUPER_ADMIN' THEN 'Administrador' ELSE 'Asistente' END AS role,
+             EXTRACT(DAY FROM u."birthDate")::int AS day
+        FROM users u
+        LEFT JOIN dentists d2 ON d2."userId" = u.id AND d2."deletedAt" IS NULL
+       WHERE u."birthDate" IS NOT NULL
+         AND u."deletedAt" IS NULL
+         AND u.status = 'ACTIVE'
+         AND d2.id IS NULL
+         AND EXTRACT(MONTH FROM u."birthDate") = ${month}
+
+       ORDER BY day ASC, name ASC
+    `;
+
+    return filas;
   },
 
   async reactivateDentist({ id, userId }) {
@@ -984,6 +1045,7 @@ export const prismaRepository: DataRepository = {
   },
 
   async createPayment({ data, exchangeRate, exchangeRateSource, userId }) {
+    const ajustesComision = await comisionPorDefectoDeLaClinica();
     try {
       const result = await prisma.$transaction(async (tx) => {
         // 1. La cita y su odontólogo. El porcentaje de comisión se lee AHORA
@@ -1042,7 +1104,16 @@ export const prismaRepository: DataRepository = {
           // puede cambiar lo que se cobra.
           acuerdo: acuerdo?.status === 'APPROVED' ? acuerdo : null,
           comisionOdontologo: appointment.dentist.clinicCommissionPercent,
-          comisionPorDefecto: 40,
+          /*
+           * El reparto por defecto sale de los ajustes de la clínica, no de
+           * un literal. Estaba clavado en 40 y la clínica pasó a 60/40: un
+           * odontólogo sin porcentaje propio habría cobrado el 60 % sin que
+           * nadie lo hubiera decidido.
+           *
+           * Sólo se usa si el odontólogo no tiene el suyo, que no debería
+           * pasar; por eso el respaldo es 60 y no 0.
+           */
+          comisionPorDefecto: ajustesComision ?? 60,
           ajusteManual: data.commissionOverride ?? null,
         }).clinicPercent;
 
@@ -1541,6 +1612,7 @@ export const prismaRepository: DataRepository = {
   },
 
   async addAppointmentAddon({ appointmentId, treatmentId, priceCents, notes, userId }) {
+    const ajustesComision = await comisionPorDefectoDeLaClinica();
     try {
       return await prisma.$transaction(async (tx) => {
         // 1. La cita, con lo que hace falta para decidir precio y reparto.
@@ -1605,7 +1677,16 @@ export const prismaRepository: DataRepository = {
           tratamiento: treatment,
           acuerdo: acuerdoAprobado,
           comisionOdontologo: appointment.dentist.clinicCommissionPercent,
-          comisionPorDefecto: 40,
+          /*
+           * El reparto por defecto sale de los ajustes de la clínica, no de
+           * un literal. Estaba clavado en 40 y la clínica pasó a 60/40: un
+           * odontólogo sin porcentaje propio habría cobrado el 60 % sin que
+           * nadie lo hubiera decidido.
+           *
+           * Sólo se usa si el odontólogo no tiene el suyo, que no debería
+           * pasar; por eso el respaldo es 60 y no 0.
+           */
+          comisionPorDefecto: ajustesComision ?? 60,
         }).clinicPercent;
 
         const addon = await tx.appointmentAddon.create({
@@ -1952,7 +2033,7 @@ export const prismaRepository: DataRepository = {
     }
   },
 
-  async importTreatmentPrices({ filas, userId }) {
+  async importTreatmentPrices({ filas, userId, desactivarCodigos }) {
     return prisma.$transaction(async (tx) => {
       /*
        * Se lee el precio ANTERIOR de cada uno, no sólo qué códigos existen:
@@ -2007,6 +2088,23 @@ export const prismaRepository: DataRepository = {
 
       const creados = filas.filter((f) => !previos.has(f.code)).length;
 
+      /*
+       * Los que ya no están en la lista se apagan, pero NO se borran.
+       *
+       * `isActive: false` y `deletedAt` intacto: dejan de ofrecerse al
+       * agendar y siguen existiendo para las citas, facturas y liquidaciones
+       * que los usan. Borrarlos rompería la contabilidad de meses enteros por
+       * un cambio de catálogo.
+       */
+      let desactivados = 0;
+      if (desactivarCodigos && desactivarCodigos.length > 0) {
+        const resultado = await tx.treatment.updateMany({
+          where: { code: { in: desactivarCodigos }, isActive: true, deletedAt: null },
+          data: { isActive: false },
+        });
+        desactivados = resultado.count;
+      }
+
       await tx.auditLog.create({
         data: {
           userId,
@@ -2025,12 +2123,14 @@ export const prismaRepository: DataRepository = {
             total: filas.length,
             creados,
             actualizados: filas.length - creados,
+            desactivados,
+            desactivadosCodigos: desactivarCodigos ?? [],
             precios: filas.map((f) => ({ code: f.code, cents: f.basePriceCents })),
           },
         },
       });
 
-      return { creados, actualizados: filas.length - creados };
+      return { creados, actualizados: filas.length - creados, desactivados };
     });
   },
 
@@ -2141,6 +2241,7 @@ export const prismaRepository: DataRepository = {
   },
 
   async addInvoiceLine({ invoiceId, treatmentId, description, quantity, unitPriceCents, userId }) {
+    const ajustesComision = await comisionPorDefectoDeLaClinica();
     try {
       return await prisma.$transaction(async (tx) => {
         const factura = await tx.invoice.findUnique({
@@ -2194,7 +2295,16 @@ export const prismaRepository: DataRepository = {
             tratamiento,
             acuerdo: aprobado,
             comisionOdontologo: factura.dentist?.clinicCommissionPercent ?? null,
-            comisionPorDefecto: 40,
+            /*
+           * El reparto por defecto sale de los ajustes de la clínica, no de
+           * un literal. Estaba clavado en 40 y la clínica pasó a 60/40: un
+           * odontólogo sin porcentaje propio habría cobrado el 60 % sin que
+           * nadie lo hubiera decidido.
+           *
+           * Sólo se usa si el odontólogo no tiene el suyo, que no debería
+           * pasar; por eso el respaldo es 60 y no 0.
+           */
+          comisionPorDefecto: ajustesComision ?? 60,
           }).clinicPercent;
         }
 
@@ -2472,6 +2582,516 @@ export const prismaRepository: DataRepository = {
   },
 
   // --- Documentos escaneados del paciente ----------------------------------
+
+  // --- Adjuntos de WhatsApp ---------------------------------------------------
+
+  async attachOutboundMedia({ messageId, fileName, mimeType, content, userId }) {
+    try {
+      /*
+       * Se marca también `mediaType` en el mensaje.
+       *
+       * Es lo que mira el monitor para decidir si pinta una foto, un
+       * reproductor o un enlace. Sin esto habría que consultar la tabla de
+       * adjuntos en cada burbuja para saber qué es.
+       */
+      await prisma.whatsAppMessage.update({
+        where: { id: messageId },
+        data: { mediaType: mimeType },
+      });
+
+      const creado = await prisma.whatsAppAttachment.create({
+        data: {
+          messageId,
+          fileName,
+          mimeType,
+          sizeBytes: content.byteLength,
+          content: new Uint8Array(content),
+          uploadedByUserId: userId,
+        },
+        select: { id: true },
+      });
+      return { ok: true, data: creado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async getOutboundMedia({ mediaId, messageId }) {
+    if (!mediaId && !messageId) return null;
+
+    const fila = await prisma.whatsAppAttachment.findFirst({
+      where: mediaId ? { id: mediaId } : { messageId },
+      select: {
+        id: true,
+        messageId: true,
+        fileName: true,
+        mimeType: true,
+        sizeBytes: true,
+        content: true,
+        message: { select: { direction: true } },
+      },
+    });
+    if (!fila) return null;
+
+    return {
+      id: fila.id,
+      messageId: fila.messageId,
+      fileName: fila.fileName,
+      mimeType: fila.mimeType,
+      sizeBytes: fila.sizeBytes,
+      content: Buffer.from(fila.content),
+      direction: fila.message.direction,
+    };
+  },
+
+  // --- Cuentas del panel ------------------------------------------------------
+
+  async listStaffUsers() {
+    const filas = await prisma.user.findMany({
+      where: { deletedAt: null },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        status: true,
+        phoneE164: true,
+        birthDate: true,
+        mustChangePassword: true,
+        lastLoginAt: true,
+        createdAt: true,
+        dentist: { select: { id: true, fullName: true } },
+        // `passwordHash` NO se selecciona. No se oculta en la pantalla: no se
+        // consulta. Un hash que nunca sale de la base no se puede filtrar.
+      },
+      orderBy: [{ role: 'asc' }, { fullName: 'asc' }],
+    });
+
+    return filas.map((u) => ({
+      id: u.id,
+      email: u.email,
+      fullName: u.fullName,
+      role: u.role,
+      status: u.status,
+      phoneE164: u.phoneE164,
+      birthDate: u.birthDate,
+      mustChangePassword: u.mustChangePassword,
+      lastLoginAt: u.lastLoginAt,
+      dentistId: u.dentist?.id ?? null,
+      dentistName: u.dentist?.fullName ?? null,
+      createdAt: u.createdAt,
+    }));
+  },
+
+  async createStaffUser({
+    email,
+    fullName,
+    role,
+    phoneE164,
+    birthDate,
+    passwordHash,
+    dentistId,
+    createdByUserId,
+  }) {
+    try {
+      const creado = await prisma.$transaction(async (tx) => {
+        const usuario = await tx.user.create({
+          data: {
+            email,
+            fullName,
+            role,
+            phoneE164,
+            birthDate,
+            passwordHash,
+            /*
+             * Obligado a cambiarla al entrar: la clave temporal viajó por
+             * correo, así que la ha visto un tercero y no puede quedarse.
+             */
+            mustChangePassword: true,
+          },
+          select: { id: true },
+        });
+
+        // Enlaza la cuenta a una ficha de odontólogo existente, si se pidió.
+        if (dentistId) {
+          await tx.dentist.update({ where: { id: dentistId }, data: { userId: usuario.id } });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId: createdByUserId,
+            action: 'user.created',
+            entityType: 'User',
+            entityId: usuario.id,
+            after: { email, role, dentistId },
+          },
+        });
+
+        return usuario;
+      });
+
+      return { ok: true, data: creado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async updateStaffUser({ id, fullName, role, phoneE164, birthDate, userId }) {
+    try {
+      const antes = await prisma.user.findUnique({
+        where: { id },
+        select: { role: true, email: true },
+      });
+      if (!antes) return { ok: false, reason: 'NOT_FOUND' };
+
+      const roleChanged = antes.role !== role;
+
+      const actualizado = await prisma.$transaction(async (tx) => {
+        const u = await tx.user.update({
+          where: { id },
+          data: {
+            fullName,
+            role,
+            phoneE164,
+            birthDate,
+            /*
+             * CAMBIAR EL ROL CIERRA SUS SESIONES.
+             *
+             * El rol viaja dentro del token de sesión. Sin esto, a quien se
+             * le quita el rol de administrador seguiría entrando como
+             * administrador hasta que su token caducara — es decir, se le
+             * habría quitado el acceso sólo en la pantalla.
+             */
+            ...(roleChanged ? { sessionsValidFrom: new Date() } : {}),
+          },
+          select: { id: true },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'user.updated',
+            entityType: 'User',
+            entityId: id,
+            before: { role: antes.role },
+            after: { role, fullName },
+          },
+        });
+
+        return u;
+      });
+
+      return { ok: true, data: { id: actualizado.id, roleChanged } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async setStaffUserStatus({ id, status, userId }) {
+    try {
+      await prisma.$transaction([
+        prisma.user.update({
+          where: { id },
+          data: {
+            status,
+            // Suspender cierra lo que tenga abierto; reactivar no necesita
+            // tocarlo, pero se hace igual para no dejar tokens de antes de la
+            // suspensión dando vueltas.
+            sessionsValidFrom: new Date(),
+          },
+        }),
+        prisma.auditLog.create({
+          data: {
+            userId,
+            action: status === 'SUSPENDED' ? 'user.suspended' : 'user.reactivated',
+            entityType: 'User',
+            entityId: id,
+            after: { status },
+          },
+        }),
+      ]);
+      return { ok: true, data: null };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async resetStaffUserPassword({ id, passwordHash, userId }) {
+    try {
+      const actualizado = await prisma.$transaction(async (tx) => {
+        const u = await tx.user.update({
+          where: { id },
+          data: {
+            passwordHash,
+            mustChangePassword: true,
+            passwordChangedAt: new Date(),
+            // La clave vieja deja de valer en todas partes al instante.
+            sessionsValidFrom: new Date(),
+            // Un restablecimiento también levanta el bloqueo por intentos
+            // fallidos: si no, la clave nueva tampoco entraría.
+            failedLoginAttempts: 0,
+            lockedUntil: null,
+          },
+          select: { email: true, fullName: true, role: true },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'user.password_reset',
+            entityType: 'User',
+            entityId: id,
+          },
+        });
+
+        return u;
+      });
+
+      return { ok: true, data: actualizado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async countActiveAdmins() {
+    return prisma.user.count({
+      where: { role: 'SUPER_ADMIN', status: 'ACTIVE', deletedAt: null },
+    });
+  },
+
+  // --- Promociones -----------------------------------------------------------
+
+  async listPromotions(options) {
+    const ahora = new Date();
+    return prisma.promotion.findMany({
+      where: {
+        deletedAt: null,
+        ...(options?.soloVigentes
+          ? {
+              isActive: true,
+              /*
+               * Vigencia con extremos abiertos: sin fecha de inicio vale
+               * desde siempre, y sin fecha de fin vale hasta que alguien la
+               * apague. Es como las escribe la clínica —«esta la dejamos
+               * puesta»— y forzar dos fechas obligaría a inventarse una.
+               */
+              AND: [
+                { OR: [{ startsAt: null }, { startsAt: { lte: ahora } }] },
+                { OR: [{ endsAt: null }, { endsAt: { gte: ahora } }] },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
+    });
+  },
+
+  async createPromotion(data, userId) {
+    try {
+      return {
+        ok: true,
+        data: await prisma.promotion.create({ data: { ...data, createdByUserId: userId } }),
+      };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async updatePromotion(id, data) {
+    try {
+      return { ok: true, data: await prisma.promotion.update({ where: { id }, data }) };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deletePromotion(id) {
+    try {
+      // Se marca como borrada: una promoción que se anunció por WhatsApp
+      // tiene que poder consultarse después aunque ya no se ofrezca.
+      await prisma.promotion.update({
+        where: { id },
+        data: { deletedAt: new Date(), isActive: false },
+      });
+      return { ok: true, data: null };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  // --- Recetarios ------------------------------------------------------------
+
+  async listPrescriptionTemplates({ dentistId, includeClinic = true }) {
+    const filas = await prisma.prescriptionTemplate.findMany({
+      where: {
+        deletedAt: null,
+        /*
+         * Una odontóloga ve los suyos y los de la clínica, nunca los de otra.
+         * El membrete, el número de colegio y la firma de una compañera no
+         * son cosa suya, y aquí eso se resuelve en la consulta, no ocultando
+         * filas en la pantalla.
+         */
+        ...(dentistId === undefined
+          ? {}
+          : includeClinic
+            ? { OR: [{ dentistId }, { dentistId: null }] }
+            : { dentistId }),
+      },
+      select: {
+        id: true,
+        dentistId: true,
+        name: true,
+        widthPx: true,
+        heightPx: true,
+        elements: true,
+        updatedAt: true,
+        dentist: { select: { fullName: true } },
+      },
+      orderBy: [{ isDefault: 'desc' }, { updatedAt: 'desc' }],
+    });
+
+    return filas.map((f) => ({
+      id: f.id,
+      dentistId: f.dentistId,
+      dentistName: f.dentist?.fullName ?? null,
+      name: f.name,
+      widthPx: f.widthPx,
+      heightPx: f.heightPx,
+      elementCount: Array.isArray(f.elements) ? f.elements.length : 0,
+      updatedAt: f.updatedAt,
+    }));
+  },
+
+  async getPrescriptionTemplate(id) {
+    const f = await prisma.prescriptionTemplate.findFirst({
+      where: { id, deletedAt: null },
+      select: {
+        id: true,
+        dentistId: true,
+        name: true,
+        widthPx: true,
+        heightPx: true,
+        elements: true,
+        updatedAt: true,
+        dentist: { select: { fullName: true } },
+      },
+    });
+    if (!f) return null;
+
+    return {
+      id: f.id,
+      dentistId: f.dentistId,
+      dentistName: f.dentist?.fullName ?? null,
+      name: f.name,
+      widthPx: f.widthPx,
+      heightPx: f.heightPx,
+      elementCount: Array.isArray(f.elements) ? f.elements.length : 0,
+      elements: f.elements,
+      updatedAt: f.updatedAt,
+    };
+  },
+
+  async createPrescriptionTemplate({ dentistId, name, widthPx, heightPx, userId }) {
+    try {
+      const creado = await prisma.prescriptionTemplate.create({
+        data: { dentistId, name, widthPx, heightPx, createdByUserId: userId, elements: [] },
+        select: { id: true },
+      });
+      return { ok: true, data: creado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async savePrescriptionTemplate({ id, name, widthPx, heightPx, elements, userId }) {
+    try {
+      const actualizado = await prisma.prescriptionTemplate.update({
+        where: { id },
+        data: {
+          name,
+          widthPx,
+          heightPx,
+          // Ya viene validado por `prescriptionElementsSchema` en la acción:
+          // aquí no se vuelve a mirar porque el tipo de la columna es JSON.
+          elements: elements as never,
+          createdByUserId: undefined,
+        },
+        select: { id: true },
+      });
+      void userId;
+      return { ok: true, data: actualizado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deletePrescriptionTemplate({ id, userId }) {
+    try {
+      await prisma.$transaction([
+        // Se marca como borrado, no se borra: una odontóloga que se equivoca
+        // de botón perdería el diseño que montó pieza a pieza.
+        prisma.prescriptionTemplate.update({
+          where: { id },
+          data: { deletedAt: new Date() },
+        }),
+        prisma.auditLog.create({
+          data: {
+            userId,
+            action: 'prescription_template.deleted',
+            entityType: 'PrescriptionTemplate',
+            entityId: id,
+          },
+        }),
+      ]);
+      return { ok: true, data: null };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async addPrescriptionAsset({
+    templateId,
+    fileName,
+    mimeType,
+    widthPx,
+    heightPx,
+    content,
+    userId,
+  }) {
+    try {
+      const creado = await prisma.prescriptionAsset.create({
+        data: {
+          templateId,
+          fileName,
+          mimeType,
+          sizeBytes: content.byteLength,
+          widthPx,
+          heightPx,
+          // Prisma pide `Uint8Array`; `Buffer` ya lo es, pero el tipo de Node
+          // lo declara sobre `ArrayBufferLike` y no encaja sin esta vuelta.
+          content: new Uint8Array(content),
+          uploadedByUserId: userId,
+        },
+        select: { id: true, widthPx: true, heightPx: true },
+      });
+      return { ok: true, data: creado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async getPrescriptionAsset(id) {
+    const asset = await prisma.prescriptionAsset.findUnique({
+      where: { id },
+      select: { mimeType: true, content: true, templateId: true },
+    });
+    if (!asset) return null;
+    return {
+      mimeType: asset.mimeType,
+      content: Buffer.from(asset.content),
+      templateId: asset.templateId,
+    };
+  },
 
   async listPatientDocuments(patientId) {
     return prisma.patientDocument.findMany({
@@ -3133,13 +3753,19 @@ export const prismaRepository: DataRepository = {
   },
 
   async getConversationMessages(conversationId) {
-    return prisma.whatsAppMessage.findMany({
+    const filas = await prisma.whatsAppMessage.findMany({
       where: { conversationId },
+      // Sólo el id del adjunto: los bytes se piden aparte cuando hay que
+      // pintarlos. Traerlos aquí cargaría cada foto enviada en cada apertura
+      // del hilo.
+      include: { attachment: { select: { id: true } } },
       orderBy: { sentAt: 'asc' },
       // Techo defensivo: un hilo de un año no debe tumbar el navegador.
       // La paginación hacia atrás es la evolución natural.
       take: 200,
     });
+
+    return filas.map((m) => ({ ...m, attachmentId: m.attachment?.id ?? null }));
   },
 
   async createOutboundMessage({ conversationId, body, userId }) {

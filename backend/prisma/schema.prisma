@@ -198,6 +198,10 @@ model User {
   /// Última vez que se cambió la contraseña. NULL = nunca desde el alta.
   passwordChangedAt DateTime? @db.Timestamptz(3)
 
+  /// Fecha de nacimiento del personal sin ficha de odontólogo (asistentes y
+  /// administradores). Los odontólogos la llevan en su propia ficha.
+  birthDate DateTime? @db.Date
+
   /// Perfil de odontólogo, si esta cuenta pertenece a uno.
   dentist Dentist?
 
@@ -355,10 +359,17 @@ model Dentist {
 
   fullName      String
   /// Registro profesional / licencia. Único para evitar duplicados.
-  licenseNumber String  @unique
-  email         String  @unique
+  licenseNumber String @unique
+  email         String @unique
   phone         String
-  photoUrl      String?
+
+  /// Fecha de nacimiento. Sólo el día y el mes se usan de verdad: sirve para
+  /// que la clínica sepa a quién felicitar, no para calcular nada.
+  birthDate DateTime? @db.Date
+
+  /// Sus recetarios. El membrete y la firma son suyos, no de la clínica.
+  prescriptionTemplates PrescriptionTemplate[]
+  photoUrl              String?
 
   /// Especialidades, ej: ["ORTODONCIA", "ENDODONCIA"].
   specialties String[]
@@ -742,6 +753,168 @@ model PatientDocument {
   @@map("patient_documents")
 }
 
+/// ===========================================================================
+///  RECIPES (RECETARIOS)
+/// ===========================================================================
+///  Cada odontóloga tiene SU recipe. La clínica no impone uno: el membrete, el
+///  colegio y la firma son suyos, y varían de una a otra.
+///
+///  CÓMO FUNCIONA
+///  Sube su recipe actual —el que ya usa en papel— como imagen, y encima puede
+///  colocar lo que quiera: cajas de texto, recuadros, líneas, un punto o un
+///  cuadro que ocupe la hoja entera. Todo se mueve, se redimensiona y se
+///  ordena en capas desde el propio panel.
+///
+///  POR QUÉ LOS ELEMENTOS VAN EN JSON Y NO EN TABLAS
+///  Una tabla por tipo de elemento (texto, caja, línea…) obligaría a migrar el
+///  esquema cada vez que se añada una forma nueva, y a un JOIN por cada
+///  elemento para pintar una hoja. Aquí el documento entero se lee y se
+///  escribe de una vez, que es exactamente como lo usa el editor.
+model PrescriptionTemplate {
+  id String @id @default(cuid())
+
+  /// De quién es el recetario. NULL = plantilla de la clínica, que cualquiera
+  /// puede usar mientras no tenga la suya.
+  dentistId String?
+  dentist   Dentist? @relation(fields: [dentistId], references: [id], onDelete: Cascade)
+
+  name String
+
+  /// Lienzo en píxeles a 96 ppp. Media carta (5,5 x 8,5") por defecto, que es
+  /// el tamaño típico de un recetario.
+  widthPx  Int @default(528)
+  heightPx Int @default(816)
+
+  /// Los elementos, en orden de pintado: el último de la lista va encima.
+  /// Su forma la valida `prescriptionTemplateSchema`, no la base de datos.
+  elements Json @default("[]")
+
+  /// La que se ofrece primero a esta odontóloga.
+  isDefault Boolean @default(false)
+
+  assets PrescriptionAsset[]
+
+  createdByUserId String?
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt       DateTime? @db.Timestamptz(3)
+
+  @@index([dentistId, deletedAt])
+  @@map("prescription_templates")
+}
+
+/// Las imágenes que se suben a un recetario (el recipe escaneado, un logo,
+/// una firma). Van en la base como los documentos del paciente: el sistema
+/// corre en un contenedor y un archivo suelto en disco se pierde al
+/// redesplegar.
+model PrescriptionAsset {
+  id         String               @id @default(cuid())
+  templateId String
+  template   PrescriptionTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  widthPx   Int
+  heightPx  Int
+  content   Bytes
+
+  uploadedByUserId String?
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([templateId])
+  @@map("prescription_assets")
+}
+
+/// Un archivo que la clínica envía por WhatsApp: una foto, un PDF, un audio.
+///
+/// ---------------------------------------------------------------------
+///  POR QUÉ LOS BYTES VIVEN AQUÍ Y NO EN UNA URL
+/// ---------------------------------------------------------------------
+///  n8n los recoge con `POST /api/automation/media`, firmado con el mismo
+///  HMAC que el resto de la integración. La alternativa —una URL con token
+///  temporal— sería una credencial más que generar, caducar y vigilar, y una
+///  radiografía detrás de un enlace reenviado por error es un problema serio.
+///  La otra alternativa —mandar el archivo dentro del webhook— lo infla un
+///  33 % en base64 y deja radiografías en el historial de ejecuciones de n8n.
+model WhatsAppAttachment {
+  id String @id @default(cuid())
+
+  /// El mensaje que lo lleva. Uno por mensaje: WhatsApp tampoco admite más.
+  messageId String          @unique
+  message   WhatsAppMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  fileName  String
+  mimeType  String
+  sizeBytes Int
+  content   Bytes
+
+  uploadedByUserId String?
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("whatsapp_attachments")
+}
+
+/// ===========================================================================
+///  PROMOCIONES
+/// ===========================================================================
+///  «Si te haces la limpieza, la consulta va gratis.»
+///
+///  LO QUE ESTA TABLA **NO** HACE
+///  No descuenta sola. El descuento de una factura lo sigue marcando recepción
+///  a mano (`Invoice.discountCents`), tal como pidió la clínica: la promoción
+///  es lo que se OFRECE, no lo que se cobra. Aplicarla automáticamente
+///  significaría que un cambio aquí movería el importe de una factura abierta
+///  sin que nadie lo decidiera.
+///
+///  Sirve para dos cosas concretas:
+///   1. Que el bot pueda proponerla por WhatsApp (`/api/automation/promotions`).
+///   2. Que recepción vea «esta factura cumple una promoción» al cobrar, y
+///      decida si la aplica.
+model Promotion {
+  id          String  @id @default(cuid())
+  name        String
+  description String?
+
+  /// Códigos de tratamiento que hay que hacerse para que aplique.
+  /// Vacío = aplica siempre (una promoción general).
+  requiredTreatmentCodes String[] @default([])
+
+  /// Qué se lleva. `FREE_TREATMENT` necesita `benefitTreatmentCode`.
+  benefitKind PromotionBenefit @default(PERCENT_OFF)
+
+  /// El tratamiento que va gratis o rebajado, si el beneficio es sobre uno.
+  benefitTreatmentCode String?
+
+  /// Porcentaje (1-100) o importe en centavos, según `benefitKind`.
+  /// Se ignora cuando el beneficio es un tratamiento gratis.
+  benefitValue Int @default(0)
+
+  /// Lo que el bot puede decir tal cual por WhatsApp. Si está vacío, el bot
+  /// se lo redacta con el resto de campos.
+  botPitch String?
+
+  /// Vigencia. Sin fechas, vale mientras esté activa.
+  startsAt DateTime? @db.Timestamptz(3)
+  endsAt   DateTime? @db.Timestamptz(3)
+
+  isActive Boolean @default(true)
+
+  createdByUserId String?
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt       DateTime? @db.Timestamptz(3)
+
+  @@index([isActive, deletedAt])
+  @@map("promotions")
+}
+
+enum PromotionBenefit {
+  FREE_TREATMENT /// Un tratamiento sale gratis
+  PERCENT_OFF /// Un porcentaje de descuento
+  AMOUNT_OFF /// Un importe fijo en centavos
+}
+
 model Invoice {
   id String @id @default(cuid())
 
@@ -1016,6 +1189,13 @@ model WhatsAppMessage {
   mediaUrl  String?
   mediaType String?
 
+  /// El archivo, cuando lo envía la clínica desde el panel.
+  ///
+  /// Los adjuntos que ENTRAN llegan como URL de WhatsApp (`mediaUrl`); los que
+  /// SALEN los sube un agente y viven aquí hasta que n8n los recoge por
+  /// `/api/automation/media` y los sube a la API de Meta.
+  attachment WhatsAppAttachment?
+
   /// ID del mensaje en la API de WhatsApp. Único → deduplica los reintentos
   /// de webhook, que Meta hace agresivamente.
   externalMessageId String? @unique
@@ -1108,7 +1288,11 @@ model ClinicSettings {
 
   /// Comisión por defecto de la clínica (%). Cada odontólogo puede tener la
   /// suya; ésta es la que se aplica a los nuevos.
-  defaultCommissionPercent Int @default(40)
+  ///
+  /// 60 = la clínica se queda con el 60 % y el odontólogo cobra el 40 %.
+  /// Es SIEMPRE la parte de la clínica: leerlo al revés invierte el reparto
+  /// de todo lo que se cobre.
+  defaultCommissionPercent Int @default(60)
 
   /// Jornada, en minutos desde medianoche (hora local de la clínica).
   openingMinute Int @default(480) // 08:00
@@ -1121,7 +1305,11 @@ model ClinicSettings {
   displayCurrency String @default("USD")
 
   /// Fuente de tasa preferida para convertir a bolívares.
-  preferredRateSource String @default("BCV")
+  ///
+  /// `EURO` por defecto: la clínica fija los precios en dólares y cobra
+  /// multiplicando por la tasa del euro del BCV, que es la práctica habitual
+  /// en Venezuela. Se cambia desde Configuración.
+  preferredRateSource String @default("EURO")
 
   /// Horas de silencio tras las que el bot vuelve solo a un chat que se
   /// apagó automáticamente. `0` desactiva el regreso automático.

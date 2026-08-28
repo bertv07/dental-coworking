@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { formatCents, formatBs } from '@/backend/domain/money';
 import { totalCitaCents } from '@/backend/domain/pricing';
 import { PageHead } from '@/frontend/components/layout/Topbar';
@@ -47,14 +47,15 @@ export default async function AssistantHomePage() {
   dayStart.setHours(0, 0, 0, 0);
   const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
 
-  const [todayAppointments, cash, conversations, settings] = await Promise.all([
+  const [todayAppointments, cash, conversations, settings, birthdays] = await Promise.all([
     repository.listAppointments({ range: { from: dayStart, to: dayEnd }, limit: 100 }),
     repository.getDailyCash(now),
     repository.listConversations({ limit: 50 }),
     repository.getClinicSettings(),
+    repository.listStaffBirthdays(now.getMonth() + 1),
   ]);
 
-  const rateSource = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
+  const rateSource = resolveRateSource(settings.preferredRateSource);
   const rate = await getCurrentRate(rateSource);
 
   // Estado del día. Se calcula en una sola pasada sobre las citas.
@@ -281,6 +282,52 @@ export default async function AssistantHomePage() {
           </Card>
         </FadeIn>
       </div>
+
+      {/* --- Cumpleaños del mes --------------------------------------- */}
+      {birthdays.length > 0 && (
+        <FadeIn delay={0.23}>
+          <Card
+            title="Cumpleaños del mes"
+            subtitle={new Intl.DateTimeFormat('es-VE', {
+              month: 'long',
+              timeZone: 'America/Caracas',
+            }).format(now)}
+          >
+            <div className="row row--wrap" style={{ gap: '0.75rem' }}>
+              {birthdays.map((persona) => {
+                const esHoy = persona.day === now.getDate();
+                return (
+                  <div
+                    key={persona.id}
+                    className="row"
+                    style={{
+                      gap: '0.6rem',
+                      alignItems: 'center',
+                      padding: '0.6rem 0.9rem',
+                      borderRadius: 'var(--radius-md, 10px)',
+                      border: '1px solid var(--color-border)',
+                      /* El de hoy se distingue solo: si hubiera que buscarlo
+                         entre doce nombres, nadie felicitaría a nadie. */
+                      background: esHoy ? 'var(--color-accent-soft, transparent)' : 'transparent',
+                    }}
+                  >
+                    <Avatar name={persona.name} small />
+                    <div>
+                      <div className="text-sm" style={{ fontWeight: 600 }}>
+                        {persona.name}
+                      </div>
+                      <div className="text-xs subtle">
+                        Día {persona.day} · {persona.role}
+                      </div>
+                    </div>
+                    {esHoy && <Badge tone="success">¡Hoy!</Badge>}
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+        </FadeIn>
+      )}
 
       {/* --- Citas atendidas sin cobrar: el pendiente de dinero --- */}
       {uncollected.length > 0 && (

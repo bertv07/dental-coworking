@@ -372,6 +372,70 @@ El `409` es normal y hay que manejarlo bien: entre que el bot ofrece las 3:00
 y el paciente responde «sí», recepción pudo agendar a otra persona ahí. La
 respuesta trae alternativas; úsalas en vez de decir «hubo un error».
 
+### 3.5-bis `POST /api/automation/promotions` — qué se está ofreciendo
+
+Cuerpo `{}`. Devuelve sólo las promociones **vigentes hoy**: la vigencia se
+filtra en el servidor, así que no tienes que mirar fechas.
+
+```json
+{ "ok": true, "data": { "promotions": [
+  { "name": "Limpieza con consulta gratis",
+    "requiredTreatments": ["LIMPIEZA"],
+    "requiredTreatmentNames": ["Limpieza dental (profilaxis)"],
+    "benefit": { "kind": "FREE_TREATMENT", "treatment": "CONSULTA",
+                 "treatmentName": "Consulta y valoración",
+                 "label": "Consulta y valoración sale gratis" },
+    "pitch": "Si te haces la limpieza, la consulta va incluida.",
+    "endsAt": null }
+] } }
+```
+
+**Di el `pitch` tal cual.** Ya viene redactado. No calcules el precio final
+con el descuento aplicado ni prometas importes: **ofreces**, no cobras. Quien
+aplica el descuento es recepción al facturar, y si el bot cierra una cifra que
+luego no cuadra, la clínica acaba respetándola por no discutir en el mostrador.
+
+Cuándo usarlo: cuando alguien pregunte precios y exista una promoción que
+incluya ese tratamiento, y cuando pregunten directamente si hay ofertas. No lo
+sueltes en cada mensaje.
+
+Si el paciente quiere cerrar la promoción, agenda normal y **deja constancia en
+la conversación** de que se habló de ella. Recepción lo verá al cobrar.
+
+### 3.5-ter `POST /api/automation/media` — el archivo que hay que enviar
+
+Cuando el webhook de salida (§ flujo C) trae `media`, el mensaje lleva una
+foto, un PDF o un audio. El archivo **no viaja en el webhook**: se pide aquí.
+
+```json
+{ "mediaId": "c..." }
+```
+
+También acepta `{ "messageId": "c..." }` — el webhook trae los dos, usa el que
+te resulte cómodo. Mismas tres cabeceras que el resto: `X-Automation-Key-Id`,
+`X-Automation-Timestamp` y `X-Automation-Signature`.
+
+**Respuesta:** el binario, con `Content-Type` ya puesto y el nombre en
+`X-Media-Filename`. Si tu nodo lo tiene más fácil con JSON, manda
+`{ "mediaId": "c...", "format": "base64" }` y responde:
+
+```json
+{ "ok": true, "data": {
+  "mediaId": "c...", "messageId": "c...",
+  "filename": "radiografia.jpg", "mimeType": "image/jpeg",
+  "sizeBytes": 184320, "base64": "..." } }
+```
+
+**Qué hacer con él:** súbelo a la **Media API de Meta**
+(`POST /{phone-number-id}/media` con `messaging_product=whatsapp`), quédate
+con el `id` que devuelve y manda el mensaje por `media_id`, no por link. El
+`body` del webhook va como `caption` en imágenes y vídeos, y como texto
+aparte cuando es un documento o un audio (WhatsApp no les pone pie).
+
+Sólo sirve adjuntos de mensajes **salientes**. Un `mediaId` que no exista o
+que sea de un mensaje entrante devuelve 404 — el mismo 404 en los dos casos,
+a propósito.
+
 ### 3.6 `POST /api/automation/handoff` — pedir un humano
 
 ```json
@@ -437,6 +501,20 @@ Un **Webhook** que recibe los mensajes que un agente escribe en el monitor:
 
 Verifica la firma y reenvíalo a WhatsApp. **No lo registres con `/messages`**:
 el panel ya lo guardó.
+
+**Si el webhook trae `media`:** el mensaje lleva adjunto. Pide el archivo a
+`POST /api/automation/media` (§3.5-ter), súbelo a la Media API de Meta y manda
+el mensaje por `media_id`. El webhook trae `media.mimeType` y `media.filename`
+para que sepas qué es antes de descargarlo.
+
+```json
+{ "conversationId": "c...", "messageId": "c...", "to": "+58...",
+  "body": "Aquí tienes tu radiografía",
+  "media": { "mediaId": "c...", "messageId": "c...",
+             "mimeType": "image/jpeg", "filename": "radiografia.jpg" } }
+```
+
+Cuando no hay adjunto, `media` llega como `null` y el mensaje es texto normal.
 
 ### Flujo D — correos al personal
 

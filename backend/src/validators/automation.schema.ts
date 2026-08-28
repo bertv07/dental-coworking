@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { phoneE164Schema, personNameSchema, safeTextSchema } from '@/backend/validators/common';
+import {
+  phoneE164Schema,
+  personNameSchema,
+  safeTextSchema,
+  cuidSchema,
+} from '@/backend/validators/common';
 
 /**
  * ===========================================================================
@@ -71,6 +76,20 @@ export const recordMessageSchema = z.object({
     })
     .optional(),
 
+  /**
+   * Tipo del adjunto (`image/jpeg`, `audio/ogg`, `application/pdf`…).
+   *
+   * Se acota a una lista blanca de familias: con él, el monitor decide si
+   * pinta una foto, un reproductor o un enlace. Sin él tendría que adivinar
+   * por la extensión de una URL que a veces no la tiene.
+   */
+  mediaType: z
+    .string()
+    .trim()
+    .max(100)
+    .regex(/^(image|audio|video|application)\/[a-z0-9.+-]+$/i, 'Tipo de adjunto inválido')
+    .optional(),
+
   /** Id del mensaje en WhatsApp (`wamid...`). Hace la operación idempotente. */
   externalId: z
     .string()
@@ -95,3 +114,21 @@ export const handoffSchema = z.object({
    */
   reason: safeTextSchema(200),
 });
+
+/**
+ * Petición de un adjunto para enviarlo por WhatsApp.
+ *
+ * Se acepta el id del adjunto O el del mensaje: el webhook de salida lleva
+ * los dos, y obligar a n8n a arrastrar precisamente el que no usa sería una
+ * fuente de errores gratuita.
+ */
+export const mediaRequestSchema = z
+  .object({
+    mediaId: cuidSchema.optional(),
+    messageId: cuidSchema.optional(),
+    /** `base64` devuelve JSON; por defecto va el binario, que pesa menos. */
+    format: z.enum(['binary', 'base64']).default('binary'),
+  })
+  .refine((d) => Boolean(d.mediaId) || Boolean(d.messageId), {
+    message: 'Indica mediaId o messageId',
+  });

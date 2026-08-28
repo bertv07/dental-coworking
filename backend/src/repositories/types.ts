@@ -12,6 +12,10 @@ import type {
   Invoice,
   InvoiceStatus,
   PatientDocument,
+  Promotion,
+  StaffUser,
+  PrescriptionTemplateSummary,
+  PrescriptionTemplateFull,
   PatientDocumentKind,
   ScheduleBlock,
   ScheduleChangeRequest,
@@ -86,6 +90,8 @@ export interface DentistInput {
   phone: string;
   specialties: string[];
   clinicCommissionPercent: number;
+  /** Sólo día y mes se usan: es para felicitar, no para calcular nada. */
+  birthDate: Date | null;
   isActive: boolean;
 }
 
@@ -199,6 +205,19 @@ export interface CashClosing extends CashClosingInput {
 }
 
 /** Ajustes de negocio editables desde el panel. */
+export interface PromotionInput {
+  name: string;
+  description: string | null;
+  requiredTreatmentCodes: string[];
+  benefitKind: 'FREE_TREATMENT' | 'PERCENT_OFF' | 'AMOUNT_OFF';
+  benefitTreatmentCode: string | null;
+  benefitValue: number;
+  botPitch: string | null;
+  startsAt: Date | null;
+  endsAt: Date | null;
+  isActive: boolean;
+}
+
 export interface ClinicSettingsInput {
   clinicName: string;
   taxId: string | null;
@@ -456,6 +475,17 @@ export interface DataRepository {
   softDeletePatient(id: string): Promise<WriteResult<Patient>>;
 
   // --- Odontólogos (escritura) ---------------------------------------------
+  /**
+   * Cumpleaños del personal en un mes dado (1-12).
+   *
+   * Une odontólogos y cuentas del panel. Quien es las dos cosas sale UNA vez:
+   * felicitar dos veces a la misma persona en la misma pantalla delata que el
+   * sistema no sabe que son la misma.
+   */
+  listStaffBirthdays(month: number): Promise<
+    Array<{ id: string; name: string; role: string; day: number }>
+  >;
+
   createDentist(data: DentistInput): Promise<WriteResult<Dentist>>;
 
   /**
@@ -655,8 +685,13 @@ export interface DataRepository {
       durationMinutes: number;
       bufferMinutes: number;
     }>;
+    /**
+     * Códigos que se DESACTIVAN por no venir en el archivo. Nunca se borran:
+     * su historial de citas y facturas tiene que seguir en pie.
+     */
+    desactivarCodigos?: string[];
     userId: string;
-  }): Promise<{ creados: number; actualizados: number }>;
+  }): Promise<{ creados: number; actualizados: number; desactivados: number }>;
 
   // --- Facturas -------------------------------------------------------------
 
@@ -737,6 +772,157 @@ export interface DataRepository {
   // --- Documentos escaneados del paciente ----------------------------------
 
   /** Los documentos de un paciente. SIN el binario: sólo la ficha de cada uno. */
+  // --- Adjuntos de WhatsApp ---------------------------------------------------
+
+  /**
+   * Guarda el archivo que acompaña a un mensaje saliente.
+   *
+   * Va aparte de `createOutboundMessage` porque los bytes sólo hacen falta
+   * aquí: cargarlos en cada lectura de un hilo traería megas por cada foto
+   * enviada para pintar una burbuja de texto.
+   */
+  attachOutboundMedia(params: {
+    messageId: string;
+    fileName: string;
+    mimeType: string;
+    content: Buffer;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /**
+   * El archivo que n8n tiene que subir a WhatsApp.
+   *
+   * Se busca por el id del adjunto o por el del mensaje: n8n recibe los dos
+   * en el webhook y así no tiene que quedarse con el que no usa.
+   */
+  getOutboundMedia(params: {
+    mediaId?: string;
+    messageId?: string;
+  }): Promise<{
+    id: string;
+    messageId: string;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+    content: Buffer;
+    direction: 'INBOUND' | 'OUTBOUND';
+  } | null>;
+
+  // --- Cuentas del panel ------------------------------------------------------
+
+  /** Todas las cuentas, para la pantalla del administrador. */
+  listStaffUsers(): Promise<StaffUser[]>;
+
+  createStaffUser(params: {
+    email: string;
+    fullName: string;
+    role: 'SUPER_ADMIN' | 'ASSISTANT' | 'DENTIST';
+    phoneE164: string | null;
+    birthDate: Date | null;
+    passwordHash: string;
+    /** Ficha de odontólogo a la que enlazar la cuenta, si aplica. */
+    dentistId: string | null;
+    createdByUserId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  updateStaffUser(params: {
+    id: string;
+    fullName: string;
+    role: 'SUPER_ADMIN' | 'ASSISTANT' | 'DENTIST';
+    phoneE164: string | null;
+    birthDate: Date | null;
+    userId: string;
+  }): Promise<WriteResult<{ id: string; roleChanged: boolean }>>;
+
+  /**
+   * Suspende o reactiva una cuenta.
+   *
+   * Suspender CIERRA sus sesiones abiertas. Sin eso, quien ya tenía el panel
+   * abierto seguiría trabajando con normalidad hasta que caducara su token.
+   */
+  setStaffUserStatus(params: {
+    id: string;
+    status: 'ACTIVE' | 'SUSPENDED';
+    userId: string;
+  }): Promise<WriteResult<null>>;
+
+  /** Pone una clave temporal nueva y obliga a cambiarla al entrar. */
+  resetStaffUserPassword(params: {
+    id: string;
+    passwordHash: string;
+    userId: string;
+  }): Promise<WriteResult<{ email: string; fullName: string; role: string }>>;
+
+  /** Cuántos administradores activos quedan. Para no quedarse sin ninguno. */
+  countActiveAdmins(): Promise<number>;
+
+  // --- Promociones -----------------------------------------------------------
+
+  /**
+   * Las promociones.
+   *
+   * `soloVigentes` deja fuera las caducadas y las que aún no empiezan: es lo
+   * que necesita el bot, que no puede ofrecer algo que terminó ayer. La
+   * pantalla de recepción las pide todas para poder reactivarlas.
+   */
+  listPromotions(options?: { soloVigentes?: boolean }): Promise<Promotion[]>;
+
+  createPromotion(data: PromotionInput, userId: string): Promise<WriteResult<Promotion>>;
+  updatePromotion(id: string, data: PromotionInput): Promise<WriteResult<Promotion>>;
+  deletePromotion(id: string): Promise<WriteResult<null>>;
+
+  // --- Recetarios ------------------------------------------------------------
+
+  /**
+   * Los recetarios visibles para alguien.
+   *
+   * `dentistId` a null trae los de la clínica; un odontólogo ve los suyos y
+   * los de la clínica, nunca los de otra compañera: su membrete y su firma
+   * son suyos.
+   */
+  listPrescriptionTemplates(params: {
+    dentistId?: string | null;
+    includeClinic?: boolean;
+  }): Promise<PrescriptionTemplateSummary[]>;
+
+  getPrescriptionTemplate(id: string): Promise<PrescriptionTemplateFull | null>;
+
+  createPrescriptionTemplate(params: {
+    dentistId: string | null;
+    name: string;
+    widthPx: number;
+    heightPx: number;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  savePrescriptionTemplate(params: {
+    id: string;
+    name: string;
+    widthPx: number;
+    heightPx: number;
+    elements: unknown;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  deletePrescriptionTemplate(params: { id: string; userId: string }): Promise<WriteResult<null>>;
+
+  addPrescriptionAsset(params: {
+    templateId: string;
+    fileName: string;
+    mimeType: string;
+    widthPx: number;
+    heightPx: number;
+    content: Buffer;
+    userId: string;
+  }): Promise<WriteResult<{ id: string; widthPx: number; heightPx: number }>>;
+
+  /** Los bytes de una imagen del recetario, para servirla. */
+  getPrescriptionAsset(id: string): Promise<{
+    mimeType: string;
+    content: Buffer;
+    templateId: string;
+  } | null>;
+
   listPatientDocuments(patientId: string): Promise<PatientDocument[]>;
 
   /**
@@ -952,6 +1138,7 @@ export interface DataRepository {
     author: 'PATIENT' | 'AI_BOT' | 'SYSTEM';
     body: string;
     mediaUrl?: string | null;
+    mediaType?: string | null;
     /** Id del mensaje en WhatsApp: evita duplicar si n8n reintenta. */
     externalId?: string | null;
   }): Promise<{ conversationId: string; messageId: string; duplicate: boolean }>;

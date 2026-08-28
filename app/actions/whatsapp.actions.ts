@@ -141,6 +141,37 @@ export interface SendMessageResult {
 }
 
 /**
+ * Lo que WhatsApp acepta, con su tope real en bytes.
+ *
+ * Se comprueba AQUÍ y no se deja para el proveedor: un archivo que Meta va a
+ * rechazar se habría guardado ya en la base y el paciente vería un mensaje
+ * fallido sin saber por qué. El tope por familia es el de la propia API.
+ */
+const TIPOS_WHATSAPP: Record<string, number> = {
+  'image/jpeg': 5 * 1024 * 1024,
+  'image/png': 5 * 1024 * 1024,
+  'image/webp': 5 * 1024 * 1024,
+  'audio/aac': 16 * 1024 * 1024,
+  'audio/mp4': 16 * 1024 * 1024,
+  'audio/mpeg': 16 * 1024 * 1024,
+  'audio/amr': 16 * 1024 * 1024,
+  'audio/ogg': 16 * 1024 * 1024,
+  'video/mp4': 16 * 1024 * 1024,
+  'video/3gpp': 16 * 1024 * 1024,
+  'application/pdf': 16 * 1024 * 1024,
+};
+
+/** Los mismos límites, en palabras, para el mensaje de error. */
+function limiteLegible(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+/** Nombre del archivo, para usarlo de cuerpo cuando el mensaje va sin texto. */
+function nombreDe(archivo: FormDataEntryValue | null): string {
+  return archivo instanceof File && archivo.name ? archivo.name.slice(0, 120) : 'Archivo adjunto';
+}
+
+/**
  * Envía un mensaje de WhatsApp escrito por un humano desde el panel.
  *
  * ORDEN DE LAS OPERACIONES (importa):
@@ -153,10 +184,9 @@ export interface SendMessageResult {
  * historial. Así el peor caso es un mensaje registrado que no salió, y eso
  * la interfaz sí lo muestra.
  */
-export async function sendWhatsAppMessageAction(input: {
-  conversationId: string;
-  body: string;
-}): Promise<SendMessageResult> {
+export async function sendWhatsAppMessageAction(
+  input: { conversationId: string; body: string } | FormData,
+): Promise<SendMessageResult> {
   // --- 1. Autorización ---------------------------------------------------
   const authorization = await checkApiRole('ASSISTANT');
   if (!authorization.authorized) {
@@ -170,12 +200,56 @@ export async function sendWhatsAppMessageAction(input: {
   }
 
   // --- 2. Validación -----------------------------------------------------
-  const validation = sendMessageSchema.safeParse(input);
+  /*
+   * Se admiten las dos formas: objeto para el mensaje de sólo texto, que es
+   * el 95 % de los envíos, y `FormData` cuando lleva archivo. Obligar a
+   * `FormData` siempre metería una copia y un multipart en cada «ok, te
+   * espero».
+   */
+  const esFormulario = input instanceof FormData;
+  const archivo = esFormulario ? input.get('file') : null;
+
+  const validation = sendMessageSchema.safeParse(
+    esFormulario
+      ? {
+          conversationId: String(input.get('conversationId') ?? ''),
+          // Un adjunto puede ir sin texto: el pie es opcional en WhatsApp,
+          // pero el esquema exige cuerpo. Se pone el nombre del archivo.
+          body: String(input.get('body') ?? '').trim() || nombreDe(archivo),
+        }
+      : input,
+  );
   if (!validation.success) {
     return { ok: false, error: validation.error.issues[0]?.message ?? 'Mensaje inválido' };
   }
 
   const { conversationId, body } = validation.data;
+
+  // --- 2-bis. El archivo, si lo hay --------------------------------------
+  let adjunto: { nombre: string; tipo: string; bytes: Buffer } | null = null;
+
+  if (archivo instanceof File && archivo.size > 0) {
+    const tope = TIPOS_WHATSAPP[archivo.type];
+    if (!tope) {
+      return {
+        ok: false,
+        error:
+          'WhatsApp no acepta ese tipo de archivo. Puedes enviar fotos (JPG, PNG), ' +
+          'PDF, audio o vídeo.',
+      };
+    }
+    if (archivo.size > tope) {
+      return {
+        ok: false,
+        error: `Ese archivo pasa de ${limiteLegible(tope)}, que es el máximo que admite WhatsApp para ese tipo.`,
+      };
+    }
+    adjunto = {
+      nombre: archivo.name.slice(0, 120) || 'archivo',
+      tipo: archivo.type,
+      bytes: Buffer.from(await archivo.arrayBuffer()),
+    };
+  }
 
   try {
     // --- 3. Persistir ----------------------------------------------------
@@ -187,6 +261,32 @@ export async function sendWhatsAppMessageAction(input: {
 
     if (!created.ok) return { ok: false, error: 'La conversación no existe.' };
 
+    // --- 3-bis. Guardar el archivo ---------------------------------------
+    /*
+     * Antes de avisar a n8n: si se notificara primero, el flujo pediría el
+     * adjunto por `/api/automation/media` y todavía no estaría ahí.
+     */
+    let mediaId: string | null = null;
+    if (adjunto) {
+      const guardado = await repository.attachOutboundMedia({
+        messageId: created.data.id,
+        fileName: adjunto.nombre,
+        mimeType: adjunto.tipo,
+        content: adjunto.bytes,
+        userId: authorization.user.id,
+      });
+
+      if (!guardado.ok) {
+        await repository.setMessageDelivery({
+          messageId: created.data.id,
+          status: 'FAILED',
+          error: 'No se pudo guardar el archivo',
+        });
+        return { ok: false, error: 'No se pudo guardar el archivo. Intenta de nuevo.' };
+      }
+      mediaId = guardado.data.id;
+    }
+
     // --- 4. Entregar -----------------------------------------------------
     const { deliverMessage } = await import('@/backend/services/whatsapp-outbound.service');
 
@@ -195,6 +295,9 @@ export async function sendWhatsAppMessageAction(input: {
       body,
       conversationId,
       messageId: created.data.id,
+      media: adjunto
+        ? { mediaId: mediaId!, mimeType: adjunto.tipo, filename: adjunto.nombre }
+        : null,
     });
 
     // --- 5. Registrar el resultado ---------------------------------------

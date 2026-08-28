@@ -25,13 +25,45 @@ import { prisma } from '@/backend/db/client';
  * ===========================================================================
  */
 
-/** Fuentes soportadas. La clínica factura a BCV; el paralelo es referencia. */
-export type RateSource = 'BCV' | 'PARALELO';
+/**
+ * Fuentes soportadas.
+ *
+ * `EURO` es la tasa OFICIAL DEL EURO que publica el BCV, no el dólar. Se
+ * añadió porque la clínica cobra referenciada al euro.
+ *
+ *  CÓMO SE USA AQUÍ, QUE NO ES OBVIO: la lista de precios se escribe y se
+ *  guarda en dólares, pero se COBRA multiplicando por la tasa del euro. Es
+ *  la práctica habitual en Venezuela —fijar en dólares y cobrar a euro— y es
+ *  como opera esta clínica.
+ *
+ *  Por eso las pantallas siguen diciendo «$30»: los 30 son dólares de lista.
+ *  Lo único que cambia es la tasa con la que esos 30 se pasan a bolívares.
+ */
+export type RateSource = 'BCV' | 'PARALELO' | 'EURO';
 
 const DOLARAPI_ENDPOINTS: Record<RateSource, string> = {
   BCV: 'https://ve.dolarapi.com/v1/dolares/oficial',
   PARALELO: 'https://ve.dolarapi.com/v1/dolares/paralelo',
+  EURO: 'https://ve.dolarapi.com/v1/euros/oficial',
 };
+
+/** Etiqueta para pantallas y comprobantes. */
+export const RATE_SOURCE_LABEL: Record<RateSource, string> = {
+  BCV: 'BCV (dólar oficial)',
+  PARALELO: 'Paralelo',
+  EURO: 'Euro oficial (BCV)',
+};
+
+/**
+ * Convierte lo guardado en ajustes a una fuente válida.
+ *
+ * Existe para no repetir el ternario por siete pantallas: cada vez que se
+ * añade una fuente habría que acordarse de las siete, y la que se olvida
+ * sigue cobrando con la tasa vieja sin avisar.
+ */
+export function resolveRateSource(valor: string | null | undefined): RateSource {
+  return valor === 'PARALELO' || valor === 'EURO' ? valor : 'BCV';
+}
 
 /** No se vuelve a consultar la API si la última lectura tiene menos de esto. */
 const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hora
@@ -178,16 +210,18 @@ export async function getCurrentRate(source: RateSource = 'BCV'): Promise<Curren
   return stored;
 }
 
-/** Ambas fuentes a la vez, para el panel de control cambiario. */
+/** Las tres fuentes a la vez, para el panel de control cambiario. */
 export async function getAllRates(): Promise<{
   bcv: CurrentRate | null;
   paralelo: CurrentRate | null;
+  euro: CurrentRate | null;
 }> {
-  const [bcv, paralelo] = await Promise.all([
+  const [bcv, paralelo, euro] = await Promise.all([
     getCurrentRate('BCV'),
     getCurrentRate('PARALELO'),
+    getCurrentRate('EURO'),
   ]);
-  return { bcv, paralelo };
+  return { bcv, paralelo, euro };
 }
 
 /** Fuerza la actualización, ignorando la ventana de 1 hora. */

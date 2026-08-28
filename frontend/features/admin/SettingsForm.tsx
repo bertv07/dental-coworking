@@ -185,8 +185,9 @@ export function SettingsForm({ settings }: SettingsFormProps) {
             defaultValue={settings.preferredRateSource}
             hint="Con cuál se convierte a bolívares al cobrar"
             options={[
-              { value: 'BCV', label: 'BCV (oficial)' },
+              { value: 'BCV', label: 'BCV (dólar oficial)' },
               { value: 'PARALELO', label: 'Paralelo' },
+              { value: 'EURO', label: 'Euro oficial (BCV)' },
             ]}
           />
         </div>
@@ -194,6 +195,13 @@ export function SettingsForm({ settings }: SettingsFormProps) {
         <Notice tone="info">
           Cambiar la fuente de tasa NO altera los cobros ya registrados: cada pago guarda la
           tasa que se le aplicó.
+        </Notice>
+
+        <Notice tone="info">
+          Con <strong>Euro</strong>, la lista se sigue escribiendo en dólares y se cobra
+          multiplicando por la tasa del euro del BCV. Es la práctica habitual en
+          Venezuela y es como cobra esta clínica: un tratamiento de $30 se cobra hoy a
+          la tasa del euro, no a la del dólar.
         </Notice>
       </Card>
 

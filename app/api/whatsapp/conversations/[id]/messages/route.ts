@@ -67,6 +67,8 @@ export async function GET(
         author: message.author,
         body: message.body,
         mediaUrl: message.mediaUrl,
+        mediaType: message.mediaType,
+        attachmentId: message.attachmentId,
         // Permite a la UI marcar los mensajes que no llegaron a entregarse.
         deliveryStatus: message.deliveryStatus,
         deliveryError: message.deliveryError,

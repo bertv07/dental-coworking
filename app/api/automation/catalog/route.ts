@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { repository } from '@/backend/repositories';
 import { readSignedBody } from '@/backend/http/automation-request';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { centsToBs } from '@/backend/domain/money';
 import { ok, failInternal, newRequestId } from '@/backend/http/responses';
 
@@ -100,7 +100,7 @@ export async function POST(request: NextRequest) {
         repository.listDentistTreatments({ status: 'APPROVED' }),
       ]);
 
-    const rateSource = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
+    const rateSource = resolveRateSource(settings.preferredRateSource);
     const rate = await getCurrentRate(rateSource);
 
     /*

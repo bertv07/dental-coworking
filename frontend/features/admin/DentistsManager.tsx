@@ -162,7 +162,7 @@ export function DentistsManager({
                               acuerdos especiales de un vistazo.
                             */}
                             <Badge
-                              tone={dentist.clinicCommissionPercent === 40 ? 'neutral' : 'warning'}
+                              tone={dentist.clinicCommissionPercent === 60 ? 'neutral' : 'warning'}
                             >
                               {dentist.clinicCommissionPercent}% / {100 - dentist.clinicCommissionPercent}%
                             </Badge>
@@ -319,9 +319,21 @@ export function DentistsManager({
             required
             min={0}
             max={100}
-            hint="El odontólogo recibe el porcentaje restante. Estándar: 40 / 60."
-            defaultValue={editing?.clinicCommissionPercent ?? 40}
+            hint="El odontólogo recibe el porcentaje restante. Estándar de la clínica: 60 / 40."
+            defaultValue={editing?.clinicCommissionPercent ?? 60}
             error={errorFor('clinicCommissionPercent')}
+          />
+          <TextField
+            label="Fecha de nacimiento"
+            name="birthDate"
+            type="date"
+            hint="Opcional. Sale en los cumpleaños del mes, en Inicio."
+            defaultValue={
+              editing?.birthDate
+                ? new Date(editing.birthDate).toISOString().slice(0, 10)
+                : ''
+            }
+            error={errorFor('birthDate')}
           />
           <CheckboxField
             label="Odontólogo activo"

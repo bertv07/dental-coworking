@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { InvoiceEditor } from '@/frontend/features/admin/InvoiceEditor';
@@ -32,7 +32,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
     repository.getClinicSettings(),
   ]);
 
-  const rateSource = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
+  const rateSource = resolveRateSource(settings.preferredRateSource);
   const rate = await getCurrentRate(rateSource);
 
   return (

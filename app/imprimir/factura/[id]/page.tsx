@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation';
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { formatCents, formatBs, centsToBs } from '@/backend/domain/money';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { PrintOnLoad } from '@/frontend/features/admin/PrintOnLoad';
 
 /**
@@ -42,7 +42,7 @@ export default async function PrintInvoicePage({
   ]);
   if (!invoice) notFound();
 
-  const rateSource = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
+  const rateSource = resolveRateSource(settings.preferredRateSource);
   const rate = await getCurrentRate(rateSource);
 
   const fecha = new Intl.DateTimeFormat('es-VE', {

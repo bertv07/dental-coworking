@@ -35,10 +35,44 @@ import { isOutboundConfigured } from '@/backend/services/whatsapp-outbound.servi
 export const metadata = { title: 'Monitor WhatsApp' };
 export const dynamic = 'force-dynamic';
 
-export default async function WhatsAppPage() {
+export default async function WhatsAppPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
   await requireRole('ASSISTANT');
 
-  const conversations = await repository.listConversations({ limit: 50 });
+  const { q } = await searchParams;
+  const busqueda = (q ?? '').trim().toLowerCase();
+
+  const todas = await repository.listConversations({ limit: 50 });
+
+  /*
+   * El filtro se aplica sobre la lista ya traída y no en la consulta.
+   *
+   * Son como mucho cincuenta chats y el criterio incluye el nombre que da
+   * WhatsApp para números que aún no son pacientes: eso no está en ninguna
+   * tabla que se pueda cruzar limpiamente. Con cincuenta filas, filtrar aquí
+   * es instantáneo; si algún día son cinco mil, se baja a la consulta.
+   */
+  /*
+   * Los dígitos de la búsqueda se sacan aparte y SÓLO se comparan si hay
+   * alguno.
+   *
+   * Antes se comparaba siempre: buscar «María» dejaba una cadena de dígitos
+   * vacía, y `telefono.includes('')` es verdadero para cualquier número, así
+   * que el filtro devolvía la lista entera fingiendo que había filtrado.
+   */
+  const digitos = busqueda.replace(/\D/g, '');
+
+  const conversations = busqueda
+    ? todas.filter((c) => {
+        const nombre = (c.patientName ?? c.displayName ?? '').toLowerCase();
+        if (nombre.includes(busqueda)) return true;
+        // El teléfono se compara sin signos: nadie escribe «+58» al buscar.
+        return digitos.length > 0 && c.phoneE164.replace(/\D/g, '').includes(digitos);
+      })
+    : todas;
 
   // Mensajes de la primera conversación, para que la vista no arranque vacía.
   const firstConversation = conversations[0];
@@ -46,15 +80,22 @@ export default async function WhatsAppPage() {
     ? await repository.getConversationMessages(firstConversation.id)
     : [];
 
-  const pendingCount = conversations.filter((c) => c.needsHumanAttention).length;
-  const aiOffCount = conversations.filter((c) => !c.aiEnabled).length;
+  // Los contadores hablan de TODO el monitor, no del filtro: si dijeran
+  // «0 requieren atención» por estar buscando otra cosa, se perdería de vista
+  // que hay gente esperando.
+  const pendingCount = todas.filter((c) => c.needsHumanAttention).length;
+  const aiOffCount = todas.filter((c) => !c.aiEnabled).length;
 
   return (
     <div className="page-body">
       <FadeIn>
         <PageHead
           title="Monitor de WhatsApp"
-          subtitle={`${conversations.length} conversaciones · ${pendingCount} requieren atención · ${aiOffCount} con IA apagada`}
+          subtitle={
+            busqueda
+              ? `${conversations.length} de ${todas.length} chats coinciden con «${q}»`
+              : `${todas.length} conversaciones · ${pendingCount} requieren atención · ${aiOffCount} con IA apagada`
+          }
         />
       </FadeIn>
 

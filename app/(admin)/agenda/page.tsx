@@ -9,7 +9,7 @@ import {
   type CalendarDay,
   type CalendarEntry,
 } from '@/frontend/features/dentist/DentistCalendar';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import {
   CLINIC_TIME_ZONE,
   MINUTES_PER_DAY,
@@ -324,7 +324,7 @@ async function ClinicAgendaView({
   const paymentMethods = await repository.listPaymentMethods();
 
   // Tasa según la fuente configurada por la clínica.
-  const rateSource = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
+  const rateSource = resolveRateSource(settings.preferredRateSource);
   const rate = await getCurrentRate(rateSource);
 
   // Comisión por odontólogo: el modal de cobro previsualiza el reparto real,

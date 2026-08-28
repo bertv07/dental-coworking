@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useTransition, useOptimistic } from 'react';
+import { useRef, useState, useTransition, useOptimistic } from 'react';
 import type { ConversationListItem, WhatsAppMessage } from '@/backend/domain/types';
 import {
   toggleConversationAiAction,
   sendWhatsAppMessageAction,
 } from '@/app/actions/whatsapp.actions';
 import { Badge, EmptyState, Notice } from '@/frontend/components/ui/primitives';
+import { IconDownload, IconPlus } from '@/frontend/components/ui/icons';
 
 /**
  * ===========================================================================
@@ -113,6 +114,8 @@ export function WhatsAppMonitor({
   // --- Estado del compositor ---------------------------------------------
   const [draft, setDraft] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [adjunto, setAdjunto] = useState<File | null>(null);
+  const adjuntoRef = useRef<HTMLInputElement>(null);
   const [sendWarning, setSendWarning] = useState<string | null>(null);
 
   /**
@@ -206,13 +209,29 @@ export function WhatsAppMonitor({
    */
   async function sendMessage() {
     const body = draft.trim();
-    if (!body || !selectedId || isSending) return;
+    // Con archivo, el texto es opcional: en WhatsApp el pie de una foto lo es.
+    if ((!body && !adjunto) || !selectedId || isSending) return;
 
     setIsSending(true);
     setErrorMessage(null);
     setSendWarning(null);
 
-    const result = await sendWhatsAppMessageAction({ conversationId: selectedId, body });
+    /*
+     * `FormData` sólo cuando hay archivo. El mensaje de texto suelto —que es
+     * casi todo lo que se manda— sigue yendo como objeto, sin montar un
+     * multipart para un «ok, te espero».
+     */
+    let payload: { conversationId: string; body: string } | FormData;
+    if (adjunto) {
+      payload = new FormData();
+      payload.set('conversationId', selectedId);
+      payload.set('body', body);
+      payload.set('file', adjunto);
+    } else {
+      payload = { conversationId: selectedId, body };
+    }
+
+    const result = await sendWhatsAppMessageAction(payload);
 
     if (!result.ok) {
       setErrorMessage(result.error ?? 'No se pudo enviar el mensaje');
@@ -223,6 +242,7 @@ export function WhatsAppMonitor({
     // Se guardó: se limpia el borrador aunque la entrega haya fallado, porque
     // el mensaje YA está en el historial y reenviarlo lo duplicaría.
     setDraft('');
+    quitarAdjunto();
     if (result.warning) setSendWarning(result.warning);
 
     const response = await fetch(`/api/whatsapp/conversations/${selectedId}/messages`);
@@ -237,6 +257,12 @@ export function WhatsAppMonitor({
     }
 
     setIsSending(false);
+  }
+
+  /** Quita el archivo elegido y limpia el input, para poder repetir el mismo. */
+  function quitarAdjunto() {
+    setAdjunto(null);
+    if (adjuntoRef.current) adjuntoRef.current.value = '';
   }
 
   /** Enter envía; Shift+Enter hace salto de línea, como en WhatsApp. */
@@ -418,7 +444,14 @@ export function WhatsAppMonitor({
                       evidente de toda la aplicación.
                       Los saltos de línea se conservan con `white-space: pre-wrap`.
                     */}
-                    <div className="message__bubble">{message.body}</div>
+                    <div className="message__bubble">
+                      {message.body}
+                      {/* Los dos casos: URL de WhatsApp al entrar, archivo
+                          nuestro al salir. El componente resuelve cuál es. */}
+                      {(message.mediaUrl || message.attachmentId) && (
+                        <Adjunto message={message} />
+                      )}
+                    </div>
 
                     <div className="message__meta">
                       <span>{AUTHOR_LABEL[message.author] ?? message.author}</span>
@@ -468,7 +501,43 @@ export function WhatsAppMonitor({
                 </Notice>
               )}
 
+              {/* Archivo elegido: se ve ANTES de enviarlo. Mandar una
+                  radiografía equivocada no tiene vuelta atrás. */}
+              {adjunto && (
+                <div className="composer__adjunto">
+                  <span className="composer__adjunto-nombre">{adjunto.name}</span>
+                  <span className="text-xs subtle">
+                    {(adjunto.size / 1024).toFixed(0)} KB
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={quitarAdjunto}
+                    disabled={isSending}
+                  >
+                    Quitar
+                  </button>
+                </div>
+              )}
+
               <div className="composer__row">
+                <input
+                  ref={adjuntoRef}
+                  type="file"
+                  hidden
+                  accept="image/jpeg,image/png,image/webp,application/pdf,audio/mpeg,audio/ogg,audio/mp4,audio/aac,audio/amr,video/mp4,video/3gpp"
+                  onChange={(e) => setAdjunto(e.target.files?.[0] ?? null)}
+                />
+                <button
+                  type="button"
+                  className="btn btn--ghost composer__adjuntar"
+                  onClick={() => adjuntoRef.current?.click()}
+                  disabled={isSending}
+                  title="Adjuntar foto, PDF o audio"
+                  aria-label="Adjuntar archivo"
+                >
+                  <IconPlus size={16} />
+                </button>
                 <textarea
                   className="composer__input"
                   placeholder={
@@ -487,7 +556,7 @@ export function WhatsAppMonitor({
                   type="button"
                   className="btn btn--primary composer__send"
                   onClick={() => void sendMessage()}
-                  disabled={isSending || draft.trim().length === 0}
+                  disabled={isSending || (draft.trim().length === 0 && !adjunto)}
                 >
                   {isSending ? 'Enviando…' : 'Enviar'}
                 </button>
@@ -495,7 +564,7 @@ export function WhatsAppMonitor({
 
               <div className="composer__hint">
                 <span>
-                  Enter envía · Shift+Enter salto de línea
+                  Enter envía · Shift+Enter salto de línea · fotos, PDF y audio hasta 16 MB
                   {selected.aiEnabled && ' · al escribir, la IA se apaga automáticamente'}
                 </span>
                 {draft.length > MAX_MESSAGE_LENGTH - 500 && (
@@ -509,5 +578,63 @@ export function WhatsAppMonitor({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Un adjunto del chat: foto, nota de voz, vídeo o archivo.
+ *
+ * ---------------------------------------------------------------------
+ *  POR QUÉ SE MIRA EL TIPO Y NO LA EXTENSIÓN
+ * ---------------------------------------------------------------------
+ *  Las URLs de WhatsApp no traen extensión: son identificadores. Con
+ *  `mediaType` se sabe qué es sin adivinar, y cuando no viene se cae al enlace
+ *  genérico, que funciona siempre.
+ *
+ *  La URL ya llegó validada como http/https (`automation.schema.ts`), así que
+ *  no puede colarse un `javascript:` en un `href`. Aun así los enlaces llevan
+ *  `noreferrer`: son de un tercero y no tienen por qué saber de dónde vienen.
+ */
+function Adjunto({ message }: { message: WhatsAppMessage }) {
+  /*
+   * Dos orígenes, misma burbuja.
+   *
+   * Lo que ENTRA trae una URL de WhatsApp; lo que SALE lo guardamos nosotros
+   * y se pide al panel con la sesión. Resolverlo aquí evita que cada sitio
+   * que pinta un mensaje tenga que saber de dónde viene el archivo.
+   */
+  const fuente = message.mediaUrl ?? (message.attachmentId
+    ? `/api/whatsapp/adjuntos/${message.attachmentId}`
+    : null);
+  if (!fuente) return null;
+  const tipo = message.mediaType ?? '';
+
+  if (tipo.startsWith('image/')) {
+    return (
+      <a href={fuente} target="_blank" rel="noreferrer" className="message__media">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={fuente}
+          alt={message.direction === 'INBOUND' ? 'Imagen del paciente' : 'Imagen enviada'}
+          loading="lazy"
+        />
+      </a>
+    );
+  }
+
+  if (tipo.startsWith('audio/')) {
+    // Reproductor nativo: las notas de voz son la mitad de lo que manda un
+    // paciente, y abrirlas en otra pestaña para oírlas rompe la conversación.
+    return <audio className="message__audio" controls preload="none" src={fuente} />;
+  }
+
+  if (tipo.startsWith('video/')) {
+    return <video className="message__media" controls preload="none" src={fuente} />;
+  }
+
+  return (
+    <a href={fuente} target="_blank" rel="noreferrer" className="message__file">
+      <IconDownload size={14} /> {tipo === 'application/pdf' ? 'Ver el PDF' : 'Abrir el archivo'}
+    </a>
   );
 }

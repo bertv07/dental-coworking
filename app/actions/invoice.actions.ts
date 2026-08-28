@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { checkApiRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { cuidSchema } from '@/backend/validators/common';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 
 /**
  * ===========================================================================
@@ -273,7 +273,7 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
    * el arqueo cuadraría con dinero que nadie entregó.
    */
   const settings = await repository.getClinicSettings();
-  const source = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
+  const source = resolveRateSource(settings.preferredRateSource);
   const rate = await getCurrentRate(source);
 
   if (!rate) {

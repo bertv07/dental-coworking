@@ -32,6 +32,14 @@ export interface PreviewResult {
   error?: string;
   filas?: FilaImportada[];
   resumen?: { nuevos: number; actualizan: number; sinCambio: number; errores: number };
+  /**
+   * Los que están activos en el sistema y NO aparecen en el archivo.
+   *
+   * Se enseñan con nombre, no como un número: «se desactivan 11» no permite
+   * decidir nada, y entre esos 11 puede estar algo que la clínica sí hace y
+   * que simplemente no cabía en la hoja.
+   */
+  sobran?: Array<{ code: string; name: string }>;
 }
 
 export interface ApplyResult {
@@ -39,6 +47,7 @@ export interface ApplyResult {
   error?: string;
   creados?: number;
   actualizados?: number;
+  desactivados?: number;
 }
 
 /** 5 MB: una lista de precios son kilobytes, no megas. */
@@ -99,9 +108,18 @@ export async function previewPriceImportAction(formData: FormData): Promise<Prev
 
     if (error) return { ok: false, error };
 
+    // Los que están activos y no vienen en el archivo. Sólo se informan: no
+    // se toca nada hasta que alguien lo pida expresamente al aplicar.
+    const enElArchivo = new Set(filas.filter((f) => f.estado !== 'ERROR').map((f) => f.code));
+    const activos = await repository.listTreatments();
+    const sobran = activos
+      .filter((t) => !enElArchivo.has(t.code))
+      .map((t) => ({ code: t.code, name: t.name }));
+
     return {
       ok: true,
       filas,
+      sobran,
       resumen: {
         nuevos: filas.filter((f) => f.estado === 'NUEVO').length,
         actualizan: filas.filter((f) => f.estado === 'ACTUALIZA').length,
@@ -132,11 +150,44 @@ export async function previewPriceImportAction(formData: FormData): Promise<Prev
  * filas con error se descartan aquí también. Esto es un endpoint público como
  * cualquier otro.
  */
-export async function applyPriceImportAction(filas: unknown): Promise<ApplyResult> {
+export async function applyPriceImportAction(
+  filas: unknown,
+  opciones?: {
+    /**
+     * Desactivar los tratamientos que no vengan en el archivo.
+     *
+     * OPCIONAL Y APAGADO POR DEFECTO. Una lista de precios incompleta es lo
+     * más normal del mundo —se sube sólo la parte que cambió— y dar por hecho
+     * que lo que falta ya no se hace vaciaría el catálogo de un golpe.
+     *
+     * Desactiva, nunca borra: las citas y facturas que cuelgan de esos
+     * tratamientos siguen intactas y se pueden reactivar con un clic.
+     */
+    desactivarSobrantes?: boolean;
+    /**
+     * TODOS los códigos válidos del archivo, incluidos los que no cambian.
+     *
+     * Hace falta aparte porque `filas` sólo trae los que se van a escribir:
+     * si se dedujera de ahí, los tratamientos que el archivo deja IGUAL se
+     * verían como ausentes y se desactivarían. Justo al revés de lo que pide
+     * quien sube su lista completa sin tocar la mitad de los precios.
+     */
+    codigosDelArchivo?: unknown;
+  },
+): Promise<ApplyResult> {
   const auth = await autorizar();
   if (!auth.ok) return { ok: false, error: auth.error };
 
-  if (!Array.isArray(filas) || filas.length === 0) {
+  /*
+   * Puede no haber NADA que escribir y aun así haber trabajo: es el caso de
+   * quien sube su lista definitiva, que ya coincide con los precios, sólo
+   * para apagar lo que sobra. Rechazarlo por «lista vacía» dejaba el botón
+   * muerto justo en ese caso.
+   */
+  if (!Array.isArray(filas)) {
+    return { ok: false, error: 'No hay nada que aplicar.' };
+  }
+  if (filas.length === 0 && !opciones?.desactivarSobrantes) {
     return { ok: false, error: 'No hay nada que aplicar.' };
   }
 
@@ -160,12 +211,37 @@ export async function applyPriceImportAction(filas: unknown): Promise<ApplyResul
       ((f as FilaImportada).estado === 'NUEVO' || (f as FilaImportada).estado === 'ACTUALIZA'),
   );
 
-  if (validas.length === 0) {
+  if (validas.length === 0 && !opciones?.desactivarSobrantes) {
     return { ok: false, error: 'No hay filas válidas que aplicar.' };
+  }
+
+  /*
+   * Se recalcula aquí qué sobra, con los códigos del archivo. No se acepta
+   * una lista de «códigos a desactivar» del cliente: eso permitiría desactivar
+   * el catálogo entero con una petición hecha a mano.
+   */
+  let desactivarCodigos: string[] = [];
+  if (opciones?.desactivarSobrantes) {
+    const codigos = Array.isArray(opciones.codigosDelArchivo)
+      ? opciones.codigosDelArchivo.filter(
+          (c): c is string => typeof c === 'string' && /^[A-Z0-9_]{2,40}$/.test(c),
+        )
+      : [];
+
+    if (codigos.length === 0) {
+      return { ok: false, error: 'No se pudo determinar qué contiene el archivo.' };
+    }
+
+
+    const enElArchivo = new Set(codigos);
+    desactivarCodigos = (await repository.listTreatments())
+      .filter((t) => !enElArchivo.has(t.code))
+      .map((t) => t.code);
   }
 
   try {
     const result = await repository.importTreatmentPrices({
+      desactivarCodigos,
       filas: validas.map((f) => ({
         code: f.code,
         name: f.name,
@@ -183,7 +259,12 @@ export async function applyPriceImportAction(filas: unknown): Promise<ApplyResul
     // Las tarifas por odontologa parten del precio de lista: si no se
     // revalida, ahi seguiria viendose el anterior.
     revalidatePath('/tarifas');
-    return { ok: true, creados: result.creados, actualizados: result.actualizados };
+    return {
+      ok: true,
+      creados: result.creados,
+      actualizados: result.actualizados,
+      desactivados: result.desactivados,
+    };
   } catch (error) {
     console.error(
       JSON.stringify({

@@ -34,7 +34,8 @@ const envSchema = z.object({
 
   DATA_SOURCE: z.enum(['mock', 'db']).default('mock'),
 
-  DEFAULT_CLINIC_COMMISSION_PERCENT: z.coerce.number().int().min(0).max(100).default(40),
+  // 60 = la clínica se queda con el 60 % y el odontólogo cobra el 40 %.
+  DEFAULT_CLINIC_COMMISSION_PERCENT: z.coerce.number().int().min(0).max(100).default(60),
 
   CLINIC_TIMEZONE: z.string().default('America/Bogota'),
 

@@ -41,6 +41,7 @@ import { ok, failValidation, failInternal, newRequestId } from '@/backend/http/r
  *      "author":     "PATIENT" | "AI_BOT" | "SYSTEM",
  *      "body":       "Hola, quiero una cita",
  *      "mediaUrl":   "https://...",        // opcional
+ *      "mediaType":  "image/jpeg",         // opcional; decide cómo se pinta
  *      "externalId": "wamid.HBgM..."       // opcional pero MUY recomendable
  *    }
  *
@@ -77,6 +78,7 @@ export async function POST(request: NextRequest) {
       author: data.author,
       body: data.body,
       mediaUrl: data.mediaUrl ?? null,
+      mediaType: data.mediaType ?? null,
       externalId: data.externalId ?? null,
     });
 

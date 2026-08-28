@@ -1,6 +1,10 @@
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
-import { getAllRates, getRateHistory } from '@/backend/services/exchange-rate.service';
+import {
+  getAllRates,
+  getRateHistory,
+  resolveRateSource,
+} from '@/backend/services/exchange-rate.service';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { ExchangeRatePanel } from '@/frontend/features/admin/ExchangeRatePanel';
@@ -26,9 +30,13 @@ export const dynamic = 'force-dynamic';
 export default async function ExchangeRatePage() {
   await requireRole('ASSISTANT');
 
-  const [{ bcv, paralelo }, history, treatments] = await Promise.all([
+  const settings = await repository.getClinicSettings();
+  const activeSource = resolveRateSource(settings.preferredRateSource);
+
+  const [{ bcv, paralelo, euro }, history, treatments] = await Promise.all([
     getAllRates(),
-    getRateHistory('BCV', 20),
+    // El historial es el de la tasa que se cobra, no siempre el del BCV.
+    getRateHistory(activeSource, 20),
     repository.listTreatments(),
   ]);
 
@@ -58,7 +66,11 @@ export default async function ExchangeRatePage() {
       <FadeIn>
         <PageHead
           title="Tasa de cambio"
-          subtitle="Los precios se fijan en dólares y se cobran en bolívares a la tasa BCV"
+          subtitle={
+            activeSource === 'EURO'
+              ? 'Los precios se fijan en dólares y se cobran en bolívares a la tasa del euro'
+              : `Los precios se fijan en dólares y se cobran en bolívares a la tasa ${activeSource === 'PARALELO' ? 'paralela' : 'BCV'}`
+          }
         />
       </FadeIn>
 
@@ -66,6 +78,8 @@ export default async function ExchangeRatePage() {
         <ExchangeRatePanel
           bcv={serialize(bcv)}
           paralelo={serialize(paralelo)}
+          euro={serialize(euro)}
+          activeSource={activeSource}
           history={history.map((row) => ({
             id: row.id,
             rate: row.rate,

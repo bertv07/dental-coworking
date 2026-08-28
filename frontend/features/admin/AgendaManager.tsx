@@ -13,7 +13,7 @@ import type {
 import { formatCents } from '@/backend/domain/money';
 import { totalCitaCents } from '@/backend/domain/pricing';
 import {
-  createAppointmentAction,
+  createAppointmentWithExtrasAction,
   updateAppointmentAction,
   setAppointmentStatusAction,
 } from '@/app/actions/admin.actions';
@@ -151,7 +151,7 @@ export function AgendaManager({
   const paidIds = new Set(paidAppointmentIds);
 
   const crud = useCrud<AppointmentWithRelations>({
-    create: createAppointmentAction,
+    create: createAppointmentWithExtrasAction,
     update: updateAppointmentAction,
     // La agenda no borra: una cita se CANCELA, y eso conserva el registro.
     remove: async () => ({ ok: false, error: 'Usa "Cancelar" en vez de eliminar' }),
@@ -168,6 +168,33 @@ export function AgendaManager({
    * en vez de con un efecto: así el modal ya sale abierto en el primer
    * pintado, sin el parpadeo de ver la agenda y que salte encima.
    */
+  /*
+   * Tratamientos EXTRA de la misma visita.
+   *
+   * «A veces una persona se hace más de una cosa»: viene a la limpieza, se le
+   * ve una caries y se le hace también. El principal fija el hueco y la
+   * duración; estos se suman como procedimientos añadidos, que es como ya se
+   * cobraban.
+   */
+  const [extras, setExtras] = useState<string[]>([]);
+  const [extraElegido, setExtraElegido] = useState('');
+  /** El principal, sólo para poder sumar el total en pantalla. */
+  const [principal, setPrincipal] = useState<string>('');
+
+  const precioDe = (id: string) =>
+    treatments.find((t) => t.id === id)?.basePriceCents ?? 0;
+
+  /*
+   * El total que se ve mientras se agenda.
+   *
+   * Es orientativo y lo dice: el precio final lo decide el servidor con la
+   * tarifa pactada de cada odontóloga. Enseñarlo igualmente evita la pregunta
+   * de «¿y esto cuánto le sale?» con el paciente delante.
+   */
+  const totalOrientativo =
+    precioDe(principal || editing?.treatmentId || '') +
+    extras.reduce((suma, id) => suma + precioDe(id), 0);
+
   const [abiertoPorPaciente, setAbiertoPorPaciente] = useState(false);
   if (preselectedPatientId && !abiertoPorPaciente) {
     setAbiertoPorPaciente(true);
@@ -429,7 +456,14 @@ export function AgendaManager({
 
       <Modal
         open={crud.mode.kind !== 'closed'}
-        onClose={crud.close}
+        onClose={() => {
+          // Los extras se olvidan al cerrar: arrastrarlos a la cita siguiente
+          // le cobraría a otra persona lo de la anterior.
+          setExtras([]);
+          setExtraElegido('');
+          setPrincipal('');
+          crud.close();
+        }}
         title={editing ? 'Reprogramar cita' : 'Nueva cita'}
         subtitle={
           editing
@@ -438,7 +472,12 @@ export function AgendaManager({
         }
         footer={
           <FormFooter
-            onCancel={crud.close}
+            onCancel={() => {
+              setExtras([]);
+              setExtraElegido('');
+              setPrincipal('');
+              crud.close();
+            }}
             isPending={crud.isPending}
             submitLabel={editing ? 'Reprogramar' : 'Agendar'}
           />
@@ -480,6 +519,7 @@ export function AgendaManager({
             name="treatmentId"
             required
             defaultValue={editing?.treatmentId}
+            onChange={(e) => setPrincipal(e.target.value)}
             hint="Define duración y precio"
             options={treatments.map((treatment) => ({
               value: treatment.id,
@@ -487,6 +527,99 @@ export function AgendaManager({
             }))}
             error={errorFor('treatmentId')}
           />
+          {/* --- Más tratamientos en la misma visita ------------------- */}
+          <div className="field form-grid--full">
+            <span className="field__label">¿Se hace algo más?</span>
+            <div className="row" style={{ gap: '0.4rem' }}>
+              <select
+                className="input"
+                value={extraElegido}
+                onChange={(e) => setExtraElegido(e.target.value)}
+                aria-label="Añadir otro tratamiento"
+              >
+                <option value="">Añadir otro tratamiento…</option>
+                {treatments.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} — {formatCents(t.basePriceCents)}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={!extraElegido}
+                onClick={() => {
+                  if (!extraElegido) return;
+                  // Se permite repetir: dos obturaciones en la misma visita
+                  // son dos cobros, no uno.
+                  setExtras((previos) => [...previos, extraElegido]);
+                  setExtraElegido('');
+                }}
+              >
+                Añadir
+              </button>
+            </div>
+
+            {extras.length > 0 && (
+              <div className="stack" style={{ gap: '0.3rem', marginTop: '0.5rem' }}>
+                {extras.map((id, i) => {
+                  const t = treatments.find((x) => x.id === id);
+                  return (
+                    <div
+                      key={`${id}-${i}`}
+                      className="row"
+                      style={{ gap: '0.5rem', alignItems: 'center' }}
+                    >
+                      <span className="text-sm" style={{ flex: 1 }}>
+                        {t?.name ?? id}
+                      </span>
+                      <span className="mono text-sm">
+                        {t ? formatCents(t.basePriceCents) : ''}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => setExtras((p) => p.filter((_, j) => j !== i))}
+                      >
+                        Quitar
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <span className="field__hint">
+              El precio real de cada uno lo pone el sistema al guardar: el pactado con
+              esa odontóloga si lo tiene, y si no el de lista.
+            </span>
+
+            {totalOrientativo > 0 && (
+              <div
+                className="row"
+                style={{
+                  justifyContent: 'space-between',
+                  marginTop: '0.6rem',
+                  paddingTop: '0.6rem',
+                  borderTop: '1px solid var(--color-border)',
+                }}
+              >
+                <span className="text-sm">
+                  Total de la visita
+                  {extras.length > 0 && (
+                    <span className="subtle"> · {extras.length + 1} tratamientos</span>
+                  )}
+                </span>
+                <strong className="mono">{formatCents(totalOrientativo)}</strong>
+              </div>
+            )}
+          </div>
+
+          {/* En una sola cadena: el payload del panel se queda con la última
+              clave repetida, así que varios inputs con el mismo nombre
+              perderían todos menos uno. */}
+          <input type="hidden" name="extraTreatmentIds" value={extras.join(',')} readOnly />
+
           <SelectField
             label="Odontólogo"
             name="dentistId"

@@ -55,6 +55,9 @@ export function PriceImport() {
   const [isApplying, startTransition] = useTransition();
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Apagado por defecto: subir media lista es lo normal, y dar por hecho que
+  // lo que falta ya no se hace vaciaría el catálogo sin querer.
+  const [desactivarSobrantes, setDesactivarSobrantes] = useState(false);
   const [descartado, setDescartado] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -65,13 +68,20 @@ export function PriceImport() {
   function aplicar() {
     if (!vista?.filas) return;
 
+
     const aplicables = vista.filas.filter(
       (f) => f.estado === 'NUEVO' || f.estado === 'ACTUALIZA',
     );
 
+    const sobran = vista.sobran ?? [];
     if (
       !window.confirm(
         `¿Aplicar ${aplicables.length} cambios a la lista de precios?\n\n` +
+          (desactivarSobrantes && sobran.length > 0
+            ? `Además se DESACTIVAN ${sobran.length} tratamientos que no están en el ` +
+              'archivo. No se borran: dejan de ofrecerse al agendar y su historial ' +
+              'sigue intacto.\n\n'
+            : '') +
           'Los precios de las citas ya agendadas NO cambian: cada una guarda el ' +
           'que se le prometió al paciente.',
       )
@@ -80,7 +90,14 @@ export function PriceImport() {
     }
 
     startTransition(async () => {
-      const result = await applyPriceImportAction(aplicables);
+      const result = await applyPriceImportAction(aplicables, {
+        desactivarSobrantes,
+        // Todos los códigos del archivo, no sólo los que cambian: los que
+        // quedan igual también «están en la lista» y no deben desactivarse.
+        codigosDelArchivo: (vista.filas ?? [])
+          .filter((f) => f.estado !== 'ERROR')
+          .map((f) => f.code),
+      });
       if (!result.ok) {
         setDone(null);
         setError(result.error ?? 'No se pudieron aplicar los cambios');
@@ -88,7 +105,8 @@ export function PriceImport() {
       }
       setError(null);
       setDone(
-        `Listo: ${result.creados} tratamientos nuevos y ${result.actualizados} actualizados.`,
+        `Listo: ${result.creados} tratamientos nuevos y ${result.actualizados} actualizados` +
+          (result.desactivados ? `, y ${result.desactivados} desactivados.` : '.'),
       );
       setDescartado(true);
       formRef.current?.reset();
@@ -97,6 +115,14 @@ export function PriceImport() {
 
   const aplicables =
     vista?.filas?.filter((f) => f.estado === 'NUEVO' || f.estado === 'ACTUALIZA') ?? [];
+
+  /*
+   * Hay trabajo si hay filas que escribir O si se pidió apagar lo que sobra.
+   * Lo segundo solo también cuenta: quien sube su lista definitiva, que ya
+   * coincide con los precios, viene justo a eso.
+   */
+  const sobrantes = vista?.sobran?.length ?? 0;
+  const hayAlgoQueHacer = aplicables.length > 0 || (desactivarSobrantes && sobrantes > 0);
 
   return (
     <Card
@@ -243,16 +269,44 @@ export function PriceImport() {
             </table>
           </div>
 
+          {/* --- Lo que no viene en el archivo --------------------------- */}
+          {(vista.sobran?.length ?? 0) > 0 && (
+            <div style={{ marginTop: '1rem' }}>
+              <Notice tone="warning">
+                <label className="row" style={{ gap: '0.5rem', alignItems: 'flex-start' }}>
+                  <input
+                    type="checkbox"
+                    name="desactivarSobrantes"
+                    checked={desactivarSobrantes}
+                    onChange={(e) => setDesactivarSobrantes(e.target.checked)}
+                    disabled={isPending}
+                    style={{ marginTop: '0.25rem' }}
+                  />
+                  <span>
+                    Desactivar los <strong>{vista.sobran?.length}</strong> tratamientos que
+                    NO están en este archivo. Dejan de ofrecerse al agendar;{' '}
+                    <strong>no se borran</strong> y su historial de citas y facturas queda
+                    intacto.
+                    <span className="text-xs subtle" style={{ display: 'block', marginTop: '0.35rem' }}>
+                      {vista.sobran?.map((t) => t.name).join(' · ')}
+                    </span>
+                  </span>
+                </label>
+              </Notice>
+            </div>
+          )}
+
           <div className="row" style={{ gap: '0.5rem', marginTop: '1rem' }}>
             <button
               type="button"
               className="btn btn--primary"
               onClick={aplicar}
-              disabled={isPending || aplicables.length === 0}
+              disabled={isPending || !hayAlgoQueHacer}
             >
               {isPending
                 ? 'Aplicando…'
-                : `Aplicar ${aplicables.length} cambios`}
+                : `Aplicar ${aplicables.length} cambios` +
+                  (desactivarSobrantes && sobrantes ? ` y desactivar ${sobrantes}` : '')}
             </button>
             <button
               type="button"
@@ -264,7 +318,7 @@ export function PriceImport() {
             </button>
           </div>
 
-          {aplicables.length === 0 && (
+          {!hayAlgoQueHacer && (
             <p className="text-sm subtle" style={{ marginTop: '0.5rem' }}>
               No hay nada que cambiar: el archivo coincide con la lista actual.
             </p>

@@ -2,7 +2,7 @@ import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { formatCents, formatBs } from '@/backend/domain/money';
 import { clinicDayKey, addDays } from '@/backend/domain/clinic-calendar';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { Card, Stat, Badge, EmptyState } from '@/frontend/components/ui/primitives';
 import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/motion';
@@ -71,7 +71,7 @@ export default async function CashPage({
 
   const paymentMethods = await repository.listPaymentMethods();
 
-  const rateSource = settings.preferredRateSource === 'PARALELO' ? 'PARALELO' : 'BCV';
+  const rateSource = resolveRateSource(settings.preferredRateSource);
   const rate = await getCurrentRate(rateSource);
 
   const commissionByDentist: Record<string, number> = {};

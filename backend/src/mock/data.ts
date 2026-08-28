@@ -176,6 +176,12 @@ export const MOCK_DENTISTS: Dentist[] = DENTIST_SEED.map((seed, index) => ({
   photoUrl: null,
   specialties: seed.specialties,
   clinicCommissionPercent: seed.commission,
+  /*
+   * Cumpleaños repartidos por el año, con dos en el mes en curso: la tarjeta
+   * de «cumpleaños» de Inicio tiene que poder verse llena en la demo, no
+   * siempre vacía.
+   */
+  birthDate: new Date(Date.UTC(1985 + (index % 12), index % 12, 3 + ((index * 5) % 25))),
   isActive: index !== 11, // Uno inactivo: la UI debe manejar ese caso.
   createdAt: addDays(MOCK_NOW, -400 + index * 12),
   deletedAt: null,
@@ -651,6 +657,8 @@ function generateConversations(): {
         author: message.author,
         body: message.body,
         mediaUrl: null,
+        mediaType: null,
+        attachmentId: null,
         sentAt: addMinutes(lastMessageAt, -minutesBefore),
       });
     });

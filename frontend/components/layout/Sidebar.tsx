@@ -16,6 +16,7 @@ import {
   IconSettings,
   IconTooth,
   IconClock,
+  IconPrescription,
   IconCurrency,
   IconHome,
 } from '@/frontend/components/ui/icons';
@@ -81,6 +82,8 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // El resto del recorrido del mostrador: cobrar y cerrar el día.
       { href: '/facturas', label: 'Facturas', Icon: IconTag, minimumRole: 'ASSISTANT' },
       { href: '/caja', label: 'Caja', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
+      // Junto a facturas y caja: es lo que recepción negocia al cobrar.
+      { href: '/descuentos', label: 'Descuentos', Icon: IconTag, minimumRole: 'ASSISTANT' },
       { href: '/whatsapp', label: 'WhatsApp', Icon: IconChat, minimumRole: 'ASSISTANT' },
 
       // Consulta, no trabajo diario: van después.
@@ -91,6 +94,11 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // Quién trabaja cuándo SÍ es cosa de recepción, al revés que las
       // tarifas: por eso este no esconde nada.
       { href: '/horarios', label: 'Horarios', Icon: IconClock, minimumRole: 'DENTIST' },
+      /*
+       * Recetarios. Lo ve también recepción: suele ser quien tiene el escáner
+       * y quien monta la plantilla, aunque el recipe sea de la odontóloga.
+       */
+      { href: '/recetarios', label: 'Recetarios', Icon: IconPrescription, minimumRole: 'DENTIST' },
       // El instrumental es de cada odontólogo; recepción no lo gestiona.
       {
         href: '/instrumental',
@@ -107,6 +115,11 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // Recepción ve el listado (quién hay y qué hace); el administrador, el
       // CRUD con las comisiones.
       { href: '/odontologos', label: 'Odontólogos', Icon: IconStethoscope, minimumRole: 'ASSISTANT' },
+      /*
+       * Cuentas del panel: SÓLO administrador. Es la pantalla que reparte el
+       * acceso a todo lo demás; quien entre ahí puede ascenderse a sí mismo.
+       */
+      { href: '/usuarios', label: 'Cuentas', Icon: IconUsers, minimumRole: 'SUPER_ADMIN' },
       // Recepción también los edita: es quien cotiza y factura, así que es la
       // primera en enterarse de que un precio cambió.
       { href: '/tratamientos', label: 'Precios', Icon: IconTag, minimumRole: 'ASSISTANT' },

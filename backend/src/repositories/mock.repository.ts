@@ -20,6 +20,7 @@ import type {
   FinancialSummary,
   Patient,
   PaymentMethodOption,
+  Promotion,
   Room,
   Treatment,
   WhatsAppMessage,
@@ -60,6 +61,29 @@ const appointments: Appointment[] = [...MOCK_APPOINTMENTS];
 const patients: Patient[] = [...MOCK_PATIENTS];
 const dentists: Dentist[] = MOCK_DENTISTS.map((dentist) => ({ ...dentist }));
 const treatments: Treatment[] = MOCK_TREATMENTS.map((treatment) => ({ ...treatment }));
+
+/**
+ * Promociones de la demo.
+ *
+ * Va una sola y es la que describió la clínica, palabra por palabra: si te
+ * haces la limpieza, la consulta sale gratis. Sirve para ver la pantalla y el
+ * endpoint del bot funcionando sin tener que inventarse nada.
+ */
+const promotions: Promotion[] = [
+  {
+    id: 'cpromo00001xxxxxxxxxxxxx',
+    name: 'Limpieza con consulta gratis',
+    description: 'Al hacerte la limpieza, la consulta de valoración no se cobra.',
+    requiredTreatmentCodes: ['LIMPIEZA'],
+    benefitKind: 'FREE_TREATMENT',
+    benefitTreatmentCode: 'CONSULTA',
+    benefitValue: 0,
+    botPitch: 'Si te haces la limpieza, la consulta de valoración va incluida.',
+    startsAt: null,
+    endsAt: null,
+    isActive: true,
+  },
+];
 const rooms: Room[] = MOCK_ROOMS.map((room) => ({ ...room }));
 const conversations = MOCK_CONVERSATIONS.map((conversation) => ({ ...conversation }));
 
@@ -446,6 +470,18 @@ export const mockRepository: DataRepository = {
   },
 
   // --- Odontólogos (escritura) ---------------------------------------------
+
+  async listStaffBirthdays(month) {
+    return dentists
+      .filter((d) => d.birthDate && !d.deletedAt && d.birthDate.getUTCMonth() + 1 === month)
+      .map((d) => ({
+        id: d.id,
+        name: d.fullName,
+        role: 'Odontólogo',
+        day: d.birthDate!.getUTCDate(),
+      }))
+      .sort((a, b) => a.day - b.day || a.name.localeCompare(b.name));
+  },
 
   async reactivateDentist({ id }) {
     const dentist = dentists.find((item) => item.id === id);
@@ -908,7 +944,7 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
-  async importTreatmentPrices({ filas }) {
+  async importTreatmentPrices({ filas, desactivarCodigos }) {
     let creados = 0;
     for (const fila of filas) {
       const existente = treatments.find((t) => t.code === fila.code);
@@ -925,7 +961,16 @@ export const mockRepository: DataRepository = {
         creados += 1;
       }
     }
-    return { creados, actualizados: filas.length - creados };
+    let desactivados = 0;
+    for (const code of desactivarCodigos ?? []) {
+      const t = treatments.find((x) => x.code === code && x.isActive);
+      if (t) {
+        t.isActive = false;
+        desactivados += 1;
+      }
+    }
+
+    return { creados, actualizados: filas.length - creados, desactivados };
   },
 
   // --- Facturas -------------------------------------------------------------
@@ -963,6 +1008,117 @@ export const mockRepository: DataRepository = {
 
   async voidInvoice() {
     return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  // --- Adjuntos de WhatsApp ---------------------------------------------------
+  //  La demo no envía archivos: guardar binarios en memoria y perderlos al
+  //  reiniciar daría una falsa sensación de que el envío quedó hecho.
+
+  async attachOutboundMedia() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async getOutboundMedia() {
+    return null;
+  },
+
+  // --- Cuentas del panel ------------------------------------------------------
+  //  La demo no da de alta cuentas: crear accesos reales desde una versión en
+  //  memoria que se reinicia sola sería prometer algo que no existe.
+
+  async listStaffUsers() {
+    return MOCK_USERS.map((u) => ({
+      id: u.id,
+      email: u.email,
+      fullName: u.fullName,
+      role: u.role,
+      status: u.status,
+      phoneE164: u.phoneE164 ?? null,
+      birthDate: null,
+      mustChangePassword: false,
+      lastLoginAt: u.lastLoginAt ?? null,
+      dentistId: dentists.find((d) => d.userId === u.id)?.id ?? null,
+      dentistName: dentists.find((d) => d.userId === u.id)?.fullName ?? null,
+      createdAt: u.createdAt,
+    }));
+  },
+
+  async createStaffUser() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async updateStaffUser() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async setStaffUserStatus() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async resetStaffUserPassword() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async countActiveAdmins() {
+    return MOCK_USERS.filter((u) => u.role === 'SUPER_ADMIN' && u.status === 'ACTIVE').length;
+  },
+
+  // --- Promociones -----------------------------------------------------------
+
+  async listPromotions() {
+    return promotions;
+  },
+
+  async createPromotion(data) {
+    const creada = { id: newId('promo'), ...data };
+    promotions.push(creada);
+    return { ok: true, data: creada };
+  },
+
+  async updatePromotion(id, data) {
+    const i = promotions.findIndex((p) => p.id === id);
+    if (i === -1) return { ok: false, reason: 'NOT_FOUND' };
+    promotions[i] = { ...promotions[i]!, ...data };
+    return { ok: true, data: promotions[i]! };
+  },
+
+  async deletePromotion(id) {
+    const i = promotions.findIndex((p) => p.id === id);
+    if (i === -1) return { ok: false, reason: 'NOT_FOUND' };
+    promotions.splice(i, 1);
+    return { ok: true, data: null };
+  },
+
+  // --- Recetarios ------------------------------------------------------------
+  //  La demo los deja vacíos: un recetario es el membrete y la firma de una
+  //  persona concreta, y no hay nada razonable que inventarse ahí.
+
+  async listPrescriptionTemplates() {
+    return [];
+  },
+
+  async getPrescriptionTemplate() {
+    return null;
+  },
+
+  async createPrescriptionTemplate() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async savePrescriptionTemplate() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async deletePrescriptionTemplate() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async addPrescriptionAsset() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async getPrescriptionAsset() {
+    return null;
   },
 
   async listPatientDocuments() {
@@ -1380,6 +1536,8 @@ export const mockRepository: DataRepository = {
       author,
       body,
       mediaUrl: mediaUrl ?? null,
+      mediaType: null,
+      attachmentId: null,
       externalMessageId: externalId ?? null,
       deliveryStatus: 'SENT' as const,
       deliveryError: null,

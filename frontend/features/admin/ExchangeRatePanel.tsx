@@ -33,6 +33,9 @@ interface HistoryRow {
 interface ExchangeRatePanelProps {
   bcv: RateInfo | null;
   paralelo: RateInfo | null;
+  euro: RateInfo | null;
+  /** La que la clínica tiene configurada para cobrar. */
+  activeSource: 'BCV' | 'PARALELO' | 'EURO';
   history: HistoryRow[];
   /** Ejemplos de conversión con precios reales del catálogo. */
   samples: Array<{ name: string; usdCents: number }>;
@@ -46,11 +49,27 @@ function formatDateTime(iso: string): string {
   }).format(new Date(iso));
 }
 
-export function ExchangeRatePanel({ bcv, paralelo, history, samples }: ExchangeRatePanelProps) {
+export function ExchangeRatePanel({
+  bcv,
+  paralelo,
+  euro,
+  activeSource,
+  history,
+  samples,
+}: ExchangeRatePanelProps) {
+  /*
+   * La tabla de equivalencias tiene que convertir con LA TASA QUE SE COBRA,
+   * no siempre con la del BCV. Antes estaba fijada al BCV: si la clínica
+   * cobraba a euro, esta pantalla enseñaba unos bolívares y el mostrador
+   * cobraba otros.
+   */
+  const activa = activeSource === 'EURO' ? euro : activeSource === 'PARALELO' ? paralelo : bcv;
+  const nombreActiva =
+    activeSource === 'EURO' ? 'euro oficial' : activeSource === 'PARALELO' ? 'paralelo' : 'BCV';
   const [isPending, startTransition] = useTransition();
   const [message, setMessage] = useState<{ tone: 'info' | 'danger'; text: string } | null>(null);
 
-  function refresh(source: 'BCV' | 'PARALELO') {
+  function refresh(source: 'BCV' | 'PARALELO' | 'EURO') {
     setMessage(null);
     startTransition(async () => {
       const result = await refreshExchangeRateAction(source);
@@ -121,6 +140,27 @@ export function ExchangeRatePanel({ bcv, paralelo, history, samples }: ExchangeR
           </button>
         </div>
 
+        {/* --- Euro oficial: la clínica cobra referenciada a esta ------- */}
+        <div className="rate-card">
+          <div className="rate-card__label muted">Euro oficial (BCV)</div>
+          <div className="rate-card__value">
+            {euro ? euro.rate.toLocaleString('es-VE', { minimumFractionDigits: 4 }) : '—'}
+          </div>
+          <div className="rate-card__meta">
+            Bs por euro
+            {euro && <> · {formatDateTime(euro.publishedAt)}</>}
+          </div>
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            style={{ marginTop: '1rem' }}
+            onClick={() => refresh('EURO')}
+            disabled={isPending}
+          >
+            <IconRefresh size={14} /> Actualizar
+          </button>
+        </div>
+
         <div className="rate-card">
           <div className="rate-card__label muted">Brecha cambiaria</div>
           <div className="rate-card__value">
@@ -147,10 +187,10 @@ export function ExchangeRatePanel({ bcv, paralelo, history, samples }: ExchangeR
         {/* --- Conversión de precios reales del catálogo --- */}
         <Card
           title="Equivalencia de tratamientos"
-          subtitle="Precios del catálogo convertidos a la tasa BCV vigente"
+          subtitle={`Precios en dólares, cobrados a la tasa ${nombreActiva} vigente`}
           flush
         >
-          {!bcv ? (
+          {!activa ? (
             <EmptyState>Sin tasa disponible para convertir.</EmptyState>
           ) : (
             <div className="table-wrap">
@@ -158,6 +198,8 @@ export function ExchangeRatePanel({ bcv, paralelo, history, samples }: ExchangeR
                 <thead>
                   <tr>
                     <th>Tratamiento</th>
+                    {/* La lista se escribe en dólares aunque se cobre a otra
+                        tasa: la columna es lo que dice el catálogo. */}
                     <th className="table__num">USD</th>
                     <th className="table__num">Bolívares</th>
                   </tr>
@@ -170,7 +212,7 @@ export function ExchangeRatePanel({ bcv, paralelo, history, samples }: ExchangeR
                         ${(sample.usdCents / 100).toFixed(2)}
                       </td>
                       <td className="table__num mono" style={{ color: 'var(--color-primary)' }}>
-                        {formatBs(Math.round((sample.usdCents / 100) * bcv.rate * 100) / 100)}
+                        {formatBs(Math.round((sample.usdCents / 100) * activa.rate * 100) / 100)}
                       </td>
                     </tr>
                   ))}
