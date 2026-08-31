@@ -3349,3 +3349,215 @@ a {
   justify-content: flex-end;
   padding: 0.7rem 0.9rem;
 }
+
+
+/* ==========================================================================
+   PANTALLAS DE ACCESO — login y cambio de contraseña
+   ==========================================================================
+   `.login-shell` y `.login-card` las usaba /cambiar-clave desde el principio,
+   pero NUNCA existieron en esta hoja: la página salía sin un solo estilo. Se
+   definen aquí y las comparten las dos pantallas, que son la misma cosa vista
+   dos veces.
+
+   Dos columnas en escritorio: a la izquierda la identidad de la clínica, a la
+   derecha el formulario. En móvil sólo el formulario — un panel decorativo
+   que empuja el campo de la contraseña fuera de la pantalla es peor que no
+   tener panel.
+   ========================================================================== */
+
+.login-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 1fr;
+  background: var(--color-bg);
+}
+
+@media (min-width: 900px) {
+  .login-shell--split { grid-template-columns: 1.1fr 1fr; }
+}
+
+/* --- Panel de identidad (sólo escritorio) --- */
+
+.login-aside {
+  display: none;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 3rem;
+  color: #fff;
+  /* Verde azulado del logotipo de la clínica, no un degradado genérico. */
+  background: linear-gradient(150deg, #15707c 0%, #0d4a53 100%);
+}
+
+@media (min-width: 900px) {
+  .login-aside { display: flex; }
+}
+
+.login-aside__marca {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.login-aside__logo {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  font-size: 1.35rem;
+  background: rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+}
+
+.login-aside__titular {
+  margin: 0;
+  max-width: 18ch;
+  font-size: clamp(1.75rem, 3vw, 2.4rem);
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
+}
+
+.login-aside__lista {
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.6rem;
+  font-size: 0.92rem;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.login-aside__lista li {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+}
+
+.login-aside__pie {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+/* --- Columna del formulario --- */
+
+.login-main {
+  display: grid;
+  place-items: center;
+  padding: 2rem 1.25rem;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 25rem;
+  padding: 2rem 1.75rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 16px 40px -24px rgba(0, 0, 0, 0.35);
+}
+
+.login-card__marca {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-bottom: 1.5rem;
+  font-weight: 600;
+}
+
+/* La marca del formulario sólo cuando NO hay panel al lado: con los dos, el
+   nombre de la clínica saldría dos veces en la misma pantalla. */
+@media (min-width: 900px) {
+  .login-shell--split .login-card__marca { display: none; }
+}
+
+.login-card__logo {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  font-size: 1.2rem;
+  background: var(--color-accent-soft, rgba(21, 112, 124, 0.12));
+  border-radius: 10px;
+}
+
+.login-card__title {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.login-card__subtitle {
+  margin: 0.35rem 0 1.5rem;
+  font-size: 0.9rem;
+  color: var(--color-text-muted, #6b7280);
+  /* Un correo largo no debe ensanchar la tarjeta ni salirse de ella. */
+  overflow-wrap: anywhere;
+}
+
+.login-card__pie {
+  margin: 1.5rem 0 0;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--color-border);
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.login-demo {
+  width: 100%;
+  max-width: 25rem;
+  margin-top: 1rem;
+}
+
+
+/* --- La hoja vacía del editor de recetarios ------------------------------
+   Ocupa el papel entero y es el único elemento accionable: quien entra por
+   primera vez sólo puede hacer lo que de verdad va a hacer, que es subir su
+   recipe. */
+
+.recipe-sheet__vacia {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 2rem;
+  font: inherit;
+  color: var(--color-text-muted, #6b7280);
+  text-align: center;
+  background: transparent;
+  border: 2px dashed var(--color-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.recipe-sheet__vacia:hover,
+.recipe-sheet__vacia:focus-visible,
+.recipe-sheet__vacia[data-encima='si'] {
+  border-color: var(--color-primary, #15707c);
+  background: var(--color-accent-soft, rgba(21, 112, 124, 0.06));
+}
+
+.recipe-sheet__vacia strong {
+  font-size: 1.05rem;
+  color: var(--color-text, #111);
+}
+
+.recipe-sheet__vacia-icono {
+  font-size: 2rem;
+  line-height: 1;
+  color: var(--color-primary, #15707c);
+}
+
+.recipe-sheet__vacia-nota {
+  font-size: 0.85rem;
+  line-height: 1.5;
+}

@@ -1,8 +1,9 @@
 import type { NextRequest } from 'next/server';
 import { verifyAutomationSignature } from '@/backend/auth/automation-key';
 import { checkAvailabilitySchema } from '@/backend/validators/appointment.schema';
-import { findAvailableSlots } from '@/backend/services/scheduling.service';
+import { buscarDisponibilidad } from '@/backend/services/scheduling.service';
 import { checkRateLimit, RATE_LIMITS, getClientIp } from '@/backend/http/rate-limit';
+import { env } from '@/backend/config/env';
 import {
   ok,
   fail,
@@ -68,6 +69,22 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * La fecha de hoy en la clínica, en ISO corto.
+ *
+ * Va en TODAS las respuestas. El agente pidió una vez el «17 de enero de
+ * 2026» estando en septiembre: no sabía en qué día vivía y lo dedujo mal. Es
+ * un dato de dos líneas que evita una conversación entera perdida.
+ */
+function hoyEnLaClinica(): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: env.CLINIC_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 export async function POST(request: NextRequest) {
   const requestId = newRequestId();
 
@@ -112,11 +129,31 @@ export async function POST(request: NextRequest) {
     const validation = checkAvailabilitySchema.safeParse(parsedBody);
     if (!validation.success) return failValidation(validation.error, requestId);
 
-    const slots = await findAvailableSlots(validation.data);
+    const { slots, motivo } = await buscarDisponibilidad(validation.data);
+
+    /*
+     * Cuando no hay huecos se dice POR QUÉ y con qué palabras contarlo.
+     *
+     * Antes una lista vacía significaba siempre «ese día está lleno», y el
+     * bot le soltaba eso a un paciente que había pedido una fecha ya pasada
+     * o un domingo. El flujo de n8n no tenía forma de distinguirlo.
+     */
+    const explicacion: Record<string, string> = {
+      PASADO:
+        'Esa fecha ya pasó. Confirma el día que quiere el paciente y vuelve a consultar; ' +
+        'hoy es ' + hoyEnLaClinica() + '.',
+      CERRADO: 'Ese día la clínica no atiende. Ofrece otro día de la semana.',
+      LLENO: 'Ese día está lleno. No es un error: ofrécele otra fecha.',
+    };
 
     return ok({
       treatmentCode: validation.data.treatmentCode,
       date: validation.data.date.toISOString(),
+      /** La fecha de hoy, para que el bot no tenga que adivinarla. */
+      today: hoyEnLaClinica(),
+      ...(slots.length === 0 && motivo
+        ? { reason: motivo, message: explicacion[motivo] }
+        : {}),
       slots: slots.map((slot) => ({
         startsAt: slot.startsAt.toISOString(),
         endsAt: slot.endsAt.toISOString(),

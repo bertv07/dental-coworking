@@ -120,7 +120,7 @@ Se puede pagar en dos partes. Respóndenos por aquí y te explicamos cómo.
 ---
 
 ## 5. `tratamiento_pendiente` · UTILITY
-
+Default key
 Para quien dejó un tratamiento a medias.
 
 ```
@@ -155,14 +155,13 @@ valoración va incluida · {{3}} 30 de septiembre
 
 ---
 
-## 7. `felicitacion_cumpleanos` · MARKETING ⚠️ sólo con consentimiento
+## 7. `felicitacion_cumpleanos` · MARKETING ⚠️ sólo con consentimiento esto es solo para el quipo dentro de dental coworing no para clientes
 
 ```
 ¡Feliz cumpleaños, {{1}}! 🎉
 
 De parte de todo el equipo de Dental Coworking.
 
-Si no quieres recibir más mensajes como este, respóndenos BAJA.
 ```
 
 **Ejemplo:** {{1}} Valentina

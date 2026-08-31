@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { requireAuth } from '@/backend/auth/guards';
+import { repository } from '@/backend/repositories';
+import { AuthShell } from '@/frontend/features/auth/AuthShell';
 import { PasswordChangeForm } from '@/frontend/features/auth/PasswordChangeForm';
 
 /**
@@ -33,26 +35,30 @@ export const dynamic = 'force-dynamic';
 export default async function ChangePasswordPage() {
   const user = await requireAuth();
 
+  const settings = await repository.getClinicSettings();
+
   return (
-    <main className="login-shell">
-      <div className="login-card">
-        <h1 className="login-card__title">
-          {user.mustChangePassword ? 'Cambia tu contraseña' : 'Cambiar contraseña'}
-        </h1>
-        <p className="login-card__subtitle">{user.email}</p>
-
-        <PasswordChangeForm isForced={user.mustChangePassword} />
-
-        {/*
-          El enlace de vuelta sólo si NO está obligada: ofrecerle una salida a
-          quien tiene que cambiarla sería ofrecerle una puerta que no abre.
-        */}
-        {!user.mustChangePassword && (
-          <p className="text-sm" style={{ marginTop: '1.25rem', textAlign: 'center' }}>
-            <Link href="/">Volver al panel</Link>
-          </p>
-        )}
-      </div>
-    </main>
+    <AuthShell
+      clinicName={settings.clinicName}
+      title={user.mustChangePassword ? 'Elige tu contraseña' : 'Cambiar contraseña'}
+      subtitle={
+        user.mustChangePassword
+          ? `Entraste con una clave temporal. Elige la tuya para seguir — la anterior la vio quien te la envió.`
+          : user.email
+      }
+      /*
+       * Sin panel lateral cuando es obligatorio: quien llega aquí forzado no
+       * puede ir a ninguna otra parte, y adornar esa pantalla con lo que le
+       * espera dentro es enseñarle una puerta cerrada.
+       */
+      aside={!user.mustChangePassword}
+      footer={
+        // El enlace de vuelta sólo si NO está obligado: ofrecerle una salida a
+        // quien tiene que cambiarla sería ofrecerle una puerta que no abre.
+        !user.mustChangePassword ? <Link href="/">Volver al panel</Link> : undefined
+      }
+    >
+      <PasswordChangeForm isForced={user.mustChangePassword} />
+    </AuthShell>
   );
 }

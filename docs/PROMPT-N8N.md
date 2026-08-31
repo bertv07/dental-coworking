@@ -311,6 +311,23 @@ recepción.
 
 ### 3.3 `POST /api/automation/availability` — huecos libres
 
+**Antes de nada: TÚ NO SABES QUÉ DÍA ES.** El catálogo te lo dice en `now`, y
+esta respuesta también lo repite en `today`. Cuando alguien diga «mañana» o
+«el viernes», cuéntalo a partir de esa fecha; deducirla por tu cuenta acaba
+en peticiones para enero cuando estamos en septiembre — pasó de verdad.
+
+**Cuando `slots` viene vacío, mira `reason` antes de responder:**
+
+| `reason` | Qué le dices |
+|---|---|
+| `PASADO` | Esa fecha ya pasó. Confirma con el paciente qué día quiere y vuelve a consultar. **Nunca** le digas que está lleno. |
+| `CERRADO` | Ese día la clínica no atiende. Ofrécele otro día. |
+| `LLENO` | Ese día está lleno. Ofrécele otra fecha. |
+
+El campo `message` ya trae la explicación redactada; puedes apoyarte en ella.
+
+
+
 ```json
 { "treatmentCode": "LIMPIEZA", "date": "2026-08-20T00:00:00-04:00",
   "dentistId": "c...", "maxSlots": 6 }
@@ -673,6 +690,20 @@ paso 7 del flujo A. Así el modelo no puede «olvidarse» de consultarlo.
 
 ---
 
+## 6-bis. La herramienta de promociones
+
+Además de las cuatro de siempre, el agente necesita esta:
+
+| Herramienta | Endpoint | Cuándo |
+|---|---|---|
+| `promociones_vigentes` | `/api/automation/promotions` | Preguntan por ofertas o descuentos, o preguntan el precio de algo que entra en una promoción |
+
+Cuerpo `{}`. Devuelve sólo lo vigente hoy. **Di el `pitch` tal cual**: ya
+viene redactado. No calcules el precio final con el descuento aplicado — tú
+ofreces, y quien aplica el descuento es recepción al facturar.
+
+---
+
 ## 7. Cuándo escalar a un humano
 
 Llama a `pedir_humano` cuando ocurra cualquiera de estas:
@@ -782,7 +813,15 @@ Esto se vio una y otra vez:
 > «La evaluación de ortodoncia se realiza a través de la consulta, la cual tiene un»
 
 **Es el límite de tokens de salida del nodo de IA**, no el modelo dudando.
-Súbelo a **500 tokens como mínimo** en el nodo del agente.
+
+En el nodo del modelo, dentro de `options`, pon:
+
+```json
+"options": { "temperature": 0.4, "maxOutputTokens": 800 }
+```
+
+Sin esa opción declarada, el nodo se queda con el valor por defecto y las
+respuestas se cortan donde les toque.
 
 Y como red de seguridad: **nunca envíes un mensaje que termine en coma, en
 paréntesis abierto o a mitad de palabra.** Si la respuesta sale así, acórtala

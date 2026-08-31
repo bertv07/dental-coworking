@@ -196,10 +196,55 @@ export function PrescriptionEditor({ template, readOnly = false }: Props) {
 
   // --- Subir una imagen ---------------------------------------------------
 
-  async function subirImagen(file: File) {
+  /**
+   * Convierte la PRIMERA página de un PDF en una imagen.
+   *
+   * Las odontólogas tienen su recipe en PDF tan a menudo como en JPG, y
+   * mandarlas a «exportarlo como imagen» es mandarlas a otro programa. Se
+   * rasteriza aquí, en el navegador: el servidor sigue guardando sólo bytes
+   * de imagen y no hay que meterle un lector de PDF.
+   *
+   * A 2x para que el membrete no salga pixelado al imprimir.
+   */
+  async function pdfAImagen(file: File): Promise<File> {
+    const pdfjs = await import('pdfjs-dist');
+    // El worker se sirve desde el propio paquete; sin esta línea, pdf.js
+    // intenta bajarlo de un CDN y la CSP del panel lo bloquea.
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+      'pdfjs-dist/build/pdf.worker.min.mjs',
+      import.meta.url,
+    ).toString();
+
+    const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+    const pagina = await doc.getPage(1);
+    const escala = 2;
+    const vista = pagina.getViewport({ scale: escala });
+
+    const lienzo = document.createElement('canvas');
+    lienzo.width = Math.round(vista.width);
+    lienzo.height = Math.round(vista.height);
+    const ctx = lienzo.getContext('2d');
+    if (!ctx) throw new Error('sin contexto de dibujo');
+
+    // Fondo blanco: un PDF sin fondo se convertiría en un PNG transparente y
+    // al imprimirlo saldría lo que hubiera debajo.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, lienzo.width, lienzo.height);
+
+    await pagina.render({ canvasContext: ctx, viewport: vista }).promise;
+
+    const blob = await new Promise<Blob | null>((r) => lienzo.toBlob(r, 'image/png'));
+    if (!blob) throw new Error('no se pudo convertir el PDF');
+
+    return new File([blob], file.name.replace(/\.pdf$/i, '') + '.png', { type: 'image/png' });
+  }
+
+  async function subirImagen(entrada: File) {
     setError(null);
     setSubiendo(true);
     try {
+      const file =
+        entrada.type === 'application/pdf' ? await pdfAImagen(entrada) : entrada;
       /*
        * Se miden ancho y alto en el navegador ANTES de subir.
        *
@@ -238,8 +283,13 @@ export function PrescriptionEditor({ template, readOnly = false }: Props) {
         w: ancho,
         h: Math.round(medidas.h * escala),
       });
-    } catch {
-      setError('No se pudo leer la imagen. Prueba con un PNG o un JPG.');
+    } catch (e) {
+      setError(
+        entrada.type === 'application/pdf'
+          ? 'No se pudo leer ese PDF. Prueba a exportarlo como imagen (PNG o JPG).'
+          : 'No se pudo leer la imagen. Prueba con un PNG o un JPG.',
+      );
+      console.error(e);
     } finally {
       setSubiendo(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -539,7 +589,7 @@ export function PrescriptionEditor({ template, readOnly = false }: Props) {
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp"
+                accept="image/png,image/jpeg,image/webp,application/pdf"
                 hidden
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -614,6 +664,44 @@ export function PrescriptionEditor({ template, readOnly = false }: Props) {
             }}
             onPointerDown={() => setSeleccionado(null)}
           >
+            {/*
+              LA HOJA VACÍA PIDE EL RECIPE, no un papel en blanco.
+
+              Nadie va a dibujar su recetario desde cero: lo tiene escaneado o
+              en PDF y lo que quiere es ajustarle cosas encima. Enseñarle un
+              folio en blanco y seis botones de formas es empezar por el paso
+              que no va a dar.
+            */}
+            {elementos.length === 0 && puedeEditar && (
+              <button
+                type="button"
+                className="recipe-sheet__vacia"
+                onClick={() => fileRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.dataset.encima = 'si';
+                }}
+                onDragLeave={(e) => delete e.currentTarget.dataset.encima}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  delete e.currentTarget.dataset.encima;
+                  const f = e.dataTransfer.files?.[0];
+                  if (f) void subirImagen(f);
+                }}
+                disabled={subiendo}
+              >
+                <span className="recipe-sheet__vacia-icono" aria-hidden="true">
+                  ＋
+                </span>
+                <strong>{subiendo ? 'Subiendo tu recipe…' : 'Sube tu recipe'}</strong>
+                <span className="recipe-sheet__vacia-nota">
+                  Arrástralo aquí o pulsa para elegirlo.
+                  <br />
+                  Vale PDF, JPG o PNG — el que ya usas en papel.
+                </span>
+              </button>
+            )}
+
             {elementos.map((el) => (
               <div
                 key={el.id}

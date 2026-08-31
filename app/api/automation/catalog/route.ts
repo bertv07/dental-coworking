@@ -4,6 +4,7 @@ import { readSignedBody } from '@/backend/http/automation-request';
 import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { centsToBs } from '@/backend/domain/money';
 import { ok, failInternal, newRequestId } from '@/backend/http/responses';
+import { env } from '@/backend/config/env';
 
 /**
  * ===========================================================================
@@ -118,11 +119,46 @@ export async function POST(request: NextRequest) {
         name: settings.clinicName,
         phone: settings.phone,
         address: settings.address,
-        timezone: 'America/Caracas',
+        timezone: env.CLINIC_TIMEZONE,
         opensAt: minuteToLabel(settings.openingMinute),
         closesAt: minuteToLabel(settings.closingMinute),
         slotMinutes: settings.slotMinutes,
       },
+
+      /*
+       * QUÉ DÍA ES HOY, EN LA CLÍNICA.
+       *
+       * Un modelo de lenguaje no sabe la fecha: la deduce, y la deduce mal.
+       * El agente llegó a pedir disponibilidad para el «17 de enero de 2026»
+       * estando en septiembre — el panel respondía correctamente que no había
+       * nada, y el bot le decía al paciente que ese día estaba lleno.
+       *
+       * Se manda desglosado y no sólo en ISO para que el guion pueda decir
+       * «hoy es martes 1 de septiembre» sin hacer cuentas de calendario, que
+       * es justo lo que hace mal.
+       */
+      now: (() => {
+        const ahora = new Date();
+        const partes = (opciones: Intl.DateTimeFormatOptions) =>
+          new Intl.DateTimeFormat('es-VE', { timeZone: env.CLINIC_TIMEZONE, ...opciones }).format(
+            ahora,
+          );
+
+        return {
+          /** `2026-09-01`, que es el formato que espera `/availability`. */
+          date: new Intl.DateTimeFormat('en-CA', {
+            timeZone: env.CLINIC_TIMEZONE,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+          }).format(ahora),
+          time: partes({ hour: '2-digit', minute: '2-digit', hour12: true }),
+          weekday: partes({ weekday: 'long' }),
+          /** «martes, 1 de septiembre de 2026»: para decirlo, no para calcular. */
+          label: partes({ weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }),
+          iso: ahora.toISOString(),
+        };
+      })(),
 
       /*
        * Se manda el precio en las TRES formas: centavos (exacto, para

@@ -227,7 +227,12 @@ export async function uploadPrescriptionAssetAction(
     return { ok: false, error: 'La imagen no puede pasar de 8 MB.' };
   }
   if (!TIPOS_ACEPTADOS.includes(file.type)) {
-    return { ok: false, error: 'Sube una imagen PNG, JPG o WEBP.' };
+    /*
+     * Aquí sólo entran imágenes aunque la pantalla acepte PDF: el PDF se
+     * convierte a PNG en el navegador antes de subirlo. El servidor no
+     * necesita un lector de PDF y lo que se guarda es siempre pintable.
+     */
+    return { ok: false, error: 'Sube una imagen PNG, JPG o WEBP, o un PDF.' };
   }
 
   const plantilla = await repository.getPrescriptionTemplate(templateId);

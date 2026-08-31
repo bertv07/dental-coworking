@@ -26,6 +26,7 @@
     "framer-motion": "^13.1.0",
     "next": "^15.2.0",
     "next-auth": "^5.0.0-beta.25",
+    "pdfjs-dist": "^4.10.38",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "server-only": "^0.0.1",

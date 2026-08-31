@@ -2,6 +2,7 @@ import 'server-only';
 import { repository } from '@/backend/repositories';
 import type { CreateAppointmentInput } from '@/backend/validators/appointment.schema';
 import type { Appointment, Dentist, Room, Treatment } from '@/backend/domain/types';
+import { env } from '@/backend/config/env';
 
 /**
  * ===========================================================================
@@ -42,6 +43,105 @@ const CLINIC_OPEN_MINUTE = 8 * 60; // 08:00
 const CLINIC_CLOSE_MINUTE = 18 * 60; // 18:00
 /** Granularidad de la agenda: las citas empiezan en punto o y media. */
 const SLOT_GRANULARITY_MINUTES = 30;
+
+/**
+ * ===========================================================================
+ *  LA HORA DE LA CLÍNICA NO ES LA HORA DEL SERVIDOR
+ * ===========================================================================
+ *  El servidor corre en UTC y la clínica está en Caracas (UTC-4). Construir
+ *  un hueco con `Date.UTC(..., 9, 0)` no da las nueve de la mañana en la
+ *  clínica: da las nueve UTC, que allí son las cinco de la madrugada. Es
+ *  justo lo que hacía este servicio, y por eso el bot ofrecía citas de
+ *  madrugada.
+ *
+ *  Estas dos funciones hacen la conversión de verdad, preguntándole a la
+ *  zona horaria en vez de sumar un desfase a mano: Venezuela hoy no tiene
+ *  horario de verano, pero lo ha tenido y lo ha cambiado dos veces, y un
+ *  `-4` escrito a mano se convierte en una hora de citas equivocadas el día
+ *  que vuelva a moverse.
+ * ===========================================================================
+ */
+
+/** Cuánto se desvía la zona respecto a UTC en ESE instante, en milisegundos. */
+function desfaseDeLaZona(instante: Date, zona: string): number {
+  const partes = new Intl.DateTimeFormat('en-US', {
+    timeZone: zona,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(instante);
+
+  const v = Object.fromEntries(partes.map((p) => [p.type, p.value])) as Record<string, string>;
+  const comoSiFueraUtc = Date.UTC(
+    Number(v.year),
+    Number(v.month) - 1,
+    Number(v.day),
+    Number(v.hour) % 24,
+    Number(v.minute),
+    Number(v.second),
+  );
+
+  return comoSiFueraUtc - instante.getTime();
+}
+
+/** Año, mes, día y día de la semana de una fecha, vistos EN LA CLÍNICA. */
+function diaEnLaClinica(fecha: Date, zona: string) {
+  const partes = new Intl.DateTimeFormat('en-US', {
+    timeZone: zona,
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(fecha);
+
+  const v = Object.fromEntries(partes.map((p) => [p.type, p.value])) as Record<string, string>;
+  const semana: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+  return {
+    anio: Number(v.year),
+    mes: Number(v.month),
+    dia: Number(v.day),
+    /** 0 = domingo, como `DentistSchedule.weekday`. */
+    diaSemana: semana[v.weekday ?? 'Sun'] ?? 0,
+  };
+}
+
+/** El instante UTC que corresponde a «tal minuto de tal día» en la clínica. */
+function instanteEnLaClinica(
+  d: { anio: number; mes: number; dia: number },
+  minutoDelDia: number,
+  zona: string,
+): Date {
+  const tentativa = Date.UTC(
+    d.anio,
+    d.mes - 1,
+    d.dia,
+    Math.floor(minutoDelDia / 60),
+    minutoDelDia % 60,
+  );
+  // Se corrige con el desfase que tenga la zona en ese momento concreto.
+  return new Date(tentativa - desfaseDeLaZona(new Date(tentativa), zona));
+}
+
+/** El minuto del día, en hora de la clínica, de un instante cualquiera. */
+function minutoEnLaClinica(instante: Date, zona: string): number {
+  const v = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: zona,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+      .formatToParts(instante)
+      .map((p) => [p.type, p.value]),
+  ) as Record<string, string>;
+
+  return (Number(v.hour) % 24) * 60 + Number(v.minute);
+}
 
 /**
  * Agenda una cita aplicando todas las reglas de negocio.
@@ -101,6 +201,15 @@ export async function scheduleAppointment(
   if (input.dentistId) {
     dentist = dentists.find((candidate) => candidate.id === input.dentistId);
     if (!dentist) return { outcome: 'DENTIST_NOT_FOUND' };
+
+    // ¿Trabaja ese día a esa hora? Antes de mirar si tiene otra cita: no
+    // tiene sentido comprobar choques en una franja en la que ni viene.
+    if (!(await trabajaEnEseMomento(dentist.id, startsAt, endsAt))) {
+      return {
+        outcome: 'DENTIST_UNAVAILABLE',
+        suggestedSlots: await suggestAlternativeSlots(startsAt, treatment, dentist.id),
+      };
+    }
 
     const conflicts = await repository.findOverlappingAppointments({
       startsAt,
@@ -166,6 +275,10 @@ async function findFirstAvailableDentist(
   endsAt: Date,
 ): Promise<Dentist | undefined> {
   for (const dentist of dentists) {
+    // Que esté libre no basta: tiene que estar TRABAJANDO. Sin esto, «la
+    // primera que esté libre» un domingo devolvía a cualquiera.
+    if (!(await trabajaEnEseMomento(dentist.id, startsAt, endsAt))) continue;
+
     const conflicts = await repository.findOverlappingAppointments({
       startsAt,
       endsAt,
@@ -245,9 +358,20 @@ async function suggestAlternativeSlots(
     );
     const candidateEnd = new Date(candidateStart.getTime() + durationMs);
 
-    // Fuera del horario de atención: no se propone.
-    const minuteOfDay = candidateStart.getUTCHours() * 60 + candidateStart.getUTCMinutes();
+    /*
+     * Fuera del horario de atención: no se propone.
+     *
+     * El minuto se lee EN HORA DE LA CLÍNICA. Con `getUTCHours()` las
+     * alternativas salían desplazadas cuatro horas, igual que los huecos.
+     */
+    const minuteOfDay = minutoEnLaClinica(candidateStart, env.CLINIC_TIMEZONE);
     if (minuteOfDay < CLINIC_OPEN_MINUTE || minuteOfDay >= CLINIC_CLOSE_MINUTE) continue;
+
+    // Y que la odontóloga trabaje en esa franja: proponer alternativas fuera
+    // de su horario es cambiar un «no puedo» por otro.
+    if (dentistId && !(await trabajaEnEseMomento(dentistId, candidateStart, candidateEnd))) {
+      continue;
+    }
 
     const conflicts = await repository.findOverlappingAppointments({
       startsAt: candidateStart,
@@ -266,14 +390,77 @@ async function suggestAlternativeSlots(
  * Lo consume `GET /api/automation/availability`: el bot lo llama ANTES de
  * proponerle horarios al paciente.
  */
+/**
+ * ¿Trabaja esa odontóloga a esa hora, según su horario?
+ *
+ * Hasta ahora agendar sólo miraba si tenía otra cita encima, así que el bot
+ * podía cerrar una consulta un domingo a las tres de la madrugada y el
+ * sistema decía que sí. La cita tiene que caber ENTERA dentro de uno de sus
+ * bloques: media consulta dentro y media fuera no es un hueco.
+ *
+ * Esto vale para lo que agenda el BOT. Recepción sigue pudiendo poner una
+ * cita fuera de horario desde el panel, que es otra vía: a veces alguien se
+ * queda más tarde y eso lo decide una persona, no una regla.
+ */
+async function trabajaEnEseMomento(
+  dentistId: string,
+  startsAt: Date,
+  endsAt: Date,
+): Promise<boolean> {
+  const zona = env.CLINIC_TIMEZONE;
+  const dia = diaEnLaClinica(startsAt, zona);
+
+  const lunes = (() => {
+    const d = new Date(Date.UTC(dia.anio, dia.mes - 1, dia.dia));
+    d.setUTCDate(d.getUTCDate() - ((dia.diaSemana + 6) % 7));
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const bloques = await repository.listSchedule(dentistId, lunes);
+  const inicio = minutoEnLaClinica(startsAt, zona);
+  const fin = minutoEnLaClinica(endsAt, zona);
+
+  // Una cita que cruza la medianoche no cabe en ningún bloque del día.
+  if (fin <= inicio) return false;
+
+  return bloques.some(
+    (b) => b.weekday === dia.diaSemana && inicio >= b.startMinute && fin <= b.endMinute,
+  );
+}
+
+/**
+ * Por qué no hay huecos, cuando no los hay.
+ *
+ * Sin esto, una lista vacía significaba siempre «ese día está lleno» — y el
+ * bot le decía eso a un paciente por un día que ya había pasado o por un
+ * domingo que la clínica no abre. Tres situaciones distintas que pedían tres
+ * respuestas distintas y recibían la misma.
+ */
+export type MotivoSinHuecos = 'PASADO' | 'CERRADO' | 'LLENO';
+
+export interface Disponibilidad {
+  slots: AvailableSlot[];
+  /** Sólo cuando `slots` viene vacío. */
+  motivo?: MotivoSinHuecos;
+}
+
 export async function findAvailableSlots(params: {
   treatmentCode: string;
   date: Date;
   dentistId?: string;
   maxSlots: number;
 }): Promise<AvailableSlot[]> {
+  return (await buscarDisponibilidad(params)).slots;
+}
+
+export async function buscarDisponibilidad(params: {
+  treatmentCode: string;
+  date: Date;
+  dentistId?: string;
+  maxSlots: number;
+}): Promise<Disponibilidad> {
   const treatment = await repository.findTreatmentByCode(params.treatmentCode);
-  if (!treatment) return [];
+  if (!treatment) return { slots: [] };
 
   const [dentists, rooms] = await Promise.all([
     repository.listDentists(),
@@ -284,36 +471,83 @@ export async function findAvailableSlots(params: {
     ? dentists.filter((dentist) => dentist.id === params.dentistId)
     : dentists;
 
+  const zona = env.CLINIC_TIMEZONE;
+  const dia = diaEnLaClinica(params.date, zona);
+
+  /*
+   * La jornada sale de los AJUSTES, no de dos constantes.
+   *
+   * Estaban clavadas en 08:00-18:00 mientras la clínica tenía configurado
+   * 09:00-18:00: el bot ofrecía una hora que no existe y recepción se
+   * encontraba a alguien en la puerta.
+   */
+  const ajustes = await repository.getClinicSettings();
+  const abre = ajustes.openingMinute ?? CLINIC_OPEN_MINUTE;
+  const cierra = ajustes.closingMinute ?? CLINIC_CLOSE_MINUTE;
+  const paso = ajustes.slotMinutes || SLOT_GRANULARITY_MINUTES;
+
+  /*
+   * EL HORARIO DE CADA ODONTÓLOGA, que es lo que faltaba del todo.
+   *
+   * Este servicio sólo miraba las citas ya ocupadas, así que daba por
+   * disponible a todo el mundo a todas horas: ofrecía domingos, y ofrecía a
+   * una odontóloga que sólo viene martes y jueves cualquier día de la
+   * semana. De ahí que el bot pareciera inventarse los días.
+   *
+   * `listSchedule` con la semana ya resuelve las excepciones de esa semana
+   * concreta, así que un cambio puntual aprobado también se respeta.
+   */
+  const lunesDeEsaSemana = (() => {
+    const d = new Date(Date.UTC(dia.anio, dia.mes - 1, dia.dia));
+    d.setUTCDate(d.getUTCDate() - ((dia.diaSemana + 6) % 7));
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const horarios = new Map<string, Array<{ startMinute: number; endMinute: number }>>();
+  await Promise.all(
+    candidateDentists.map(async (d) => {
+      const bloques = await repository.listSchedule(d.id, lunesDeEsaSemana);
+      horarios.set(
+        d.id,
+        bloques
+          .filter((b) => b.weekday === dia.diaSemana)
+          .map((b) => ({ startMinute: b.startMinute, endMinute: b.endMinute })),
+      );
+    }),
+  );
+
   const slots: AvailableSlot[] = [];
   const durationMs = treatment.durationMinutes * 60_000;
   const blockMs = durationMs + treatment.bufferMinutes * 60_000;
 
-  // Se recorre la jornada en pasos de 30 minutos.
+  // Se recorre la jornada en pasos de la granularidad configurada.
   for (
-    let minute = CLINIC_OPEN_MINUTE;
-    minute < CLINIC_CLOSE_MINUTE && slots.length < params.maxSlots;
-    minute += SLOT_GRANULARITY_MINUTES
+    let minute = abre;
+    minute < cierra && slots.length < params.maxSlots;
+    minute += paso
   ) {
-    const startsAt = new Date(
-      Date.UTC(
-        params.date.getUTCFullYear(),
-        params.date.getUTCMonth(),
-        params.date.getUTCDate(),
-        Math.floor(minute / 60),
-        minute % 60,
-      ),
-    );
+    // En hora de la CLÍNICA, no del servidor.
+    const startsAt = instanteEnLaClinica(dia, minute, zona);
 
     // Nunca proponer algo que ya pasó.
     if (startsAt <= new Date()) continue;
 
     const endsAt = new Date(startsAt.getTime() + durationMs);
     // La cita debe caber entera dentro del horario de atención.
-    const endMinute = endsAt.getUTCHours() * 60 + endsAt.getUTCMinutes();
-    if (endMinute > CLINIC_CLOSE_MINUTE) break;
+    const endMinute = minutoEnLaClinica(endsAt, zona);
+    if (endMinute > cierra || endMinute <= minute) break;
 
     for (const dentist of candidateDentists) {
       if (slots.length >= params.maxSlots) break;
+
+      /*
+       * ¿Trabaja ESE día y a ESA hora? La cita entera tiene que caber dentro
+       * de uno de sus bloques: media consulta dentro del horario y media
+       * fuera no es un hueco, es una cita que se sale.
+       */
+      const bloques = horarios.get(dentist.id) ?? [];
+      const trabaja = bloques.some((b) => minute >= b.startMinute && endMinute <= b.endMinute);
+      if (!trabaja) continue;
 
       const dentistConflicts = await repository.findOverlappingAppointments({
         startsAt,
@@ -345,5 +579,22 @@ export async function findAvailableSlots(params: {
     }
   }
 
-  return slots;
+  if (slots.length > 0) return { slots };
+
+  /*
+   * No hay huecos. Ahora hay que decir POR QUÉ, que es lo único que le
+   * permite al bot responder algo útil en vez de «está lleno» siempre.
+   */
+  const hoy = diaEnLaClinica(new Date(), zona);
+  const pedido = dia.anio * 10000 + dia.mes * 100 + dia.dia;
+  const actual = hoy.anio * 10000 + hoy.mes * 100 + hoy.dia;
+
+  if (pedido < actual) return { slots: [], motivo: 'PASADO' };
+
+  // Nadie con horario ese día de la semana: la clínica no abre, o no abre
+  // para ese tratamiento con esa odontóloga.
+  const alguienTrabaja = [...horarios.values()].some((b) => b.length > 0);
+  if (!alguienTrabaja) return { slots: [], motivo: 'CERRADO' };
+
+  return { slots: [], motivo: 'LLENO' };
 }

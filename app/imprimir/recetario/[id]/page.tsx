@@ -140,9 +140,31 @@ export default async function ImprimirRecetarioPage({
         carta sale centrado en medio de un folio con márgenes enormes.
       */}
       <style>{`
-        @page { size: ${template.widthPx}px ${template.heightPx}px; margin: 0; }
-        @media print { body { margin: 0; } }
-        body { background: #fff; }
+        /*
+         * EL TAMAÑO DE PÁGINA VA EN MILÍMETROS, NO EN PÍXELES.
+         *
+         * \`@page { size: 528px 816px }\` es CSS inválido: la regla admite
+         * longitudes absolutas (mm, cm, in) o nombres de papel, y el navegador
+         * descarta la declaración entera. El resultado era que imprimía en A4
+         * vertical y el recipe salía descolocado o partido en dos hojas.
+         *
+         * Los píxeles del lienzo son a 96 ppp, así que 1 px = 25,4/96 mm.
+         */
+        @page {
+          size: ${(template.widthPx * 25.4 / 96).toFixed(1)}mm ${(template.heightPx * 25.4 / 96).toFixed(1)}mm;
+          margin: 0;
+        }
+
+        html, body { margin: 0; padding: 0; background: #fff; }
+
+        @media print {
+          html, body { width: ${template.widthPx}px; height: ${template.heightPx}px; }
+          /*
+           * Sin esto el navegador «ahorra tinta» y se come los fondos y las
+           * imágenes: el membrete escaneado saldría en blanco.
+           */
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        }
       `}</style>
 
       <div
@@ -152,7 +174,12 @@ export default async function ImprimirRecetarioPage({
           height: template.heightPx,
           margin: '0 auto',
           background: '#fff',
-          overflow: 'hidden',
+          /*
+           * `hidden` recortaba cualquier elemento que asomara del borde; con
+           * `clip` se recorta igual pero sin crear un contexto de scroll, que
+           * era lo que añadía una segunda hoja en blanco al imprimir.
+           */
+          overflow: 'clip',
         }}
       >
         {elements.map((el) => pintar(el, template.id))}
