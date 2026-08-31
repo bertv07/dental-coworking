@@ -836,7 +836,39 @@ export const prismaRepository: DataRepository = {
 
   async createPatient(data) {
     try {
-      return { ok: true, data: await prisma.patient.create({ data }) };
+      const paciente = await prisma.$transaction(async (tx) => {
+        const creado = await tx.patient.create({ data });
+
+        /*
+         * TODO PACIENTE ES TAMBIÉN UN CONTACTO DE WHATSAPP.
+         *
+         * Sin esto, para escribirle a alguien recién dado de alta había que
+         * esperar a que escribiera él primero: el monitor sólo conocía los
+         * números que habían entrado por el webhook.
+         *
+         * `upsert` y no `create`: el número puede haber escrito ya como
+         * desconocido. En ese caso la conversación existe y lo único que falta
+         * es enlazarla a su ficha, conservando el historial de lo hablado.
+         *
+         * ⚠️  Que exista la conversación NO significa que se le pueda escribir
+         *  cuando sea: fuera de la ventana de 24 h de Meta hace falta una
+         *  plantilla aprobada. Eso lo avisa la pantalla, no se decide aquí.
+         */
+        await tx.whatsAppConversation.upsert({
+          where: { phoneE164: creado.phoneE164 },
+          update: { patientId: creado.id, displayName: creado.fullName },
+          create: {
+            phoneE164: creado.phoneE164,
+            patientId: creado.id,
+            displayName: creado.fullName,
+            aiEnabled: true,
+          },
+        });
+
+        return creado;
+      });
+
+      return { ok: true, data: paciente };
     } catch (error) {
       return toWriteFailure(error);
     }
@@ -844,7 +876,30 @@ export const prismaRepository: DataRepository = {
 
   async updatePatient(id, data) {
     try {
-      return { ok: true, data: await prisma.patient.update({ where: { id }, data }) };
+      const paciente = await prisma.$transaction(async (tx) => {
+        const actualizado = await tx.patient.update({ where: { id }, data });
+
+        /*
+         * Si le corrigen el teléfono, su contacto de WhatsApp se mueve con él.
+         *
+         * Sin esto quedaría una conversación apuntando al número viejo y
+         * escribirle desde el panel iría a un número que ya no es suyo.
+         */
+        await tx.whatsAppConversation.upsert({
+          where: { phoneE164: actualizado.phoneE164 },
+          update: { patientId: actualizado.id, displayName: actualizado.fullName },
+          create: {
+            phoneE164: actualizado.phoneE164,
+            patientId: actualizado.id,
+            displayName: actualizado.fullName,
+            aiEnabled: true,
+          },
+        });
+
+        return actualizado;
+      });
+
+      return { ok: true, data: paciente };
     } catch (error) {
       return toWriteFailure(error);
     }

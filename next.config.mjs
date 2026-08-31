@@ -100,6 +100,19 @@ const nextConfig = {
         'localhost:3000',
         ...(process.env.APP_ORIGIN ? [new URL(process.env.APP_ORIGIN).host] : []),
       ],
+
+      /*
+       * Tope del cuerpo de una Server Action.
+       *
+       * Por defecto es 1 MB, y con eso enviar una foto por WhatsApp desde el
+       * panel se quedaba colgado: cualquier imagen de móvil pasa de 1 MB, la
+       * petición se rechazaba y el botón se quedaba en «Enviando…» para
+       * siempre.
+       *
+       * 16 MB es el máximo que acepta WhatsApp para documentos y audio, así
+       * que subirlo más no serviría de nada: lo rechazaría Meta después.
+       */
+      bodySizeLimit: '16mb',
     },
   },
 

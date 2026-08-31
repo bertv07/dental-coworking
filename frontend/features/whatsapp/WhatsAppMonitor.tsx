@@ -231,32 +231,61 @@ export function WhatsAppMonitor({
       payload = { conversationId: selectedId, body };
     }
 
-    const result = await sendWhatsAppMessageAction(payload);
+    /*
+     * TODO dentro de try/finally.
+     *
+     * Sin esto, cualquier excepción —la petición rechazada por tamaño, la red
+     * caída a mitad— dejaba el botón en «Enviando…» PARA SIEMPRE: la promesa
+     * se rechazaba y `setIsSending(false)` no llegaba a ejecutarse nunca. Un
+     * fallo hay que poder verlo y reintentarlo, no quedarse mirando.
+     */
+    try {
+      const result = await sendWhatsAppMessageAction(payload);
 
-    if (!result.ok) {
-      setErrorMessage(result.error ?? 'No se pudo enviar el mensaje');
-      setIsSending(false);
-      return;
-    }
+      if (!result.ok) {
+        setErrorMessage(result.error ?? 'No se pudo enviar el mensaje');
+        return;
+      }
 
-    // Se guardó: se limpia el borrador aunque la entrega haya fallado, porque
-    // el mensaje YA está en el historial y reenviarlo lo duplicaría.
-    setDraft('');
-    quitarAdjunto();
-    if (result.warning) setSendWarning(result.warning);
+      // Se guardó: se limpia el borrador aunque la entrega haya fallado,
+      // porque el mensaje YA está en el historial y reenviarlo lo duplicaría.
+      setDraft('');
+      quitarAdjunto();
+      if (result.warning) setSendWarning(result.warning);
 
-    const response = await fetch(`/api/whatsapp/conversations/${selectedId}/messages`);
-    if (response.ok) {
-      const payload = await response.json();
-      setMessages(
-        payload.data.messages.map((message: WhatsAppMessage) => ({
-          ...message,
-          sentAt: new Date(message.sentAt),
-        })),
+      const response = await fetch(`/api/whatsapp/conversations/${selectedId}/messages`);
+      if (response.ok) {
+        const recibido = await response.json();
+        setMessages(
+          recibido.data.messages.map((message: WhatsAppMessage) => ({
+            ...message,
+            sentAt: new Date(message.sentAt),
+          })),
+        );
+      }
+    } catch (error) {
+      /*
+       * El caso típico es el archivo demasiado grande: Next corta la petición
+       * antes de que la acción llegue a ejecutarse, así que aquí no hay
+       * ningún mensaje del servidor que enseñar. Se dice lo que se puede
+       * hacer, que es lo único útil en ese momento.
+       */
+      const grande = adjunto && adjunto.size > 15 * 1024 * 1024;
+      setErrorMessage(
+        grande
+          ? 'El archivo es demasiado grande para enviarlo por WhatsApp (máximo 16 MB).'
+          : 'No se pudo enviar. Revisa la conexión e inténtalo otra vez.',
       );
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          event: 'whatsapp.send_failed',
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
+    } finally {
+      setIsSending(false);
     }
-
-    setIsSending(false);
   }
 
   /** Quita el archivo elegido y limpia el input, para poder repetir el mismo. */

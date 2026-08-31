@@ -3326,3 +3326,26 @@ a {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+
+/* --- Reglas de Meta en la barra superior ---------------------------------
+   Reutiliza `.dropdown` de los otros menús; aquí sólo va lo propio del texto,
+   que es más largo que una lista de avisos. */
+
+.meta-rules {
+  width: min(22rem, calc(100vw - 2rem));
+}
+
+.meta-rules__regla {
+  margin: 0;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.meta-rules__pie {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.7rem 0.9rem;
+}

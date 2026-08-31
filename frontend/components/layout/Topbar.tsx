@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import type { UserRole } from '@/backend/domain/types';
 import { UserMenu } from '@/frontend/components/layout/UserMenu';
 import { GlobalSearch } from '@/frontend/components/layout/GlobalSearch';
+import { MetaRulesButton } from '@/frontend/components/layout/MetaRulesButton';
 import {
   NotificationsMenu,
   MessagesMenu,
@@ -61,6 +62,9 @@ export function Topbar({
       {canSearchPatients ? <GlobalSearch /> : <div />}
 
       <div className="topbar__actions">
+        {/* WhatsApp y las reglas de Meta: el atajo está donde se necesita
+            saberlas, que es justo antes de escribirle a alguien. */}
+        <MetaRulesButton />
         {messages && <MessagesMenu items={messages} />}
         {notifications && <NotificationsMenu items={notifications} />}
         <UserMenu userName={userName} subtitle={userEmail ?? ROLE_LABEL[userRole]} />

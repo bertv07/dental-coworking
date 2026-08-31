@@ -169,8 +169,8 @@ Cuerpo: `{}` (se firma igual, aunque vaya vacío).
   "data": {
     "clinic":   { "name", "phone", "address", "timezone",
                   "opensAt": "08:00", "closesAt": "18:00", "slotMinutes": 30 },
-    "currency": { "base": "USD", "quote": "VES", "rate": 771.07,
-                  "source": "BCV", "fetchedAt": "...", "stale": false },
+    "currency": { "base": "USD", "quote": "VES", "rate": 921.81,
+                  "source": "EURO", "fetchedAt": "...", "stale": false },
     "treatments": [
       { "code": "CONSULTA", "name": "Consulta y valoración",
         "category": "DIAGNÓSTICO",
@@ -245,6 +245,20 @@ sola:**
 > Si el paciente ya eligió odontólogo y ese odontólogo tiene ese tratamiento
 > en su `prices`, **cotiza ESE precio**. Si no lo tiene —o el array está
 > vacío—, cotiza el de `treatments`, que es el precio de lista.
+
+#### La tasa es la del EURO, y ya viene aplicada
+
+La lista de precios está en **dólares** y se cobra multiplicando por la tasa
+del **euro** del BCV. Es la práctica habitual en Venezuela y es como cobra
+esta clínica.
+
+No conviertas nada tú: `priceBs` ya viene calculado con la tasa correcta. Di
+el dólar y el bolívar tal como llegan.
+
+> «La consulta y valoración tiene un costo de $30 (Bs 27.654,42).»
+
+Si `currency.stale` es `true`, la tasa del día no se pudo consultar: di sólo
+los dólares y que recepción confirma el monto en bolívares.
 
 #### Precios compuestos
 
@@ -753,6 +767,109 @@ Al confirmar una cita repite siempre: **día, fecha, hora, odontólogo y
 consultorio**. Es lo que evita el «yo entendí que era el martes».
 
 ---
+
+## 9-bis. Fallos reales que hay que corregir
+
+Todo lo de aquí abajo pasó de verdad, en conversaciones con pacientes. No son
+hipótesis: son las correcciones obligatorias.
+
+### 1. Las respuestas se cortan a mitad de frase
+
+Esto se vio una y otra vez:
+
+> «La consulta y valoración tiene un costo de $30 (o Bs 27.»
+> «El tratamiento para caries va desde $20 o Bs 18.437,»
+> «La evaluación de ortodoncia se realiza a través de la consulta, la cual tiene un»
+
+**Es el límite de tokens de salida del nodo de IA**, no el modelo dudando.
+Súbelo a **500 tokens como mínimo** en el nodo del agente.
+
+Y como red de seguridad: **nunca envíes un mensaje que termine en coma, en
+paréntesis abierto o a mitad de palabra.** Si la respuesta sale así, acórtala
+por una frase completa antes de mandarla. Cortar un precio a la mitad —«Bs
+27.»— es peor que no decirlo: el paciente se queda con un número que no
+existe.
+
+### 2. Responder de un tratamiento distinto al que preguntan
+
+> Paciente: «¿Cuánto cuesta una consulta?»
+> Bot: «En este momento contamos con el tratamiento de Endodoncia, el cual…»
+
+**Responde SIEMPRE del tratamiento que preguntan.** Búscalo en `catalog` por
+nombre o por categoría. Si preguntan por la consulta, es `CONSULTA`; no
+sustituyas por otro porque te parezca relacionado. Si no encuentras lo que
+piden, ve al punto 4.
+
+### 3. El mismo precio con tres importes distintos en bolívares
+
+Para los mismos $30 se llegó a decir `Bs 2362`, `Bs 23625` y `Bs 27.680,74`.
+
+**Los bolívares NO se calculan en el flujo.** Vienen ya hechos en
+`treatments[].priceBs` de `/catalog`, y ese cálculo usa **la tasa del EURO**,
+que es como cobra esta clínica: la lista está en dólares y se cobra
+multiplicando por la tasa del euro del BCV.
+
+Usa `priceBs` tal cual. Si `currency.stale` es `true`, di sólo el importe en
+dólares y que el equivalente en bolívares lo confirma recepción.
+
+### 4. Inventarse tratamientos que no están en la lista
+
+Preguntaron por **diseño de sonrisa, ortodoncia, brackets en cerámica y
+cordales**. Nada de eso está hoy en `catalog`.
+
+**Si no está en `catalog`, no tiene precio.** No lo estimes, no lo deduzcas de
+otro parecido y no digas «desde». Di que ese tratamiento no está en la lista
+de precios y ofrece pasar con una persona:
+
+> «El diseño de sonrisa no lo tengo en la lista de precios. Te paso con
+> alguien del equipo para que te confirme si lo hacemos y a qué precio.»
+
+### 5. Escalar preguntas que sí sabes responder
+
+Esto se escaló a un humano y no debía:
+
+| Preguntó | Dónde está la respuesta |
+|---|---|
+| «¿Cuáles son las formas de pago?» | `catalog.paymentMethods` (§8) |
+| «¿Lo puedo pagar en dos partes?» | Sí. La clínica cobra en partes; ver abajo |
+| «¿Dónde están ubicados?» | `catalog.clinic.address` |
+| «¿Hay descuento?» | `/promotions` (§3.5-bis) |
+
+**Pagar en dos partes: la respuesta es SÍ.** Se puede abonar una parte el día
+del tratamiento y el resto después. Lo que NO haces es pactar el reparto ni
+las fechas: eso lo cierra recepción.
+
+> «Sí, se puede pagar en dos partes. Lo cierras con recepción el día de la
+> cita, que es quien acuerda cómo se reparte.»
+
+**Descuento por pagar de contado o en divisas:** eso NO lo decides tú. Si hay
+una promoción vigente en `/promotions`, ofrécela tal cual. Si preguntan por
+otro descuento, `handoff`.
+
+### 6. Dejar al paciente hablando solo
+
+Tras un `handoff` el bot se calla —correcto—, pero se vio a un paciente
+mandando **ocho preguntas seguidas sin respuesta**.
+
+Antes de escalar, **contesta lo que sí sabes** y escala sólo lo que falta:
+
+> «Los métodos de pago son efectivo, transferencia y punto de venta, y sí se
+> puede pagar en dos partes. Sobre el descuento por pagar en divisas te paso
+> con una persona del equipo.»
+
+El sistema reactiva la IA sola tras unas horas de silencio (§3.1), así que si
+nadie atendió, el bot vuelve a responder al siguiente mensaje. No hace falta
+que hagas nada.
+
+### 7. Dar la dirección
+
+Está en `catalog.clinic.address` y es:
+
+> Al frente del Metro de Los Cortijos, Centro Empresarial Don Bosco, piso PH,
+> oficina PH. Caracas.
+
+Dala cuando la pidan, entera y a la primera. No hace falta preguntar si la
+quieren.
 
 ## 10. Errores y reintentos
 
