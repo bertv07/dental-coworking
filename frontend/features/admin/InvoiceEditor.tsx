@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import type { Invoice, InvoiceLine, PaymentMethodOption, Treatment } from '@/backend/domain/types';
+import type { Invoice, InvoiceLine, PaymentMethodOption, Promotion, Treatment } from '@/backend/domain/types';
 import { formatCents, formatBs, centsToBs } from '@/backend/domain/money';
 import {
   addInvoiceLineAction,
@@ -9,10 +9,11 @@ import {
   removeInvoiceLineAction,
   registerInvoicePaymentAction,
   voidInvoiceAction,
+  applyPromotionAction,
 } from '@/app/actions/invoice.actions';
 import { Modal } from '@/frontend/components/motion';
 import { Badge, Card, Notice } from '@/frontend/components/ui/primitives';
-import { IconPlus, IconTrash, IconEdit, IconCurrency } from '@/frontend/components/ui/icons';
+import { IconPlus, IconTrash, IconEdit, IconCurrency, IconTag } from '@/frontend/components/ui/icons';
 
 /**
  * ===========================================================================
@@ -41,6 +42,8 @@ interface InvoiceEditorProps {
   paymentMethods: PaymentMethodOption[];
   exchangeRate: number | null;
   rateSource: string;
+  /** Sólo las vigentes ahora mismo: el servidor ya filtró fecha y `isActive`. */
+  promotions: Promotion[];
 }
 
 const ESTADO: Record<Invoice['status'], { label: string; tone: 'success' | 'warning' | 'danger' }> = {
@@ -55,12 +58,23 @@ export function InvoiceEditor({
   paymentMethods,
   exchangeRate,
   rateSource,
+  promotions,
 }: InvoiceEditorProps) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<InvoiceLine | null>(null);
   const [charging, setCharging] = useState(false);
+  const [promoOpen, setPromoOpen] = useState(false);
+  const [promoElegida, setPromoElegida] = useState('');
+
+  // Ya aplicada a esta factura = no se ofrece otra vez; el botón de aplicar
+  // ya se encarga de rechazarla, pero quitarla de la lista evita el segundo
+  // clic inútil.
+  const promocionesAplicadasIds = new Set(
+    invoice.lines.map((l) => l.promotionId).filter((id): id is string => id !== null),
+  );
+  const promocionesDisponibles = promotions.filter((p) => !promocionesAplicadasIds.has(p.id));
 
   const anulada = invoice.status === 'VOID';
   const saldada = invoice.balanceCents <= 0;
@@ -118,6 +132,9 @@ export function InvoiceEditor({
                       lo que a fin de mes explica por qué esta factura cobró
                       menos que la lista.
                     */}
+                    {line.promotionName && (
+                      <Badge tone="info">Promoción: {line.promotionName}</Badge>
+                    )}
                     {line.discountReason && (
                       <div className="text-xs subtle">Rebaja: {line.discountReason}</div>
                     )}
@@ -176,10 +193,22 @@ export function InvoiceEditor({
         </div>
 
         {!anulada && (
-          <div style={{ padding: '0.75rem 1rem' }}>
+          <div className="row" style={{ padding: '0.75rem 1rem', gap: '0.5rem' }}>
             <button type="button" className="btn btn--ghost btn--sm" onClick={() => setAddOpen(true)}>
               <IconPlus size={14} /> Añadir concepto
             </button>
+            {promocionesDisponibles.length > 0 && (
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => {
+                  setPromoElegida(promocionesDisponibles[0]?.id ?? '');
+                  setPromoOpen(true);
+                }}
+              >
+                <IconTag size={14} /> Aplicar promoción
+              </button>
+            )}
           </div>
         )}
       </Card>
@@ -301,6 +330,58 @@ export function InvoiceEditor({
           </div>
         </Card>
       )}
+
+      {/* --- Aplicar promoción -------------------------------------------- */}
+      <Modal
+        open={promoOpen}
+        onClose={() => setPromoOpen(false)}
+        title="Aplicar promoción"
+        subtitle="Añade lo que haga falta y calcula el descuento solo"
+        footer={
+          <>
+            <button type="button" className="btn btn--ghost" onClick={() => setPromoOpen(false)}>
+              Cancelar
+            </button>
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={isPending || !promoElegida}
+              onClick={() =>
+                run(
+                  () => applyPromotionAction({ invoiceId: invoice.id, promotionId: promoElegida }),
+                  () => setPromoOpen(false),
+                )
+              }
+            >
+              {isPending ? 'Aplicando…' : 'Aplicar'}
+            </button>
+          </>
+        }
+      >
+        <div className="field form-grid--full">
+          <label className="field__label" htmlFor="promoElegida">
+            Promoción
+          </label>
+          <select
+            id="promoElegida"
+            className="select"
+            value={promoElegida}
+            onChange={(e) => setPromoElegida(e.target.value)}
+          >
+            {promocionesDisponibles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          {promoElegida && (
+            <p className="text-xs subtle" style={{ marginTop: '0.4rem' }}>
+              {promocionesDisponibles.find((p) => p.id === promoElegida)?.description ??
+                'Se añaden los tratamientos que haga falta y se reparte el descuento entre ellos.'}
+            </p>
+          )}
+        </div>
+      </Modal>
 
       {/* --- Añadir concepto -------------------------------------------- */}
       <Modal

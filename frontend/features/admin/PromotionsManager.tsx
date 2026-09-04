@@ -16,10 +16,11 @@ import { Modal } from '@/frontend/components/motion';
  * ===========================================================================
  *  «Si te haces la limpieza, la consulta va gratis.»
  *
- *  Lo que hay que tener claro al usar esta pantalla, y por eso está escrito
- *  también dentro de ella: aquí NO se descuenta nada. Se guarda lo que la
- *  clínica ofrece. El descuento de cada factura lo sigue marcando recepción a
- *  mano, factura por factura.
+ *  Aquí se guarda lo que la clínica ofrece: el catálogo. Que una promoción
+ *  esté aquí no cobra nada por sí sola — recepción sigue teniendo que ir a la
+ *  factura y pulsar «Aplicar promoción» para que se sume. La diferencia con
+ *  antes es que ya NO hay que replicar la aritmética a mano: el clic añade
+ *  los tratamientos que hagan falta y calcula el descuento solo.
  * ===========================================================================
  */
 
@@ -32,9 +33,17 @@ const ETIQUETA_BENEFICIO: Record<Promotion['benefitKind'], string> = {
   FREE_TREATMENT: 'Un tratamiento gratis',
   PERCENT_OFF: 'Porcentaje de descuento',
   AMOUNT_OFF: 'Importe fijo de descuento',
+  PACKAGE_PRICE: 'Paquete a precio cerrado',
 };
 
 function describir(p: Promotion, nombrePorCodigo: Map<string, string>): string {
+  // El paquete se lee al revés que el resto: no es "si haces X, pasa Y", es
+  // "estas cosas juntas cuestan tanto".
+  if (p.benefitKind === 'PACKAGE_PRICE') {
+    const incluye = p.requiredTreatmentCodes.map((c) => nombrePorCodigo.get(c) ?? c).join(' + ');
+    return `${incluye || 'Paquete'} por ${formatCents(p.benefitValue)}`;
+  }
+
   const beneficio =
     p.benefitKind === 'FREE_TREATMENT'
       ? `${nombrePorCodigo.get(p.benefitTreatmentCode ?? '') ?? p.benefitTreatmentCode} gratis`
@@ -95,7 +104,7 @@ export function PromotionsManager({ promotions, treatments }: Props) {
     <>
       <Card
         title="Promociones"
-        subtitle="Lo que la clínica ofrece; el descuento se sigue marcando en cada factura"
+        subtitle="El catálogo que ofrece la clínica; se aplica desde cada factura"
         actions={
           <button type="button" className="pill-btn" onClick={() => abrir(null)}>
             Nueva promoción
@@ -105,9 +114,10 @@ export function PromotionsManager({ promotions, treatments }: Props) {
         {error && !abierto && <Notice tone="danger">{error}</Notice>}
 
         <Notice tone="info">
-          Esto <strong>no descuenta solo</strong>. Sirve para que el bot pueda ofrecerla
-          por WhatsApp y para que veas al cobrar que una factura la cumple. Quien aplica
-          el descuento sigues siendo tú, factura por factura.
+          El bot la ofrece por WhatsApp con lo que escribas aquí. Para cobrarla, entra a
+          la factura del paciente y pulsa <strong>«Aplicar promoción»</strong>: añade lo
+          que falte y calcula el descuento solo. Editarla después NO toca facturas que ya
+          la tengan aplicada.
         </Notice>
 
         {promotions.length === 0 ? (
@@ -202,7 +212,7 @@ export function PromotionsManager({ promotions, treatments }: Props) {
         open={abierto}
         onClose={() => setAbierto(false)}
         title={editando ? 'Editar promoción' : 'Nueva promoción'}
-        subtitle="Lo que se ofrece; el descuento se sigue marcando en cada factura"
+        subtitle="Lo que se ofrece por WhatsApp y en el mostrador"
         footer={
           <div className="row" style={{ gap: '0.5rem', justifyContent: 'flex-end' }}>
             <button type="button" className="btn btn--ghost" onClick={() => setAbierto(false)}>
@@ -248,17 +258,22 @@ export function PromotionsManager({ promotions, treatments }: Props) {
             </label>
 
             <label className="field form-grid--full">
-              <span className="field__label">Qué tiene que hacerse</span>
+              <span className="field__label">
+                {tipo === 'PACKAGE_PRICE' ? 'Qué incluye el paquete' : 'Qué tiene que hacerse'}
+              </span>
               <input
                 className="input"
                 name="requiredTreatmentCodes"
+                required={tipo === 'PACKAGE_PRICE'}
                 maxLength={400}
                 defaultValue={editando?.requiredTreatmentCodes.join(', ')}
                 placeholder="LIMPIEZA, RX"
                 list="codigos-tratamientos"
               />
               <span className="field__hint">
-                Códigos separados por comas. Vacío = la promoción vale siempre.
+                {tipo === 'PACKAGE_PRICE'
+                  ? 'Códigos separados por comas: los tratamientos que van juntos en el paquete. Al menos dos.'
+                  : 'Códigos separados por comas. Vacío = la promoción vale siempre.'}
               </span>
             </label>
 
@@ -294,7 +309,11 @@ export function PromotionsManager({ promotions, treatments }: Props) {
             ) : (
               <label className="field">
                 <span className="field__label">
-                  {tipo === 'PERCENT_OFF' ? 'Porcentaje (1-100)' : 'Importe en dólares'}
+                  {tipo === 'PERCENT_OFF'
+                    ? 'Porcentaje (1-100)'
+                    : tipo === 'PACKAGE_PRICE'
+                      ? 'Precio del paquete (dólares)'
+                      : 'Importe en dólares'}
                 </span>
                 <input
                   className="input"
@@ -306,12 +325,17 @@ export function PromotionsManager({ promotions, treatments }: Props) {
                   required
                   defaultValue={
                     editando
-                      ? editando.benefitKind === 'AMOUNT_OFF'
+                      ? editando.benefitKind === 'AMOUNT_OFF' || editando.benefitKind === 'PACKAGE_PRICE'
                         ? editando.benefitValue / 100
                         : editando.benefitValue
                       : ''
                   }
                 />
+                {tipo === 'PACKAGE_PRICE' && (
+                  <span className="field__hint">
+                    Lo que pagan por TODO el paquete junto, no por cada tratamiento.
+                  </span>
+                )}
               </label>
             )}
 

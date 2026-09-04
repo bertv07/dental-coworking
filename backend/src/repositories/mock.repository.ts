@@ -1014,6 +1014,10 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async applyPromotion() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
   // --- Adjuntos de WhatsApp ---------------------------------------------------
   //  La demo no envía archivos: guardar binarios en memoria y perderlos al
   //  reiniciar daría una falsa sensación de que el envío quedó hecho.

@@ -9,6 +9,15 @@ import { Card, Notice } from '@/frontend/components/ui/primitives';
 import { PatientDocuments } from '@/frontend/features/patients/PatientDocuments';
 
 /**
+ * Formularios reales de la clínica, en blanco, tal cual los diseñó ella —
+ * no una recreación. Viven en /public y se abren directo, así lo que se
+ * imprime es el PDF exacto.
+ */
+const FORMULARIOS = [
+  { href: '/formularios/historia-clinica.pdf', label: 'Historia clínica' },
+] as const;
+
+/**
  * ===========================================================================
  *  /pacientes/{id}/expediente
  * ===========================================================================
@@ -74,17 +83,13 @@ export default async function ExpedientePage({
           title="Formularios para imprimir"
           subtitle="En blanco, para que los rellene el paciente"
         >
-          {/*
-            Los formularios reales los aporta la clínica: el expediente y el
-            consentimiento cambian según el tratamiento, y ninguno se puede
-            inventar desde aquí. Hasta que estén cargados, se dice claramente
-            en vez de ofrecer un botón que no imprime nada.
-          */}
-          <Notice tone="warning">
-            Todavía no están cargados los formularios de la clínica. En cuanto se
-            suban el del expediente y los de consentimiento informado, aparecerán
-            aquí para imprimir.
-          </Notice>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            {FORMULARIOS.map((f) => (
+              <Link key={f.href} href={f.href} className="btn btn--ghost" target="_blank">
+                Imprimir {f.label.toLowerCase()}
+              </Link>
+            ))}
+          </div>
         </Card>
       </FadeIn>
 

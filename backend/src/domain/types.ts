@@ -266,6 +266,9 @@ export interface InvoiceLine {
   commissionPercent: number;
   /** `quantity * unitPrice - discount`. Lo que suma esta línea al total. */
   totalCents: number;
+  /** Promoción que generó esta línea, si vino de aplicar una. */
+  promotionId: string | null;
+  promotionName: string | null;
 }
 
 /** Un cobro concreto contra la factura. Puede haber varios. */
@@ -578,7 +581,7 @@ export interface PrescriptionTemplateFull extends PrescriptionTemplateSummary {
   elements: unknown;
 }
 
-export type PromotionBenefit = 'FREE_TREATMENT' | 'PERCENT_OFF' | 'AMOUNT_OFF';
+export type PromotionBenefit = 'FREE_TREATMENT' | 'PERCENT_OFF' | 'AMOUNT_OFF' | 'PACKAGE_PRICE';
 
 export interface Promotion {
   id: string;

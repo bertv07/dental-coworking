@@ -196,3 +196,62 @@ export function repartirCobro(
     dentistShareCents,
   };
 }
+
+/**
+ * Reparte un descuento total entre varias líneas, proporcional al precio de
+ * cada una, con la suma EXACTA garantizada.
+ *
+ * ---------------------------------------------------------------------
+ *  PARA QUÉ SE USA
+ * ---------------------------------------------------------------------
+ *  Al aplicar una promoción de porcentaje o de importe fijo sobre VARIOS
+ *  tratamientos a la vez («10 % en limpieza + blanqueamiento»), el descuento
+ *  no puede caer entero en una sola línea: hay que repartirlo entre las que
+ *  de verdad lo generaron, en proporción a lo que cuesta cada una.
+ *
+ *  También sirve para el caso inverso: un PAQUETE a precio cerrado es, en el
+ *  fondo, un descuento sobre la suma de sus tratamientos —la diferencia entre
+ *  lo que costarían sueltos y el precio del paquete— repartido de la misma
+ *  forma.
+ *
+ * ---------------------------------------------------------------------
+ *  POR QUÉ NO BASTA `Math.round(precio * proporcion)` LÍNEA A LÍNEA
+ * ---------------------------------------------------------------------
+ *  Redondear cada parte por separado casi nunca suma exacto: con tres líneas
+ *  de $10, $10 y $10 repartiendo $10 de descuento tocan a $3.33 cada una, y
+ *  redondeado son $3+$3+$3 = $9 — un dólar del descuento se pierde en el
+ *  redondeo, y la factura no coincide con lo prometido.
+ *
+ *  Aquí se calculan las partes SIN redondear y la última línea absorbe el
+ *  resto exacto (`totalDescuento - lo ya repartido`), igual que hace
+ *  `splitCents` con la comisión: nunca hay una diferencia flotando.
+ *
+ *  El descuento de una línea nunca supera su propio precio: una línea no
+ *  puede quedar en negativo por muy grande que sea el descuento a repartir.
+ */
+export function distribuirDescuento(
+  lineas: Array<{ cents: number }>,
+  totalDescuentoCents: number,
+): number[] {
+  const totalBase = lineas.reduce((suma, l) => suma + l.cents, 0);
+  if (totalBase <= 0 || totalDescuentoCents <= 0) return lineas.map(() => 0);
+
+  // El descuento nunca puede superar la suma de lo que se está repartiendo:
+  // eso dejaría el conjunto en negativo, y sería un error de quien llama, no
+  // algo que este helper deba intentar arreglar en silencio.
+  const descuento = Math.min(totalDescuentoCents, totalBase);
+
+  const partes = lineas.map((l) => Math.floor((l.cents / totalBase) * descuento));
+  const repartido = partes.reduce((suma, p) => suma + p, 0);
+  const resto = descuento - repartido;
+
+  // El resto del redondeo se lo lleva la línea de mayor precio: es la que
+  // mejor absorbe un par de centavos sin que se note.
+  let indiceMayor = 0;
+  for (let i = 1; i < lineas.length; i += 1) {
+    if (lineas[i]!.cents > lineas[indiceMayor]!.cents) indiceMayor = i;
+  }
+  partes[indiceMayor] = (partes[indiceMayor] ?? 0) + resto;
+
+  return partes;
+}

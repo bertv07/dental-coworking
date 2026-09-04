@@ -340,3 +340,39 @@ export async function voidInvoiceAction(id: string, reason: string): Promise<Act
   revalidatePath('/facturas');
   return { ok: true };
 }
+
+const RAZON_APLICAR_PROMOCION: Record<string, string> = {
+  NOT_FOUND: 'Esa factura o esa promoción ya no existen.',
+  VOID: 'Esta factura está anulada; no se le puede aplicar nada.',
+  INACTIVE: 'Esta promoción no está vigente ahora mismo.',
+  ALREADY_APPLIED: 'Esta promoción ya se aplicó a esta factura.',
+  MISSING_TREATMENTS:
+    'Algún tratamiento de la promoción ya no existe en el catálogo. Revísala en Descuentos.',
+  NO_LINES:
+    'Esta promoción no exige un tratamiento concreto: añade primero algo a la factura para poder repartir el descuento.',
+  PACKAGE_NOT_CHEAPER:
+    'El precio del paquete no es menor que la suma de sus tratamientos. Revisa el importe de la promoción.',
+};
+
+/**
+ * Aplica una promoción del catálogo a esta factura: añade lo que haga falta
+ * y calcula el descuento, en un solo clic.
+ */
+export async function applyPromotionAction(input: unknown): Promise<ActionResult> {
+  const auth = await autorizar();
+  if (!auth.ok) return auth.result;
+
+  const parsed = z
+    .object({ invoiceId: cuidSchema, promotionId: cuidSchema })
+    .safeParse(input);
+  if (!parsed.success) return { ok: false, error: 'Datos inválidos' };
+
+  const result = await repository.applyPromotion({ ...parsed.data, userId: auth.userId });
+
+  if (!result.ok) {
+    return { ok: false, error: RAZON_APLICAR_PROMOCION[result.reason] ?? 'No se pudo aplicar.' };
+  }
+
+  revalidatePath(`/facturas/${parsed.data.invoiceId}`);
+  return { ok: true, invoiceId: parsed.data.invoiceId };
+}

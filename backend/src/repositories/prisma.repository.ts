@@ -13,7 +13,7 @@ import type {
   ScheduleBlock,
 } from '@/backend/domain/types';
 import { percentChange, splitCents } from '@/backend/domain/money';
-import { calcularComision, calcularPrecio, repartirCobro } from '@/backend/domain/pricing';
+import { calcularComision, calcularPrecio, distribuirDescuento, repartirCobro } from '@/backend/domain/pricing';
 import {
   recalcularFactura,
   repartirPago,
@@ -119,6 +119,8 @@ const INVOICE_RELATIONS = {
       discountCents: true,
       discountReason: true,
       commissionPercent: true,
+      promotionId: true,
+      promotion: { select: { name: true } },
     },
     orderBy: { sortOrder: 'asc' },
   },
@@ -169,6 +171,8 @@ function toInvoice(row: {
     discountCents: number;
     discountReason: string | null;
     commissionPercent: number;
+    promotionId: string | null;
+    promotion: { name: string } | null;
   }>;
   payments: Array<{
     id: string;
@@ -200,7 +204,11 @@ function toInvoice(row: {
     balanceCents: row.totalCents - paidCents,
     notes: row.notes,
     issuedAt: row.issuedAt,
-    lines: row.lines.map((l) => ({ ...l, totalCents: totalLinea(l) })),
+    lines: row.lines.map((l) => ({
+      ...l,
+      totalCents: totalLinea(l),
+      promotionName: l.promotion?.name ?? null,
+    })),
     payments: row.payments.map((p) => ({
       id: p.id,
       amountCents: p.amountCents,
@@ -2634,6 +2642,320 @@ export const prismaRepository: DataRepository = {
     } catch (error) {
       return toWriteFailure(error);
     }
+  },
+
+  /**
+   * Aplica una promoción a una factura: añade las líneas que hagan falta y
+   * calcula el descuento, todo dentro de una sola transacción.
+   *
+   * ---------------------------------------------------------------------
+   *  ESTO SÍ MUEVE DINERO SOLO — Y ES DELIBERADO
+   * ---------------------------------------------------------------------
+   *  A diferencia de "guardar la promoción en el catálogo" (que nunca toca
+   *  una factura por su cuenta), ESTA función es la ACCIÓN explícita que
+   *  recepción dispara con un clic — "Aplicar esta promoción a esta
+   *  factura" — así que sí calcula y escribe el descuento. La diferencia con
+   *  lo que se advertía antes no es que ahora "aplique sola": es que ahora
+   *  hay un botón para pedírselo, en vez de obligar a recepción a replicar a
+   *  mano la aritmética de la promoción en cada factura.
+   *
+   *  Una vez aplicada, el resultado queda CONGELADO en las líneas de esa
+   *  factura. Editar la promoción después (cambiarle el precio, apagarla) no
+   *  mueve nada de lo ya facturado — sigue siendo cierto lo que se prometió
+   *  la primera vez.
+   *
+   * ---------------------------------------------------------------------
+   *  QUÉ HACE SEGÚN EL TIPO DE BENEFICIO
+   * ---------------------------------------------------------------------
+   *  FREE_TREATMENT   → añade el tratamiento que se regala, con un
+   *                      descuento del 100 % de SU línea.
+   *  PERCENT_OFF       → añade los tratamientos requeridos (o toma los que
+   *                      ya haya en la factura, si la promo no exige
+   *                      ninguno en concreto) y reparte el % entre ellos.
+   *  AMOUNT_OFF        → igual, pero repartiendo un importe fijo.
+   *  PACKAGE_PRICE     → añade TODOS los tratamientos del paquete a su
+   *                      precio de lista y reparte la diferencia hasta
+   *                      dejar la suma exacta en `benefitValue`.
+   *
+   *  El reparto entre líneas usa `distribuirDescuento`, que garantiza que la
+   *  suma cuadra exacta y que ninguna línea queda en negativo.
+   */
+  async applyPromotion({ invoiceId, promotionId, userId }) {
+    // Sin `toWriteFailure`: sus únicos casos (DUPLICATE/NOT_FOUND genéricos) no
+    // encajan con las razones específicas de este método, que ya cubre todo
+    // lo esperable a mano. Un fallo de verdad inesperado de la base sube tal
+    // cual, igual que en el resto de lecturas del repositorio.
+    return prisma.$transaction(async (tx) => {
+        const [factura, promocion] = await Promise.all([
+          tx.invoice.findUnique({
+            where: { id: invoiceId },
+            select: {
+              id: true,
+              status: true,
+              dentistId: true,
+              dentist: { select: { clinicCommissionPercent: true } },
+              lines: {
+                select: {
+                  id: true,
+                  promotionId: true,
+                  unitPriceCents: true,
+                  quantity: true,
+                  discountCents: true,
+                  discountReason: true,
+                },
+              },
+            },
+          }),
+          tx.promotion.findUnique({ where: { id: promotionId } }),
+        ]);
+
+        if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        if (!promocion || promocion.deletedAt) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        if (factura.status === 'VOID') return { ok: false as const, reason: 'VOID' as const };
+
+        const ahora = new Date();
+        const vigente =
+          promocion.isActive &&
+          (!promocion.startsAt || promocion.startsAt <= ahora) &&
+          (!promocion.endsAt || promocion.endsAt >= ahora);
+        if (!vigente) return { ok: false as const, reason: 'INACTIVE' as const };
+
+        // Una misma promoción no se aplica dos veces a la misma factura: la
+        // segunda vez duplicaría el regalo o el paquete entero.
+        if (factura.lines.some((l) => l.promotionId === promotionId)) {
+          return { ok: false as const, reason: 'ALREADY_APPLIED' as const };
+        }
+
+        // Se sacan del objeto ANTES de definir la función anidada: TypeScript no
+        // arrastra el `if (!factura)` de arriba dentro de una función interna,
+        // así que referenciar `factura.algo` ahí abajo seguiría marcándolo
+        // como potencialmente nulo aunque ya se haya comprobado.
+        const dentistIdFactura = factura.dentistId;
+        const comisionOdontologo = factura.dentist?.clinicCommissionPercent ?? null;
+        const comisionPorDefecto = await comisionPorDefectoDeLaClinica();
+        let siguienteOrden = factura.lines.length;
+
+        /** Da de alta una línea nueva para un tratamiento, con su precio y comisión normales. */
+        async function agregarLineaDeTratamiento(treatmentId: string) {
+          const tratamiento = await tx.treatment.findUnique({
+            where: { id: treatmentId },
+            select: { name: true, basePriceCents: true, clinicKeepsAll: true, isPriceVariable: true },
+          });
+          if (!tratamiento) return null;
+
+          const acuerdo = dentistIdFactura
+            ? await tx.dentistTreatment.findUnique({
+                where: { dentistId_treatmentId: { dentistId: dentistIdFactura, treatmentId } },
+                select: { customPriceCents: true, customCommissionPercent: true, status: true },
+              })
+            : null;
+          const aprobado = acuerdo?.status === 'APPROVED' ? acuerdo : null;
+
+          const precio = calcularPrecio(tratamiento, aprobado).priceCents;
+          const comision = calcularComision({
+            tratamiento,
+            acuerdo: aprobado,
+            comisionOdontologo,
+            comisionPorDefecto,
+          }).clinicPercent;
+
+          const linea = await tx.invoiceLine.create({
+            data: {
+              invoiceId,
+              treatmentId,
+              description: tratamiento.name,
+              quantity: 1,
+              unitPriceCents: precio,
+              commissionPercent: comision,
+              promotionId,
+              sortOrder: siguienteOrden,
+            },
+            select: { id: true, unitPriceCents: true, quantity: true },
+          });
+          siguienteOrden += 1;
+          return linea;
+        }
+
+        const codigosRequeridos = promocion.requiredTreatmentCodes;
+        const tratamientosPorCodigo = codigosRequeridos.length
+          ? await tx.treatment.findMany({
+              where: { code: { in: codigosRequeridos }, deletedAt: null },
+              select: { id: true, code: true },
+            })
+          : [];
+
+        if (codigosRequeridos.length > 0 && tratamientosPorCodigo.length !== codigosRequeridos.length) {
+          // Un código de la promoción ya no existe en el catálogo (se borró
+          // o se le cambió el código): mejor avisar que facturar a medias.
+          return { ok: false as const, reason: 'MISSING_TREATMENTS' as const };
+        }
+
+        if (promocion.benefitKind === 'PACKAGE_PRICE') {
+          if (tratamientosPorCodigo.length === 0) {
+            return { ok: false as const, reason: 'MISSING_TREATMENTS' as const };
+          }
+
+          const nuevas = [];
+          for (const t of tratamientosPorCodigo) {
+            const linea = await agregarLineaDeTratamiento(t.id);
+            if (!linea) return { ok: false as const, reason: 'MISSING_TREATMENTS' as const };
+            nuevas.push(linea);
+          }
+
+          const totalListaCents = nuevas.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0);
+          const precioPaqueteCents = promocion.benefitValue;
+
+          // El paquete tiene que salir MÁS barato que la suma suelta: si no,
+          // no es una promoción, y aplicarla así dejaría un "descuento"
+          // negativo que en realidad sube el precio sin que nadie lo note.
+          if (precioPaqueteCents >= totalListaCents) {
+            return { ok: false as const, reason: 'PACKAGE_NOT_CHEAPER' as const };
+          }
+
+          const descuentoTotal = totalListaCents - precioPaqueteCents;
+          const partes = distribuirDescuento(
+            nuevas.map((l) => ({ cents: l.unitPriceCents * l.quantity })),
+            descuentoTotal,
+          );
+
+          await Promise.all(
+            nuevas.map((linea, i) =>
+              tx.invoiceLine.update({
+                where: { id: linea.id },
+                data: {
+                  discountCents: partes[i] ?? 0,
+                  discountReason: `Promoción: ${promocion.name}`,
+                },
+              }),
+            ),
+          );
+
+          await recalcularFactura(tx, invoiceId);
+          await tx.auditLog.create({
+            data: {
+              userId,
+              action: 'invoice.promotion_applied',
+              entityType: 'Invoice',
+              entityId: invoiceId,
+              after: { promotionId, promotionName: promocion.name, benefitKind: promocion.benefitKind },
+            },
+          });
+          return { ok: true as const, data: { linesAdded: nuevas.length } };
+        }
+
+        if (promocion.benefitKind === 'FREE_TREATMENT') {
+          if (!promocion.benefitTreatmentCode) {
+            return { ok: false as const, reason: 'MISSING_TREATMENTS' as const };
+          }
+          const regalo = await tx.treatment.findFirst({
+            where: { code: promocion.benefitTreatmentCode, deletedAt: null },
+            select: { id: true },
+          });
+          if (!regalo) return { ok: false as const, reason: 'MISSING_TREATMENTS' as const };
+
+          // Si la promoción exige tratamientos previos, se añaden también
+          // (a precio normal, SIN descuento): son la condición, no el regalo.
+          for (const t of tratamientosPorCodigo) {
+            const linea = await agregarLineaDeTratamiento(t.id);
+            if (!linea) return { ok: false as const, reason: 'MISSING_TREATMENTS' as const };
+          }
+
+          const lineaRegalo = await agregarLineaDeTratamiento(regalo.id);
+          if (!lineaRegalo) return { ok: false as const, reason: 'MISSING_TREATMENTS' as const };
+
+          await tx.invoiceLine.update({
+            where: { id: lineaRegalo.id },
+            data: {
+              discountCents: lineaRegalo.unitPriceCents * lineaRegalo.quantity,
+              discountReason: `Promoción: ${promocion.name}`,
+            },
+          });
+
+          await recalcularFactura(tx, invoiceId);
+          await tx.auditLog.create({
+            data: {
+              userId,
+              action: 'invoice.promotion_applied',
+              entityType: 'Invoice',
+              entityId: invoiceId,
+              after: { promotionId, promotionName: promocion.name, benefitKind: promocion.benefitKind },
+            },
+          });
+          return { ok: true as const, data: { linesAdded: tratamientosPorCodigo.length + 1 } };
+        }
+
+        // PERCENT_OFF / AMOUNT_OFF -------------------------------------------
+        //
+        // Si la promoción exige tratamientos concretos, se añaden y el
+        // descuento se reparte entre ESAS líneas nuevas. Si no exige ninguno
+        // (promoción general, "10 % en lo que sea"), el descuento se reparte
+        // entre las líneas que YA tuviera la factura — tiene que haber al
+        // menos una, porque no hay nada sobre lo que aplicar el porcentaje.
+        let lineasObjetivo: Array<{ id: string; unitPriceCents: number; quantity: number }>;
+
+        if (tratamientosPorCodigo.length > 0) {
+          const nuevas = [];
+          for (const t of tratamientosPorCodigo) {
+            const linea = await agregarLineaDeTratamiento(t.id);
+            if (!linea) return { ok: false as const, reason: 'MISSING_TREATMENTS' as const };
+            nuevas.push(linea);
+          }
+          lineasObjetivo = nuevas;
+        } else {
+          if (factura.lines.length === 0) return { ok: false as const, reason: 'NO_LINES' as const };
+          lineasObjetivo = factura.lines;
+        }
+
+        const descuentoTotal =
+          promocion.benefitKind === 'PERCENT_OFF'
+            ? Math.round(
+                (lineasObjetivo.reduce((s, l) => s + l.unitPriceCents * l.quantity, 0) *
+                  promocion.benefitValue) /
+                  100,
+              )
+            : promocion.benefitValue;
+
+        const partes = distribuirDescuento(
+          lineasObjetivo.map((l) => ({ cents: l.unitPriceCents * l.quantity })),
+          descuentoTotal,
+        );
+
+        await Promise.all(
+          lineasObjetivo.map((linea, i) => {
+            const razonPromo = `Promoción: ${promocion.name}`;
+            // Si la línea ya venía con un motivo (un descuento manual, u otra
+            // promoción anterior sobre la misma línea), se AÑADE, no se pisa:
+            // perder el motivo anterior borraría por qué se rebajó eso otro.
+            const existente = 'discountReason' in linea ? linea.discountReason : null;
+            const razon =
+              existente && existente !== razonPromo ? `${existente} · ${razonPromo}` : razonPromo;
+
+            return tx.invoiceLine.update({
+              where: { id: linea.id },
+              data: {
+                discountCents: { increment: partes[i] ?? 0 },
+                discountReason: razon,
+                // Sólo se etiqueta con la promoción si la línea nació aquí
+                // mismo; una línea que YA estaba en la factura conserva su
+                // origen y sólo recibe el descuento.
+                ...(tratamientosPorCodigo.length > 0 ? { promotionId } : {}),
+              },
+            });
+          }),
+        );
+
+        await recalcularFactura(tx, invoiceId);
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'invoice.promotion_applied',
+            entityType: 'Invoice',
+            entityId: invoiceId,
+            after: { promotionId, promotionName: promocion.name, benefitKind: promocion.benefitKind },
+          },
+        });
+        return { ok: true as const, data: { linesAdded: tratamientosPorCodigo.length } };
+    });
   },
 
   // --- Documentos escaneados del paciente ----------------------------------

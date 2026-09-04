@@ -11,13 +11,16 @@ import { repository } from '@/backend/repositories';
  * ===========================================================================
  *  «Si te haces la limpieza, la consulta va gratis.»
  *
- *  IMPORTANTE, Y ES DELIBERADO: esto NO descuenta nada solo. Guarda lo que la
- *  clínica ofrece, para que el bot pueda proponerlo y para que recepción vea
- *  al cobrar que una factura cumple una promoción. El descuento se sigue
- *  marcando a mano en la factura, como pidió la clínica.
+ *  Este archivo sólo guarda el CATÁLOGO: qué ofrece la clínica y cómo se lo
+ *  dice el bot por WhatsApp. Guardar o editar una promoción aquí NUNCA toca
+ *  dinero — ni de facturas abiertas ni de nada.
  *
- *  Si aplicara solo, cambiar una promoción movería el importe de facturas ya
- *  abiertas sin que nadie lo hubiera decidido.
+ *  Aplicar de verdad una promoción a una factura concreta —la parte que sí
+ *  calcula el descuento— es una acción aparte y vive en
+ *  `applyPromotionAction`, en `invoice.actions.ts`: recepción la dispara con
+ *  un clic desde la factura, nunca ocurre sola. Así, cambiar el precio de una
+ *  promoción hoy no mueve ni un centavo de lo que ya se le aplicó ayer a otro
+ *  paciente — eso ya quedó congelado en esa factura.
  *
  *  ACCESO: asistente o superior. Recepción es quien negocia en el mostrador.
  * ===========================================================================
@@ -49,7 +52,7 @@ const promotionSchema = z
       .refine((lista) => lista.every((c) => CODIGO.test(c)), {
         message: 'Hay un código de tratamiento con caracteres no permitidos',
       }),
-    benefitKind: z.enum(['FREE_TREATMENT', 'PERCENT_OFF', 'AMOUNT_OFF']),
+    benefitKind: z.enum(['FREE_TREATMENT', 'PERCENT_OFF', 'AMOUNT_OFF', 'PACKAGE_PRICE']),
     benefitTreatmentCode: z
       .string()
       .trim()
@@ -78,6 +81,14 @@ const promotionSchema = z
   })
   .refine((d) => d.benefitKind !== 'AMOUNT_OFF' || d.benefitValue > 0, {
     message: 'Pon el importe del descuento',
+    path: ['benefitValue'],
+  })
+  .refine((d) => d.benefitKind !== 'PACKAGE_PRICE' || d.requiredTreatmentCodes.length >= 2, {
+    message: 'Un paquete necesita al menos dos tratamientos',
+    path: ['requiredTreatmentCodes'],
+  })
+  .refine((d) => d.benefitKind !== 'PACKAGE_PRICE' || d.benefitValue > 0, {
+    message: 'Pon el precio del paquete',
     path: ['benefitValue'],
   });
 
@@ -110,8 +121,10 @@ function aEntrada(data: z.infer<typeof promotionSchema>) {
     benefitKind: data.benefitKind,
     benefitTreatmentCode: data.benefitTreatmentCode,
     // Los importes viven en centavos en toda la aplicación; el porcentaje no.
+    // El paquete se escribe en dólares igual que el importe fijo: quien
+    // rellena el formulario piensa en "$45", no en "4500".
     benefitValue:
-      data.benefitKind === 'AMOUNT_OFF'
+      data.benefitKind === 'AMOUNT_OFF' || data.benefitKind === 'PACKAGE_PRICE'
         ? Math.round(data.benefitValue * 100)
         : Math.round(data.benefitValue),
     botPitch: data.botPitch || null,

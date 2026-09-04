@@ -35,7 +35,7 @@ export default async function DescuentosPage() {
       <FadeIn>
         <PageHead
           title="Descuentos y promociones"
-          subtitle={`${vigentes} activas · el bot las ofrece por WhatsApp`}
+          subtitle={`${vigentes} activas · el bot las ofrece por WhatsApp · se aplican desde cada factura`}
         />
       </FadeIn>
 

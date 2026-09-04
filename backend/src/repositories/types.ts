@@ -219,7 +219,7 @@ export interface PromotionInput {
   name: string;
   description: string | null;
   requiredTreatmentCodes: string[];
-  benefitKind: 'FREE_TREATMENT' | 'PERCENT_OFF' | 'AMOUNT_OFF';
+  benefitKind: 'FREE_TREATMENT' | 'PERCENT_OFF' | 'AMOUNT_OFF' | 'PACKAGE_PRICE';
   benefitTreatmentCode: string | null;
   benefitValue: number;
   botPitch: string | null;
@@ -778,6 +778,31 @@ export interface DataRepository {
     reason: string;
     userId: string;
   }): Promise<WriteResult<{ id: string }>>;
+
+  /**
+   * Aplica una promoción del catálogo a una factura: añade las líneas que
+   * hagan falta y calcula el descuento según el tipo de beneficio.
+   *
+   * A diferencia de guardar una promoción (que nunca toca dinero por su
+   * cuenta), ésta SÍ escribe el descuento — porque es la acción explícita
+   * que recepción dispara con un clic, no algo que ocurra solo. El resultado
+   * queda congelado en la factura: editar la promoción después no mueve
+   * nada de lo ya aplicado.
+   */
+  applyPromotion(params: {
+    invoiceId: string;
+    promotionId: string;
+    userId: string;
+  }): Promise<
+    | { ok: true; data: { linesAdded: number } }
+    | { ok: false; reason: 'NOT_FOUND' }
+    | { ok: false; reason: 'VOID' }
+    | { ok: false; reason: 'INACTIVE' }
+    | { ok: false; reason: 'ALREADY_APPLIED' }
+    | { ok: false; reason: 'MISSING_TREATMENTS' }
+    | { ok: false; reason: 'NO_LINES' }
+    | { ok: false; reason: 'PACKAGE_NOT_CHEAPER' }
+  >;
 
   // --- Documentos escaneados del paciente ----------------------------------
 

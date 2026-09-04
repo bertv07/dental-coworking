@@ -76,12 +76,18 @@ export async function POST(request: NextRequest) {
          * un enum y un número. Cuanto menos lógica de negocio viva en el
          * flujo de n8n, menos sitios hay que tocar cuando esto cambie.
          */
+        const nombresIncluidos = p.requiredTreatmentCodes
+          .map((c) => nombrePorCodigo.get(c) ?? c)
+          .join(' + ');
+
         const label =
           p.benefitKind === 'FREE_TREATMENT'
             ? `${nombreBeneficio} sale gratis`
             : p.benefitKind === 'PERCENT_OFF'
               ? `${p.benefitValue} % de descuento`
-              : `${formatCents(p.benefitValue)} de descuento`;
+              : p.benefitKind === 'PACKAGE_PRICE'
+                ? `${nombresIncluidos} por ${formatCents(p.benefitValue)} el paquete completo`
+                : `${formatCents(p.benefitValue)} de descuento`;
 
         return {
           name: p.name,
@@ -101,11 +107,13 @@ export async function POST(request: NextRequest) {
           // preferible a que el bot improvise con los campos sueltos.
           pitch:
             p.botPitch ??
-            (p.requiredTreatmentCodes.length > 0
-              ? `Si te haces ${p.requiredTreatmentCodes
-                  .map((c) => nombrePorCodigo.get(c) ?? c)
-                  .join(' y ')}, ${label}.`
-              : `${p.name}: ${label}.`),
+            (p.benefitKind === 'PACKAGE_PRICE'
+              ? `${label}.`
+              : p.requiredTreatmentCodes.length > 0
+                ? `Si te haces ${p.requiredTreatmentCodes
+                    .map((c) => nombrePorCodigo.get(c) ?? c)
+                    .join(' y ')}, ${label}.`
+                : `${p.name}: ${label}.`),
           endsAt: p.endsAt ? p.endsAt.toISOString() : null,
         };
       }),

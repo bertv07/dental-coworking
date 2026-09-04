@@ -905,6 +905,9 @@ model Promotion {
   updatedAt       DateTime  @updatedAt @db.Timestamptz(3)
   deletedAt       DateTime? @db.Timestamptz(3)
 
+  /// Líneas de factura que nacieron de aplicar esta promoción.
+  invoiceLines InvoiceLine[]
+
   @@index([isActive, deletedAt])
   @@map("promotions")
 }
@@ -913,6 +916,12 @@ enum PromotionBenefit {
   FREE_TREATMENT /// Un tratamiento sale gratis
   PERCENT_OFF /// Un porcentaje de descuento
   AMOUNT_OFF /// Un importe fijo en centavos
+  /// Varios tratamientos juntos por un precio cerrado («conducto + corona +
+  /// radiografía por $X»), en vez de rebajar uno solo. `benefitValue` es el
+  /// precio TOTAL del paquete en centavos; `requiredTreatmentCodes` pasa a
+  /// significar "lo que incluye el paquete" en vez de "lo que hay que
+  /// hacerse para desbloquearlo".
+  PACKAGE_PRICE
 }
 
 model Invoice {
@@ -992,6 +1001,14 @@ model InvoiceLine {
   /// Comisión de la clínica en esta línea, copiada al añadirla. Permite que
   /// una radiografía (100 % clínica) conviva con una limpieza (40/60).
   commissionPercent Int
+
+  /// Promoción que generó esta línea, si vino de aplicar una.
+  ///
+  /// `SetNull` y no `Cascade`: si alguien borra la promoción del catálogo más
+  /// adelante, la línea ya facturada tiene que seguir existiendo tal cual se
+  /// le entregó al paciente — sólo se pierde el enlace, nunca el cobro.
+  promotionId String?
+  promotion   Promotion? @relation(fields: [promotionId], references: [id], onDelete: SetNull)
 
   sortOrder Int @default(0)
 

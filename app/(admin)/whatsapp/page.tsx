@@ -123,6 +123,12 @@ export default async function WhatsAppPage({
 
       <FadeIn delay={0.08}>
         <WhatsAppMonitor
+          // Fuerza un reinicio completo del estado del chat (seleccionado,
+          // mensajes, borrador) al cambiar entre activas y archivadas: son
+          // dos listas de conversaciones distintas, y arrastrar el chat
+          // elegido de una a la otra dejaba la pantalla en un estado que no
+          // correspondía a lo que se veía en la lista.
+          key={viendoArchivadas ? 'archivadas' : 'activas'}
           conversations={conversations}
           initialConversationId={firstConversation?.id ?? null}
           initialMessages={initialMessages}
