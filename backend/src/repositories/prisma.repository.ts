@@ -3772,6 +3772,13 @@ export const prismaRepository: DataRepository = {
 
   async listConversations(options) {
     const conversations = await prisma.whatsAppConversation.findMany({
+      where: {
+        // Las borradas no vuelven a aparecer nunca en el monitor.
+        deletedAt: null,
+        // Archivadas y activas son dos listas distintas, nunca mezcladas: el
+        // sentido de archivar es sacarlas de en medio.
+        archivedAt: options?.archived ? { not: null } : null,
+      },
       include: {
         patient: { select: { fullName: true } },
         // Sólo el último mensaje de cada hilo, para la vista previa.
@@ -3800,6 +3807,8 @@ export const prismaRepository: DataRepository = {
         unreadCount: conversation.unreadCount,
         needsHumanAttention: conversation.needsHumanAttention,
         lastMessageAt: conversation.lastMessageAt,
+        archivedAt: conversation.archivedAt,
+        deletedAt: conversation.deletedAt,
         patientName: conversation.patient?.fullName ?? conversation.displayName,
         lastMessagePreview: lastMessage?.body.slice(0, 120) ?? null,
         lastMessageAuthor: lastMessage?.author ?? null,
@@ -3907,6 +3916,152 @@ export const prismaRepository: DataRepository = {
       where: { id: messageId },
       data: { deliveryStatus: status, deliveryError: error },
     });
+  },
+
+  // --- Archivar, borrar y plantillas ---------------------------------------
+
+  async setConversationArchived({ conversationId, archived, userId }) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        await tx.whatsAppConversation.update({
+          where: { id: conversationId },
+          data: {
+            archivedAt: archived ? new Date() : null,
+            // Al archivar se da por atendida: dejar el chat marcado como
+            // «requiere atención» fuera de la lista principal significaría un
+            // aviso que ya nadie va a ver.
+            ...(archived ? { needsHumanAttention: false, unreadCount: 0 } : {}),
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: archived ? 'whatsapp.conversation_archived' : 'whatsapp.conversation_restored',
+            entityType: 'WhatsAppConversation',
+            entityId: conversationId,
+          },
+        });
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  async softDeleteConversation({ conversationId, userId }) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        /*
+         * Se marca, no se borra. La conversación es la prueba de lo que se le
+         * prometió al paciente: qué precio se le dio, qué hora se le confirmó.
+         *
+         * Se guarda además el teléfono en la auditoría, porque el día que
+         * alguien pregunte «¿quién borró el chat de este paciente?» no va a
+         * tener a mano un id interno.
+         */
+        const conversacion = await tx.whatsAppConversation.findUnique({
+          where: { id: conversationId },
+          select: { phoneE164: true, displayName: true },
+        });
+
+        await tx.whatsAppConversation.update({
+          where: { id: conversationId },
+          data: { deletedAt: new Date(), needsHumanAttention: false, unreadCount: 0 },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'whatsapp.conversation_deleted',
+            entityType: 'WhatsAppConversation',
+            entityId: conversationId,
+            before: conversacion
+              ? { phoneE164: conversacion.phoneE164, displayName: conversacion.displayName }
+              : undefined,
+          },
+        });
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  async listMessageTemplates(options) {
+    const rows = await prisma.messageTemplate.findMany({
+      where: { deletedAt: null, ...(options?.includeInactive ? {} : { isActive: true }) },
+      // Por categoría y luego por el orden que fijó la clínica. El uso real se
+      // muestra en el gestor, pero no reordena solo: una lista que se mueve
+      // sola obliga a buscar de nuevo cada vez.
+      orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { title: 'asc' }],
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      category: row.category,
+      title: row.title,
+      body: row.body,
+      sortOrder: row.sortOrder,
+      usageCount: row.usageCount,
+      isActive: row.isActive,
+    }));
+  },
+
+  async saveMessageTemplate({ id, data, userId }) {
+    try {
+      const row = id
+        ? await prisma.messageTemplate.update({
+            where: { id },
+            data: { ...data, updatedByUserId: userId },
+          })
+        : await prisma.messageTemplate.create({
+            data: { ...data, createdByUserId: userId, updatedByUserId: userId },
+          });
+
+      return {
+        ok: true,
+        data: {
+          id: row.id,
+          category: row.category,
+          title: row.title,
+          body: row.body,
+          sortOrder: row.sortOrder,
+          usageCount: row.usageCount,
+          isActive: row.isActive,
+        },
+      };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deleteMessageTemplate(id, userId) {
+    try {
+      // Borrado lógico: si alguien la borra por error, el texto sigue ahí para
+      // recuperarlo desde la base.
+      await prisma.messageTemplate.update({
+        where: { id },
+        data: { deletedAt: new Date(), isActive: false, updatedByUserId: userId },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  async registerTemplateUse(id) {
+    /*
+     * `increment` es atómico en SQL. Dos personas insertando la misma
+     * plantilla a la vez con un read-modify-write perderían una de las dos
+     * cuentas — poco grave aquí, pero es gratis hacerlo bien.
+     *
+     * Se ignora el fallo a propósito: si la plantilla se borró entre que se
+     * pintó la lista y se pulsó, contar el uso es lo de menos. El mensaje ya
+     * está en el compositor.
+     */
+    await prisma.messageTemplate
+      .update({ where: { id }, data: { usageCount: { increment: 1 } } })
+      .catch(() => undefined);
   },
 
   async setConversationAiEnabled({ conversationId, aiEnabled, userId, reason }) {

@@ -85,6 +85,8 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // Junto a facturas y caja: es lo que recepción negocia al cobrar.
       { href: '/descuentos', label: 'Descuentos', Icon: IconTag, minimumRole: 'ASSISTANT' },
       { href: '/whatsapp', label: 'WhatsApp', Icon: IconChat, minimumRole: 'ASSISTANT' },
+      // Junto a WhatsApp: es donde se usan.
+      { href: '/plantillas', label: 'Plantillas', Icon: IconPrescription, minimumRole: 'ASSISTANT' },
 
       // Consulta, no trabajo diario: van después.
       //

@@ -3561,3 +3561,204 @@ a {
   font-size: 0.85rem;
   line-height: 1.5;
 }
+
+/* --------------------------------------------------------------------------
+   PLANTILLAS DE RESPUESTA
+   -------------------------------------------------------------------------- */
+
+/* --- Gestor (/plantillas) ----------------------------------------------- */
+
+.plantilla {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.plantilla:last-child {
+  border-bottom: 0;
+}
+
+.plantilla__info {
+  min-width: 0;
+}
+
+.plantilla__cuerpo {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+  /* El texto completo, pero cortado a tres líneas: la lista es para
+     reconocer la plantilla, no para leerla entera. */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+.plantilla__marcadores {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.plantilla__marcadores code {
+  font-size: 0.6875rem;
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  border-radius: var(--radius-sm);
+  padding: 1px var(--space-2);
+}
+
+@media (max-width: 560px) {
+  .plantilla {
+    flex-direction: column;
+  }
+}
+
+/* --- Selector dentro del compositor -------------------------------------- */
+
+.plantillas-panel {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+  margin-bottom: var(--space-3);
+  overflow: hidden;
+}
+
+.plantillas-panel__cabecera {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Alto acotado: el panel se abre SOBRE el compositor y no puede empujar el
+   hilo de mensajes fuera de la pantalla. */
+.plantillas-panel__lista {
+  max-height: 16rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.plantillas-panel__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  transition: background 0.12s ease;
+}
+
+.plantillas-panel__item:last-child {
+  border-bottom: 0;
+}
+
+.plantillas-panel__item:hover,
+.plantillas-panel__item:focus-visible {
+  background: var(--color-primary-soft);
+}
+
+.plantillas-panel__titulo {
+  display: block;
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
+.plantillas-panel__categoria {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--color-primary);
+  margin-top: 1px;
+}
+
+.plantillas-panel__extracto {
+  display: block;
+  font-size: var(--text-xs);
+  color: var(--color-text-subtle);
+  margin-top: var(--space-1);
+  /* Una línea: sirve para distinguir dos plantillas parecidas, no para leer. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Aviso de corchetes sin sustituir, justo encima del cuadro de escritura. */
+.composer__marcadores {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-warning-soft);
+  border-left: 3px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: #7a4405;
+}
+
+.composer__marcadores code {
+  background: transparent;
+  font-weight: 650;
+}
+
+/* --- Archivar y eliminar en la lista de chats ---------------------------- */
+
+.conversation-row {
+  position: relative;
+}
+
+/*
+  Las acciones aparecen al pasar el puntero o al enfocar con el teclado.
+  Siempre visibles competirían con el nombre y la vista previa, que es lo que
+  se lee al buscar un chat.
+*/
+.conversation-row__acciones {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: flex;
+  gap: var(--space-1);
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.conversation-row:hover .conversation-row__acciones,
+.conversation-row:focus-within .conversation-row__acciones {
+  opacity: 1;
+}
+
+.conversation-row__accion {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+
+.conversation-row__accion:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.conversation-row__accion--peligro:hover {
+  background: var(--color-danger-soft);
+  border-color: var(--color-danger);
+  color: var(--color-danger);
+}
+
+/* En táctil no hay hover: si se ocultaran, no habría forma de archivar. */
+@media (hover: none) {
+  .conversation-row__acciones {
+    opacity: 1;
+  }
+}

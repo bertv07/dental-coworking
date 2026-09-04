@@ -1,13 +1,30 @@
 'use client';
 
 import { useRef, useState, useTransition, useOptimistic } from 'react';
-import type { ConversationListItem, WhatsAppMessage } from '@/backend/domain/types';
+import type {
+  ConversationListItem,
+  MessageTemplate,
+  WhatsAppMessage,
+} from '@/backend/domain/types';
 import {
   toggleConversationAiAction,
   sendWhatsAppMessageAction,
 } from '@/app/actions/whatsapp.actions';
+import {
+  archivarConversacionAction,
+  eliminarConversacionAction,
+  registrarUsoPlantillaAction,
+} from '@/app/actions/plantillas.actions';
+import { marcadoresDe } from '@/frontend/features/plantillas/PlantillasManager';
 import { Badge, EmptyState, Notice } from '@/frontend/components/ui/primitives';
-import { IconDownload, IconPlus } from '@/frontend/components/ui/icons';
+import {
+  IconDownload,
+  IconPlus,
+  IconTrash,
+  IconRefresh,
+  IconArchive,
+  IconPrescription,
+} from '@/frontend/components/ui/icons';
 
 /**
  * ===========================================================================
@@ -28,6 +45,10 @@ interface WhatsAppMonitorProps {
   initialMessages: WhatsAppMessage[];
   /** `false` si falta WHATSAPP_OUTBOUND_WEBHOOK_URL: se avisa en la UI. */
   outboundConfigured: boolean;
+  /** Respuestas rápidas para insertar en el compositor. */
+  plantillas: MessageTemplate[];
+  /** `true` si se está viendo la lista de archivadas. */
+  viendoArchivadas: boolean;
 }
 
 /** Límite de WhatsApp para mensajes de texto. */
@@ -105,6 +126,8 @@ export function WhatsAppMonitor({
   initialConversationId,
   initialMessages,
   outboundConfigured,
+  plantillas,
+  viendoArchivadas,
 }: WhatsAppMonitorProps) {
   const [selectedId, setSelectedId] = useState(initialConversationId);
   const [messages, setMessages] = useState(initialMessages);
@@ -117,6 +140,63 @@ export function WhatsAppMonitor({
   const [adjunto, setAdjunto] = useState<File | null>(null);
   const adjuntoRef = useRef<HTMLInputElement>(null);
   const [sendWarning, setSendWarning] = useState<string | null>(null);
+
+  /** Panel de plantillas abierto sobre el compositor. */
+  const [plantillasAbiertas, setPlantillasAbiertas] = useState(false);
+  const [busquedaPlantilla, setBusquedaPlantilla] = useState('');
+
+  /**
+   * Inserta una plantilla en el compositor.
+   *
+   * REEMPLAZA el borrador en vez de añadirlo al final. Es lo que se espera:
+   * se elige una plantilla porque se va a mandar ESA, no para pegarla detrás
+   * de lo que se estaba escribiendo. Si había algo escrito, se pide
+   * confirmación antes de perderlo.
+   */
+  function insertarPlantilla(plantilla: MessageTemplate) {
+    if (draft.trim().length > 0 && !window.confirm('Se reemplazará lo que tienes escrito. ¿Seguir?')) {
+      return;
+    }
+    setDraft(plantilla.body);
+    setPlantillasAbiertas(false);
+    setBusquedaPlantilla('');
+    // Se cuenta al INSERTAR, no al enviar: lo que interesa medir es qué busca
+    // recepción. Una plantilla que se inserta y luego se reescribe entera es
+    // justo la que está mal redactada.
+    void registrarUsoPlantillaAction({ id: plantilla.id });
+  }
+
+  /** Marcadores sin sustituir en lo que hay escrito ahora mismo. */
+  const marcadoresPendientes = marcadoresDe(draft);
+
+  /** Archiva, desarchiva o elimina la conversación abierta. */
+  function gestionarConversacion(accion: 'archivar' | 'restaurar' | 'eliminar', id: string) {
+    if (accion === 'eliminar') {
+      const texto =
+        '¿Eliminar esta conversación del monitor?\n\n' +
+        'Los mensajes NO se borran de la base de datos: quedan como registro de ' +
+        'lo que se le prometió al paciente. La acción queda auditada.';
+      if (!window.confirm(texto)) return;
+    }
+
+    startTransition(async () => {
+      const resultado =
+        accion === 'eliminar'
+          ? await eliminarConversacionAction({ conversationId: id })
+          : await archivarConversacionAction({
+              conversationId: id,
+              archived: accion === 'archivar',
+            });
+
+      if (!resultado.ok) {
+        setErrorMessage(resultado.error ?? 'No se pudo completar la acción');
+        return;
+      }
+      // El chat abierto ya no está en la lista: se deselecciona para no dejar
+      // un hilo huérfano en pantalla.
+      if (id === selectedId) setSelectedId(null);
+    });
+  }
 
   /**
    * Estado optimista del toggle.
@@ -318,8 +398,8 @@ export function WhatsAppMonitor({
             <EmptyState>No hay conversaciones.</EmptyState>
           ) : (
             optimisticConversations.map((conversation) => (
+              <div key={conversation.id} className="conversation-row">
               <button
-                key={conversation.id}
                 type="button"
                 className={`conversation-item ${
                   conversation.id === selectedId ? 'conversation-item--active' : ''
@@ -364,6 +444,44 @@ export function WhatsAppMonitor({
                   </div>
                 </div>
               </button>
+
+              {/*
+                Las acciones van FUERA del botón de la fila: anidar un botón
+                dentro de otro es HTML inválido y el navegador lo reordena por
+                su cuenta, dejando el clic en un sitio imprevisible.
+              */}
+              <div className="conversation-row__acciones">
+                <button
+                  type="button"
+                  className="conversation-row__accion"
+                  onClick={() =>
+                    gestionarConversacion(
+                      viendoArchivadas ? 'restaurar' : 'archivar',
+                      conversation.id,
+                    )
+                  }
+                  disabled={isPending}
+                  title={viendoArchivadas ? 'Devolver a la lista activa' : 'Archivar'}
+                  aria-label={
+                    viendoArchivadas
+                      ? `Restaurar la conversación de ${conversation.patientName ?? conversation.phoneE164}`
+                      : `Archivar la conversación de ${conversation.patientName ?? conversation.phoneE164}`
+                  }
+                >
+                  {viendoArchivadas ? <IconRefresh size={14} /> : <IconArchive size={14} />}
+                </button>
+                <button
+                  type="button"
+                  className="conversation-row__accion conversation-row__accion--peligro"
+                  onClick={() => gestionarConversacion('eliminar', conversation.id)}
+                  disabled={isPending}
+                  title="Eliminar del monitor"
+                  aria-label={`Eliminar la conversación de ${conversation.patientName ?? conversation.phoneE164}`}
+                >
+                  <IconTrash size={14} />
+                </button>
+              </div>
+              </div>
             ))
           )}
         </div>
@@ -549,7 +667,98 @@ export function WhatsAppMonitor({
                 </div>
               )}
 
+              {/* --- Plantillas ------------------------------------------
+                  Panel sobre el compositor. Se abre, se busca, se pulsa y el
+                  texto entra en el cuadro listo para retocar. */}
+              {plantillasAbiertas && (
+                <div className="plantillas-panel">
+                  <div className="plantillas-panel__cabecera">
+                    <input
+                      className="input"
+                      autoFocus
+                      placeholder="Buscar plantilla…"
+                      value={busquedaPlantilla}
+                      onChange={(e) => setBusquedaPlantilla(e.target.value)}
+                      aria-label="Buscar plantilla"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => setPlantillasAbiertas(false)}
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+
+                  <div className="plantillas-panel__lista">
+                    {(() => {
+                      const q = busquedaPlantilla.trim().toLowerCase();
+                      // Se busca también en el cuerpo: recepción recuerda una
+                      // frase suelta antes que el nombre de la plantilla.
+                      const visibles = q
+                        ? plantillas.filter(
+                            (t) =>
+                              t.title.toLowerCase().includes(q) ||
+                              t.category.toLowerCase().includes(q) ||
+                              t.body.toLowerCase().includes(q),
+                          )
+                        : plantillas;
+
+                      if (visibles.length === 0) {
+                        return (
+                          <p className="text-sm subtle" style={{ padding: '0.75rem' }}>
+                            {plantillas.length === 0
+                              ? 'No hay plantillas todavía. Créalas en Plantillas.'
+                              : 'Ninguna coincide con esa búsqueda.'}
+                          </p>
+                        );
+                      }
+
+                      return visibles.map((plantilla) => (
+                        <button
+                          key={plantilla.id}
+                          type="button"
+                          className="plantillas-panel__item"
+                          onClick={() => insertarPlantilla(plantilla)}
+                        >
+                          <span className="plantillas-panel__titulo">{plantilla.title}</span>
+                          <span className="plantillas-panel__categoria">{plantilla.category}</span>
+                          <span className="plantillas-panel__extracto">{plantilla.body}</span>
+                        </button>
+                      ));
+                    })()}
+                  </div>
+                </div>
+              )}
+
+              {/*
+                Aviso de corchetes sin rellenar.
+                
+                Es el error que este formato invita a cometer: se inserta la
+                plantilla, se cambia el precio y se envía con «Hola [Nombre del
+                paciente]» intacto. No se bloquea el envío —a veces el corchete
+                es parte del texto— pero se dice en voz alta.
+              */}
+              {marcadoresPendientes.length > 0 && (
+                <div className="composer__marcadores">
+                  Falta sustituir: {marcadoresPendientes.map((m) => (
+                    <code key={m}>{m}</code>
+                  ))}
+                </div>
+              )}
+
               <div className="composer__row">
+                <button
+                  type="button"
+                  className="btn btn--ghost composer__adjuntar"
+                  onClick={() => setPlantillasAbiertas((v) => !v)}
+                  disabled={isSending}
+                  title="Usar una plantilla"
+                  aria-label="Usar una plantilla"
+                  aria-expanded={plantillasAbiertas}
+                >
+                  <IconPrescription size={16} />
+                </button>
                 <input
                   ref={adjuntoRef}
                   type="file"

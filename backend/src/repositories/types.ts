@@ -20,6 +20,7 @@ import type {
   ScheduleBlock,
   ScheduleChangeRequest,
   FinancialSummary,
+  MessageTemplate,
   Patient,
   PaymentMethodOption,
   Room,
@@ -113,6 +114,15 @@ export interface AppointmentInput {
   treatmentId: string;
   startsAt: Date;
   notes: string | null;
+}
+
+/** Alta o edición de una plantilla de respuesta. */
+export interface MessageTemplateInput {
+  category: string;
+  title: string;
+  body: string;
+  sortOrder: number;
+  isActive: boolean;
 }
 
 /** Alta o edición de un medio de pago desde el panel. */
@@ -1055,7 +1065,54 @@ export interface DataRepository {
   getDentistEarnings(range: DateRange): Promise<DentistEarnings[]>;
 
   // --- WhatsApp ------------------------------------------------------------
-  listConversations(options?: { limit?: number }): Promise<ConversationListItem[]>;
+  listConversations(options?: {
+    limit?: number;
+    /** `true` devuelve SÓLO las archivadas. Por defecto, sólo las activas. */
+    archived?: boolean;
+  }): Promise<ConversationListItem[]>;
+
+  /**
+   * Archiva o desarchiva una conversación.
+   *
+   * Archivar la saca de la lista principal sin tocar nada más: los mensajes,
+   * el estado de la IA y el historial siguen intactos. Es lo que hace usable
+   * el monitor a los seis meses, cuando la lista acumula cada número que
+   * escribió una vez.
+   */
+  setConversationArchived(params: {
+    conversationId: string;
+    archived: boolean;
+    userId: string;
+  }): Promise<boolean>;
+
+  /**
+   * Borrado LÓGICO de una conversación.
+   *
+   * Nunca se elimina la fila. Una conversación de WhatsApp es la prueba de lo
+   * que se le prometió a un paciente —qué precio se le dio, qué hora se le
+   * confirmó—, y quien la borra suele ser justo quien tiene motivos para
+   * hacerla desaparecer. Queda en auditoría con quién y cuándo.
+   */
+  softDeleteConversation(params: {
+    conversationId: string;
+    userId: string;
+  }): Promise<boolean>;
+
+  // --- Plantillas de respuesta ---------------------------------------------
+  listMessageTemplates(options?: {
+    includeInactive?: boolean;
+  }): Promise<MessageTemplate[]>;
+
+  saveMessageTemplate(params: {
+    id: string | null;
+    data: MessageTemplateInput;
+    userId: string;
+  }): Promise<WriteResult<MessageTemplate>>;
+
+  deleteMessageTemplate(id: string, userId: string): Promise<boolean>;
+
+  /** Suma uno al contador de uso. Ordena la lista por lo que de verdad se usa. */
+  registerTemplateUse(id: string): Promise<void>;
   getConversationMessages(conversationId: string): Promise<WhatsAppMessage[]>;
   /**
    * Registra un mensaje SALIENTE escrito por un humano desde el panel.

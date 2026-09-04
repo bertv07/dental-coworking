@@ -1158,6 +1158,22 @@ model WhatsAppConversation {
 
   lastMessageAt DateTime? @db.Timestamptz(3)
 
+  // --- Organización del monitor --------------------------------------------
+  /// Archivada: sale de la lista principal pero se conserva entera.
+  ///
+  /// Es lo que hace usable el monitor a los seis meses: sin esto, la lista
+  /// acumula cada número que escribió una vez y las conversaciones vivas
+  /// quedan enterradas.
+  archivedAt DateTime? @db.Timestamptz(3)
+
+  /// Borrado LÓGICO. La fila no se elimina nunca.
+  ///
+  /// Una conversación de WhatsApp es la prueba de lo que se le prometió a un
+  /// paciente: qué precio se le dio, qué hora se le confirmó. Borrarla de
+  /// verdad destruiría esa evidencia, y quien la borra suele ser justo quien
+  /// tiene motivos para hacerla desaparecer.
+  deletedAt DateTime? @db.Timestamptz(3)
+
   messages WhatsAppMessage[]
 
   createdAt DateTime @default(now()) @db.Timestamptz(3)
@@ -1169,6 +1185,8 @@ model WhatsAppConversation {
   @@index([aiAutoResumeAt])
   @@index([needsHumanAttention, lastMessageAt])
   @@index([aiEnabled])
+  /// El monitor filtra por estas dos en cada carga.
+  @@index([deletedAt, archivedAt, lastMessageAt(sort: Desc)])
   @@map("whatsapp_conversations")
 }
 
@@ -1552,4 +1570,55 @@ model AppointmentAddon {
 
   @@index([appointmentId])
   @@map("appointment_addons")
+}
+
+/// ===========================================================================
+///  PLANTILLAS DE RESPUESTA
+/// ===========================================================================
+///  Los mensajes que recepción usa una y otra vez: precios, horarios, cierre
+///  de cita, urgencias.
+///
+///  POR QUÉ VIVEN EN LA BASE Y NO EN UN DOCUMENTO APARTE
+///  Porque cambian y porque se corrigen sobre la marcha. Una hoja de Word
+///  con las respuestas se queda desactualizada el día que suben un precio, y
+///  nadie se entera hasta que un paciente llega al mostrador con otra cifra.
+///  Aquí se editan donde se usan.
+///
+///  El texto lleva marcadores entre corchetes —`[Precio]`, `[Hora]`— que la
+///  asistente sustituye antes de enviar. Se guardan tal cual: rellenarlos
+///  automáticamente obligaría a que cada plantilla supiera de dónde sale cada
+///  dato, y la mitad de ellos (el nombre del paciente, la hora acordada) sólo
+///  los sabe la persona que está escribiendo.
+model MessageTemplate {
+  id String @id @default(cuid())
+
+  /// Agrupador para la lista: "Saludos", "Precios", "Citas y pagos".
+  /// Texto libre a propósito: la clínica inventa las categorías que necesite.
+  category String
+
+  /// De qué situación es. Es lo que se busca al elegir plantilla.
+  title String
+
+  /// El mensaje. Con sus corchetes sin rellenar.
+  body String
+
+  /// Orden dentro de su categoría. Lo más usado, arriba.
+  sortOrder Int @default(0)
+
+  /// Cuántas veces se ha insertado. Sirve para ordenar por uso real y para
+  /// detectar plantillas que nadie abre — que normalmente es que están mal
+  /// escritas, no que no hagan falta.
+  usageCount Int @default(0)
+
+  isActive Boolean @default(true)
+
+  createdByUserId String?
+  updatedByUserId String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([isActive, category, sortOrder])
+  @@map("message_templates")
 }

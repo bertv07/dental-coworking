@@ -239,6 +239,15 @@ export function IconPrescription(props: IconProps) {
   );
 }
 
+export function IconArchive(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <rect x="3" y="4" width="18" height="4" rx="1" />
+      <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4" />
+    </svg>
+  );
+}
+
 export function IconRefresh(props: IconProps) {
   return (
     <svg {...base(props)}>

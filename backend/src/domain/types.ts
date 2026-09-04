@@ -212,6 +212,10 @@ export interface WhatsAppConversation {
   unreadCount: number;
   needsHumanAttention: boolean;
   lastMessageAt: Date | null;
+  /** Fuera de la lista principal, pero conservada entera. */
+  archivedAt?: Date | null;
+  /** Borrado lógico: la fila nunca se elimina. */
+  deletedAt?: Date | null;
 }
 
 export type DeliveryStatus = 'PENDING' | 'SENT' | 'FAILED';
@@ -529,6 +533,22 @@ export interface FinancialSummary {
 }
 
 /** Fila del monitor de WhatsApp. */
+/**
+ * Plantilla de respuesta rápida.
+ *
+ * El `body` conserva los marcadores `[Precio]`, `[Hora]` sin rellenar: son el
+ * recordatorio visible de lo que hay que sustituir antes de enviar.
+ */
+export interface MessageTemplate {
+  id: string;
+  category: string;
+  title: string;
+  body: string;
+  sortOrder: number;
+  usageCount: number;
+  isActive: boolean;
+}
+
 export interface ConversationListItem extends WhatsAppConversation {
   patientName: string | null;
   lastMessagePreview: string | null;

@@ -38,14 +38,21 @@ export const dynamic = 'force-dynamic';
 export default async function WhatsAppPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; archivadas?: string }>;
 }) {
   await requireRole('ASSISTANT');
 
-  const { q } = await searchParams;
+  const { q, archivadas } = await searchParams;
   const busqueda = (q ?? '').trim().toLowerCase();
+  // Activas y archivadas son dos listas distintas, nunca mezcladas: el sentido
+  // de archivar es sacarlas de en medio.
+  const viendoArchivadas = archivadas === '1';
 
-  const todas = await repository.listConversations({ limit: 50 });
+  const [todas, plantillas] = await Promise.all([
+    repository.listConversations({ limit: 50, archived: viendoArchivadas }),
+    // Sólo las activas: el monitor es para usarlas, no para gestionarlas.
+    repository.listMessageTemplates(),
+  ]);
 
   /*
    * El filtro se aplica sobre la lista ya traída y no en la consulta.
@@ -90,11 +97,26 @@ export default async function WhatsAppPage({
     <div className="page-body">
       <FadeIn>
         <PageHead
-          title="Monitor de WhatsApp"
+          title={viendoArchivadas ? 'Conversaciones archivadas' : 'Monitor de WhatsApp'}
           subtitle={
             busqueda
               ? `${conversations.length} de ${todas.length} chats coinciden con «${q}»`
-              : `${todas.length} conversaciones · ${pendingCount} requieren atención · ${aiOffCount} con IA apagada`
+              : viendoArchivadas
+                ? `${todas.length} archivadas · se conservan enteras`
+                : `${todas.length} conversaciones · ${pendingCount} requieren atención · ${aiOffCount} con IA apagada`
+          }
+          actions={
+            <>
+              <a
+                href={viendoArchivadas ? '/whatsapp' : '/whatsapp?archivadas=1'}
+                className="btn btn--ghost"
+              >
+                {viendoArchivadas ? 'Ver activas' : 'Ver archivadas'}
+              </a>
+              <a href="/plantillas" className="btn btn--ghost">
+                Plantillas
+              </a>
+            </>
           }
         />
       </FadeIn>
@@ -105,6 +127,8 @@ export default async function WhatsAppPage({
           initialConversationId={firstConversation?.id ?? null}
           initialMessages={initialMessages}
           outboundConfigured={isOutboundConfigured()}
+          plantillas={plantillas}
+          viendoArchivadas={viendoArchivadas}
         />
       </FadeIn>
     </div>

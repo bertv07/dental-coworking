@@ -19,6 +19,7 @@ import type {
   ScheduleChangeRequest,
   FinancialSummary,
   Patient,
+  MessageTemplate,
   PaymentMethodOption,
   Promotion,
   Room,
@@ -92,6 +93,9 @@ const messages: WhatsAppMessage[] = MOCK_MESSAGES.map((message) => ({ ...message
 
 /** Medios de pago configurados. Mutables: se editan desde la demo. */
 const paymentMethods: PaymentMethodOption[] = MOCK_PAYMENT_METHODS.map((item) => ({ ...item }));
+
+/** Plantillas de respuesta. Vacío en modo demo: se cargan con el script. */
+const messageTemplates: MessageTemplate[] = [];
 
 /** Arqueos firmados durante la sesión, indexados por día 'YYYY-MM-DD'. */
 const cashClosings = new Map<string, CashClosing>();
@@ -1565,6 +1569,63 @@ export const mockRepository: DataRepository = {
     conversation.needsHumanAttention = true;
 
     return { conversationId: conversation.id, aiEnabled: false };
+  },
+
+  // --- Archivar, borrar y plantillas ---------------------------------------
+
+  async setConversationArchived({ conversationId, archived }) {
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (!conversation) return false;
+    conversation.archivedAt = archived ? new Date() : null;
+    if (archived) {
+      conversation.needsHumanAttention = false;
+      conversation.unreadCount = 0;
+    }
+    return true;
+  },
+
+  async softDeleteConversation({ conversationId }) {
+    const conversation = conversations.find((item) => item.id === conversationId);
+    if (!conversation) return false;
+    conversation.deletedAt = new Date();
+    conversation.needsHumanAttention = false;
+    conversation.unreadCount = 0;
+    return true;
+  },
+
+  async listMessageTemplates(options) {
+    return messageTemplates
+      .filter((t) => (options?.includeInactive ? true : t.isActive))
+      .sort(
+        (a, b) =>
+          a.category.localeCompare(b.category) ||
+          a.sortOrder - b.sortOrder ||
+          a.title.localeCompare(b.title),
+      );
+  },
+
+  async saveMessageTemplate({ id, data }) {
+    if (id) {
+      const index = messageTemplates.findIndex((t) => t.id === id);
+      if (index === -1) return { ok: false, reason: 'NOT_FOUND' };
+      messageTemplates[index] = { ...messageTemplates[index]!, ...data };
+      return { ok: true, data: messageTemplates[index]! };
+    }
+    const created = { ...data, id: newId('tpl'), usageCount: 0 };
+    messageTemplates.push(created);
+    return { ok: true, data: created };
+  },
+
+  async deleteMessageTemplate(id) {
+    const index = messageTemplates.findIndex((t) => t.id === id);
+    if (index === -1) return false;
+    messageTemplates.splice(index, 1);
+    return true;
+  },
+
+  async registerTemplateUse(id) {
+    const plantilla = messageTemplates.find((t) => t.id === id);
+    if (plantilla) plantilla.usageCount += 1;
   },
 
   async setConversationAiEnabled({ conversationId, aiEnabled, userId, reason }) {
