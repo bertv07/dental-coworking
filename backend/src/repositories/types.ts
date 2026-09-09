@@ -780,6 +780,27 @@ export interface DataRepository {
   }): Promise<WriteResult<{ id: string }>>;
 
   /**
+   * Reversa una factura que YA tiene cobros — el caso que `voidInvoice`
+   * rechaza a propósito. Es para venta de PRUEBA cobrada por error, no para
+   * devoluciones reales a un paciente: marca los cobros como REFUNDED (así
+   * salen de caja y del dashboard, que sólo suman `status: 'PAID'`) y la
+   * factura como VOID. Sólo Super Admin la dispara — ver la Server Action.
+   *
+   * Nunca se borra ninguna fila: la reversión queda escrita, no desaparece.
+   */
+  reverseInvoice(params: {
+    id: string;
+    reason: string;
+    userId: string;
+  }): Promise<
+    | { ok: true; data: { id: string; reversedCents: number } }
+    | { ok: false; reason: 'NOT_FOUND' }
+    | { ok: false; reason: 'ALREADY_VOID' }
+    | { ok: false; reason: 'NO_PAYMENTS' }
+    | { ok: false; reason: 'PAID_OUT' }
+  >;
+
+  /**
    * Aplica una promoción del catálogo a una factura: añade las líneas que
    * hagan falta y calcula el descuento según el tipo de beneficio.
    *

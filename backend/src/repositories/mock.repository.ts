@@ -1014,6 +1014,10 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async reverseInvoice() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
   async applyPromotion() {
     return { ok: false, reason: 'NOT_FOUND' };
   },

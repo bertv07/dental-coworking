@@ -2644,6 +2644,58 @@ export const prismaRepository: DataRepository = {
     }
   },
 
+  async reverseInvoice({ id, reason, userId }) {
+    return prisma.$transaction(async (tx) => {
+      const factura = await tx.invoice.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          status: true,
+          payments: {
+            where: { status: 'PAID' },
+            select: { id: true, amountCents: true, payoutId: true },
+          },
+        },
+      });
+
+      if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+      if (factura.status === 'VOID') return { ok: false as const, reason: 'ALREADY_VOID' as const };
+      if (factura.payments.length === 0) return { ok: false as const, reason: 'NO_PAYMENTS' as const };
+
+      // Si ya se liquidó al odontólogo, la clínica ya le pagó SU parte de
+      // este dinero: reversarlo ahora dejaría esa liquidación sin respaldo.
+      // Eso ya no es "borrar una prueba", es una devolución de verdad — con
+      // su propio proceso, fuera de este botón.
+      if (factura.payments.some((p) => p.payoutId !== null)) {
+        return { ok: false as const, reason: 'PAID_OUT' as const };
+      }
+
+      const reversedCents = factura.payments.reduce((sum, p) => sum + p.amountCents, 0);
+
+      await tx.payment.updateMany({
+        where: { id: { in: factura.payments.map((p) => p.id) } },
+        data: { status: 'REFUNDED' },
+      });
+
+      await tx.invoice.update({
+        where: { id },
+        data: { status: 'VOID', voidedAt: new Date(), voidReason: reason },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'invoice.reversed',
+          entityType: 'Invoice',
+          entityId: id,
+          after: { reason, reversedCents, paymentIds: factura.payments.map((p) => p.id) },
+        },
+      });
+
+      return { ok: true as const, data: { id, reversedCents } };
+    });
+  },
+
   /**
    * Aplica una promoción a una factura: añade las líneas que hagan falta y
    * calcula el descuento, todo dentro de una sola transacción.

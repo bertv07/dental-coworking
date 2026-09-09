@@ -341,6 +341,47 @@ export async function voidInvoiceAction(id: string, reason: string): Promise<Act
   return { ok: true };
 }
 
+/**
+ * Reversa una venta YA COBRADA — para limpiar pruebas, no para devoluciones
+ * a un paciente real. Sólo Super Admin: deshace dinero que el dashboard y la
+ * caja ya contaron, así que no puede quedar a un clic de cualquiera.
+ */
+export async function reverseInvoiceAction(id: string, reason: string): Promise<ActionResult> {
+  const authorization = await checkApiRole('SUPER_ADMIN');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error: authorization.status === 401 ? 'Tu sesión expiró.' : 'Sólo un administrador puede hacer esto.',
+    };
+  }
+
+  const parsed = cuidSchema.safeParse(id);
+  if (!parsed.success) return { ok: false, error: 'Identificador inválido' };
+  if (!reason.trim()) return { ok: false, error: 'Indica por qué se reversa.' };
+
+  const result = await repository.reverseInvoice({
+    id: parsed.data,
+    reason: reason.trim().slice(0, 300),
+    userId: authorization.user.id,
+  });
+
+  if (!result.ok) {
+    const mensajes: Record<string, string> = {
+      ALREADY_VOID: 'Esa factura ya está anulada.',
+      NO_PAYMENTS: 'Esa factura no tiene cobros: para anularla usa «Anular factura».',
+      PAID_OUT: 'No se puede: ya se liquidó al odontólogo su parte de este cobro.',
+      NOT_FOUND: 'Esa factura ya no existe.',
+    };
+    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo reversar la venta.' };
+  }
+
+  revalidatePath(`/facturas/${parsed.data}`);
+  revalidatePath('/facturas');
+  revalidatePath('/caja');
+  revalidatePath('/dashboard');
+  return { ok: true };
+}
+
 const RAZON_APLICAR_PROMOCION: Record<string, string> = {
   NOT_FOUND: 'Esa factura o esa promoción ya no existen.',
   VOID: 'Esta factura está anulada; no se le puede aplicar nada.',

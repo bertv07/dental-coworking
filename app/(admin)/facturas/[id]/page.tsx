@@ -20,7 +20,7 @@ export const metadata = { title: 'Factura' };
 export const dynamic = 'force-dynamic';
 
 export default async function InvoicePage({ params }: { params: Promise<{ id: string }> }) {
-  await requireRole('ASSISTANT');
+  const user = await requireRole('ASSISTANT');
 
   const { id } = await params;
   const invoice = await repository.getInvoice(id);
@@ -70,6 +70,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
           exchangeRate={rate?.rate ?? null}
           rateSource={rateSource}
           promotions={promotions}
+          isSuperAdmin={user.role === 'SUPER_ADMIN'}
         />
       </FadeIn>
 

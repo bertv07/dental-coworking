@@ -9,6 +9,7 @@ import {
   removeInvoiceLineAction,
   registerInvoicePaymentAction,
   voidInvoiceAction,
+  reverseInvoiceAction,
   applyPromotionAction,
 } from '@/app/actions/invoice.actions';
 import { Modal } from '@/frontend/components/motion';
@@ -44,6 +45,8 @@ interface InvoiceEditorProps {
   rateSource: string;
   /** Sólo las vigentes ahora mismo: el servidor ya filtró fecha y `isActive`. */
   promotions: Promotion[];
+  /** Sólo Super Admin ve el botón para reversar una venta ya cobrada. */
+  isSuperAdmin: boolean;
 }
 
 const ESTADO: Record<Invoice['status'], { label: string; tone: 'success' | 'warning' | 'danger' }> = {
@@ -59,6 +62,7 @@ export function InvoiceEditor({
   exchangeRate,
   rateSource,
   promotions,
+  isSuperAdmin,
 }: InvoiceEditorProps) {
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -675,6 +679,36 @@ export function InvoiceEditor({
             disabled={isPending}
           >
             Anular factura
+          </button>
+        </p>
+      )}
+
+      {/*
+        Reversar: el caso que "Anular" rechaza a propósito — ya tiene cobros.
+        Es para venta de PRUEBA cobrada por error, no para devoluciones a un
+        paciente real, así que sólo la ve Super Admin.
+      */}
+      {!anulada && isSuperAdmin && invoice.payments.length > 0 && (
+        <p className="text-sm">
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            style={{ color: 'var(--color-danger)' }}
+            onClick={() => {
+              if (
+                !window.confirm(
+                  `Esto quita ${formatCents(invoice.paidCents)} de la caja y del dashboard. ` +
+                    'Úsalo sólo si esta venta fue de prueba, no para devolverle dinero a un paciente real. ¿Continuar?',
+                )
+              ) {
+                return;
+              }
+              const motivo = window.prompt('¿Por qué se reversa esta venta?');
+              if (motivo?.trim()) run(() => reverseInvoiceAction(invoice.id, motivo));
+            }}
+            disabled={isPending}
+          >
+            Reversar venta (era de prueba)
           </button>
         </p>
       )}
