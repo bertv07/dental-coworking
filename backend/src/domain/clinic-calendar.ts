@@ -57,6 +57,24 @@ export function clinicDayKey(instant: Date): string {
   return dayKeyFormatter.format(instant);
 }
 
+/**
+ * Rango [inicio, fin) del día de la clínica que contiene este instante —
+ * "medianoche a medianoche EN CARACAS", no en la zona del servidor.
+ *
+ * Existe porque `Date.setHours(0,0,0,0)` es la trampa de siempre: opera en
+ * la hora local del PROCESO, y un contenedor sin `TZ` configurada corre en
+ * UTC. Ahí "medianoche" cae a las 8pm de Caracas del día anterior, y un
+ * cobro de las 9pm aparece en la caja de mañana en vez de la de hoy — el
+ * tipo de descuadre que no se nota hasta que alguien cuadra caja a mano.
+ */
+export function clinicDayRange(instant: Date): { from: Date; to: Date } {
+  const dayKey = clinicDayKey(instant);
+  return {
+    from: clinicWallClockToInstant(dayKey, 0),
+    to: clinicWallClockToInstant(dayKey, MINUTES_PER_DAY),
+  };
+}
+
 /** Minutos desde medianoche (0-1439) de este instante, hora de la clínica. */
 export function clinicMinuteOfDay(instant: Date): number {
   const [hour, minute] = dayMinuteFormatter.format(instant).split(':');

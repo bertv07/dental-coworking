@@ -6,6 +6,7 @@ import { Sidebar } from '@/frontend/components/layout/Sidebar';
 import { Topbar } from '@/frontend/components/layout/Topbar';
 import { AppShell, NavToggle } from '@/frontend/components/layout/AppShell';
 import { getNotifications, getMessageAlerts } from '@/backend/services/notifications.service';
+import { RATE_SOURCE_LABEL, resolveRateSource } from '@/backend/services/exchange-rate.service';
 
 /**
  * ===========================================================================
@@ -83,8 +84,15 @@ export default async function AdminLayout({ children }: { children: ReactNode })
     (conversation) => conversation.needsHumanAttention,
   ).length;
 
+  // Para el pie del sidebar: "se cobra a tasa X", NO siempre BCV — aquí es
+  // normal poner los precios en dólares y cobrar a tasa EURO.
+  const settings = await repository.getClinicSettings();
+  const rateLabel = RATE_SOURCE_LABEL[resolveRateSource(settings.preferredRateSource)];
+
   return (
-    <AppShell sidebar={<Sidebar userRole={user.role} pendingChats={pendingChats} />}>
+    <AppShell
+      sidebar={<Sidebar userRole={user.role} pendingChats={pendingChats} rateLabel={rateLabel} />}
+    >
       <Topbar
         userName={user.name}
         userRole={user.role}

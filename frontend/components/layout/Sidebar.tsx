@@ -142,9 +142,12 @@ const ROLE_LEVEL: Record<UserRole, number> = {
 export function Sidebar({
   userRole,
   pendingChats = 0,
+  rateLabel,
 }: {
   userRole: UserRole;
   pendingChats?: number;
+  /** "BCV (dólar oficial)", "Euro oficial (BCV)"… — la tasa real de la clínica. */
+  rateLabel: string;
 }) {
   const pathname = usePathname();
 
@@ -245,7 +248,7 @@ export function Sidebar({
         <div className="sidebar__promo">
           <div className="sidebar__promo-title">Precios en USD</div>
           <p className="sidebar__promo-text">
-            Se cobra en bolívares a la tasa BCV del día.
+            Se cobra en bolívares a la tasa {rateLabel} del día.
           </p>
           <Link href="/tasa-cambio" className="sidebar__promo-btn">
             Ver tasa

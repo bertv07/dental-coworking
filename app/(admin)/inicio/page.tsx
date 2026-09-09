@@ -4,6 +4,7 @@ import { repository } from '@/backend/repositories';
 import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { formatCents, formatBs } from '@/backend/domain/money';
 import { totalCitaCents } from '@/backend/domain/pricing';
+import { clinicDayRange, clinicDayKey } from '@/backend/domain/clinic-calendar';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import {
   Card,
@@ -43,16 +44,17 @@ export default async function AssistantHomePage() {
   const user = await requireRole('ASSISTANT');
 
   const now = new Date();
-  const dayStart = new Date(now);
-  dayStart.setHours(0, 0, 0, 0);
-  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  const { from: dayStart, to: dayEnd } = clinicDayRange(now);
+  // Mes en Caracas, no en el del servidor: cerca de medianoche en UTC eso
+  // puede ser un mes distinto.
+  const clinicMonth = Number(clinicDayKey(now).slice(5, 7));
 
   const [todayAppointments, cash, conversations, settings, birthdays] = await Promise.all([
     repository.listAppointments({ range: { from: dayStart, to: dayEnd }, limit: 100 }),
     repository.getDailyCash(now),
     repository.listConversations({ limit: 50 }),
     repository.getClinicSettings(),
-    repository.listStaffBirthdays(now.getMonth() + 1),
+    repository.listStaffBirthdays(clinicMonth),
   ]);
 
   const rateSource = resolveRateSource(settings.preferredRateSource);
@@ -295,7 +297,7 @@ export default async function AssistantHomePage() {
           >
             <div className="row row--wrap" style={{ gap: '0.75rem' }}>
               {birthdays.map((persona) => {
-                const esHoy = persona.day === now.getDate();
+                const esHoy = persona.day === Number(clinicDayKey(now).slice(8, 10));
                 return (
                   <div
                     key={persona.id}

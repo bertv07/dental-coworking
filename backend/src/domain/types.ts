@@ -25,7 +25,7 @@ export type AppointmentStatus =
   | 'NO_SHOW';
 
 export type AppointmentSource = 'WHATSAPP_AI' | 'ADMIN_PANEL' | 'PHONE_CALL' | 'WALK_IN';
-export type PaymentMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE';
+export type PaymentMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE' | 'CREDIT';
 export type PaymentStatus = 'PENDING' | 'PAID' | 'REFUNDED' | 'FAILED';
 export type PayoutStatus = 'ACCRUED' | 'PAID' | 'ON_HOLD';
 export type MessageDirection = 'INBOUND' | 'OUTBOUND';
@@ -306,6 +306,8 @@ export interface Invoice {
   paidCents: number;
   /** `total - paid`. Lo que falta por cobrar. */
   balanceCents: number;
+  /** Bonificación disponible del paciente AHORA MISMO (no sólo de esta factura). */
+  patientCreditCents: number;
   notes: string | null;
   issuedAt: Date;
   lines: InvoiceLine[];

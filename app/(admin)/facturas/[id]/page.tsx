@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
+import { clinicDayKey } from '@/backend/domain/clinic-calendar';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { InvoiceEditor } from '@/frontend/features/admin/InvoiceEditor';
@@ -71,6 +72,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
           rateSource={rateSource}
           promotions={promotions}
           isSuperAdmin={user.role === 'SUPER_ADMIN'}
+          todayKey={clinicDayKey(new Date())}
         />
       </FadeIn>
 

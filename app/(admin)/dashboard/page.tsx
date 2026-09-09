@@ -68,7 +68,7 @@ export default async function DashboardPage() {
                 <>
                   {' '}
                   <span className={`rate-chip ${rate.isStale ? 'rate-chip--stale' : ''}`}>
-                    BCV {rate.rate.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs/USD
+                    {rateSource} {rate.rate.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs/USD
                     {rate.isStale && ' (desactualizada)'}
                   </span>
                 </>

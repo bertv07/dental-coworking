@@ -2,9 +2,11 @@ import Link from 'next/link';
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { formatCents } from '@/backend/domain/money';
+import { clinicDayKey } from '@/backend/domain/clinic-calendar';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { Badge, Card, EmptyState } from '@/frontend/components/ui/primitives';
+import { RegisterBackdatedSale } from '@/frontend/features/admin/RegisterBackdatedSale';
 
 /**
  * ===========================================================================
@@ -27,7 +29,10 @@ const ESTADO = {
 export default async function InvoicesPage() {
   await requireRole('ASSISTANT');
 
-  const invoices = await repository.listInvoices({ limit: 100 });
+  const [invoices, dentists] = await Promise.all([
+    repository.listInvoices({ limit: 100 }),
+    repository.listDentists(),
+  ]);
   const pendientes = invoices.filter((i) => i.status === 'OPEN');
   const porCobrar = pendientes.reduce((suma, i) => suma + i.balanceCents, 0);
 
@@ -47,6 +52,12 @@ export default async function InvoicesPage() {
               ? `${pendientes.length} pendientes · ${formatCents(porCobrar)} por cobrar`
               : `${invoices.length} emitidas · nada pendiente`
           }
+          actions={
+            <RegisterBackdatedSale
+              dentists={dentists.map((d) => ({ id: d.id, fullName: d.fullName }))}
+              todayKey={clinicDayKey(new Date())}
+            />
+          }
         />
       </FadeIn>
 
@@ -56,7 +67,8 @@ export default async function InvoicesPage() {
             <EmptyState>
               Todavía no hay facturas.
               <br />
-              Se emiten desde la agenda, al cobrar una cita.
+              Se emiten desde la agenda al cobrar una cita, o con «Registrar venta atrasada» si
+              se te olvidó un día.
             </EmptyState>
           </Card>
         ) : (

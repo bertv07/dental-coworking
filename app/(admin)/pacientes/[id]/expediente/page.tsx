@@ -7,6 +7,7 @@ import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { Card, Notice } from '@/frontend/components/ui/primitives';
 import { PatientDocuments } from '@/frontend/features/patients/PatientDocuments';
+import { DeletePatientButton } from '@/frontend/features/admin/DeletePatientButton';
 
 /**
  * Formularios reales de la clínica, en blanco, tal cual los diseñó ella —
@@ -48,7 +49,7 @@ export default async function ExpedientePage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  await requireRole('ASSISTANT');
+  const user = await requireRole('ASSISTANT');
 
   const { id } = await params;
 
@@ -96,6 +97,12 @@ export default async function ExpedientePage({
       <FadeIn delay={0.14}>
         <PatientDocuments patientId={patient.id} documents={documents} />
       </FadeIn>
+
+      {user.role === 'SUPER_ADMIN' && (
+        <FadeIn delay={0.16}>
+          <DeletePatientButton patientId={patient.id} patientName={patient.fullName} />
+        </FadeIn>
+      )}
 
       <FadeIn delay={0.18}>
         <p className="text-sm">

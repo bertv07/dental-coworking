@@ -210,6 +210,37 @@ export async function getCurrentRate(source: RateSource = 'BCV'): Promise<Curren
   return stored;
 }
 
+/**
+ * La tasa vigente EN una fecha pasada, no la de hoy.
+ *
+ * Existe para los cobros con fecha atrasada («se me olvidó registrar la
+ * venta del martes»): usar la tasa de HOY para un cobro de hace tres días
+ * dejaría un monto en bolívares que nunca entró de verdad a la gaveta ese
+ * día. Se toma la última tasa publicada EN o ANTES de esa fecha; si la
+ * clínica no tenía ninguna tan vieja, se usa la más antigua que haya.
+ */
+export async function getRateAsOf(source: RateSource, date: Date): Promise<CurrentRate | null> {
+  const row =
+    (await prisma.exchangeRate.findFirst({
+      where: { source, publishedAt: { lte: date } },
+      orderBy: { publishedAt: 'desc' },
+    })) ??
+    (await prisma.exchangeRate.findFirst({
+      where: { source },
+      orderBy: { publishedAt: 'asc' },
+    }));
+
+  if (!row) return null;
+
+  return {
+    rate: Number(row.rate),
+    source,
+    publishedAt: row.publishedAt,
+    fetchedAt: row.fetchedAt,
+    isStale: false,
+  };
+}
+
 /** Las tres fuentes a la vez, para el panel de control cambiario. */
 export async function getAllRates(): Promise<{
   bcv: CurrentRate | null;

@@ -986,6 +986,10 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async createDirectInvoice() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
   async listInvoices() {
     return [];
   },
@@ -1007,6 +1011,10 @@ export const mockRepository: DataRepository = {
   },
 
   async registerInvoicePayment() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async applyPatientCredit() {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
@@ -1149,6 +1157,14 @@ export const mockRepository: DataRepository = {
 
   async deletePatientDocument({ id }) {
     return { ok: true, data: { id } };
+  },
+
+  async deleteInvoicePermanently() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async deletePatientPermanently() {
+    return { ok: false, reason: 'NOT_FOUND' };
   },
 
   async listInstruments(params) {

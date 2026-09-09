@@ -5,7 +5,8 @@ import { z } from 'zod';
 import { checkApiRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { cuidSchema } from '@/backend/validators/common';
-import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, getRateAsOf, resolveRateSource } from '@/backend/services/exchange-rate.service';
+import { clinicDayKey, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
 
 /**
  * ===========================================================================
@@ -33,6 +34,8 @@ export interface ActionResult {
   field?: string;
   /** Id de la factura recién abierta, para poder navegar a ella. */
   invoiceId?: string;
+  /** La operación salió bien, pero hay algo que decir (ej: quedó bonificación). */
+  warning?: string;
 }
 
 async function autorizar() {
@@ -68,6 +71,76 @@ export async function openInvoiceAction(appointmentId: string): Promise<ActionRe
   if (!result.ok) return { ok: false, error: 'Esa cita ya no existe.' };
 
   revalidatePath('/agenda');
+  return { ok: true, invoiceId: result.data.id };
+}
+
+/**
+ * Pacientes para el buscador de "Registrar venta atrasada" — el mismo que
+ * usa `/pacientes`, sin paginar: aquí sólo hace falta encontrar UNO rápido.
+ */
+export async function searchPatientsForInvoiceAction(
+  query: string,
+): Promise<Array<{ id: string; fullName: string; phoneE164: string }>> {
+  const auth = await autorizar();
+  if (!auth.ok) return [];
+
+  const term = query.trim().slice(0, 100);
+  if (term.length < 2) return [];
+
+  const { items } = await repository.listPatients({ search: term, page: 1, limit: 8 });
+  return items.map((p) => ({ id: p.id, fullName: p.fullName, phoneE164: p.phoneE164 }));
+}
+
+const ventaAtrasadaSchema = z.object({
+  patientId: cuidSchema,
+  dentistId: z
+    .union([cuidSchema, z.literal('')])
+    .optional()
+    .transform((v) => (v ? v : null)),
+  // 'YYYY-MM-DD'. Vacío = hoy.
+  fecha: z
+    .union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal('')])
+    .optional()
+    .transform((v) => (v ? v : null)),
+});
+
+/**
+ * Abre una factura SIN cita — la venta de mostrador que se olvidó registrar
+ * el día que pasó, o cualquier venta directa. Nace vacía; las líneas y el
+ * cobro se añaden desde la propia factura, donde ya se puede fechar el
+ * cobro en el pasado.
+ */
+export async function createBackdatedInvoiceAction(input: unknown): Promise<ActionResult> {
+  const auth = await autorizar();
+  if (!auth.ok) return auth.result;
+
+  const validation = ventaAtrasadaSchema.safeParse(input);
+  if (!validation.success) {
+    const issue = validation.error.issues[0];
+    return { ok: false, error: issue?.message ?? 'Datos inválidos', field: issue?.path.join('.') };
+  }
+  const d = validation.data;
+
+  let issuedAt = new Date();
+  if (d.fecha) {
+    if (d.fecha > clinicDayKey(issuedAt)) {
+      return { ok: false, error: 'La fecha no puede ser futura.', field: 'fecha' };
+    }
+    issuedAt = clinicWallClockToInstant(d.fecha, 12 * 60);
+  }
+
+  const result = await repository.createDirectInvoice({
+    patientId: d.patientId,
+    dentistId: d.dentistId,
+    issuedAt,
+    userId: auth.userId,
+  });
+
+  if (!result.ok) {
+    return { ok: false, error: 'Ese paciente ya no existe.' };
+  }
+
+  revalidatePath('/facturas');
   return { ok: true, invoiceId: result.data.id };
 }
 
@@ -238,6 +311,15 @@ const cobroSchema = z.object({
     .union([z.string().trim().max(120), z.literal('')])
     .optional()
     .transform((v) => (v ? v : null)),
+  /**
+   * 'YYYY-MM-DD'. Vacío = hoy, el caso normal. Con fecha es para una venta
+   * que se olvidó registrar el día que pasó: el cobro se cuenta en la caja
+   * de ESE día, con la tasa que regía entonces — no la de hoy.
+   */
+  fechaCobro: z
+    .union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal('')])
+    .optional()
+    .transform((v) => (v ? v : null)),
 });
 
 /**
@@ -265,16 +347,32 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
     return { ok: false, error: 'Medio de pago inválido', field: 'methodChoice' };
   }
 
+  // Fecha del cobro: hoy si no se indicó otra. Nunca en el futuro — eso no
+  // es "se me olvidó registrarlo", es cobrar algo que todavía no pasó.
+  let paidAt: Date | undefined;
+  if (d.fechaCobro) {
+    if (d.fechaCobro > clinicDayKey(new Date())) {
+      return { ok: false, error: 'La fecha del cobro no puede ser futura.', field: 'fechaCobro' };
+    }
+    // Mediodía en Caracas: cae dentro del día elegido pase lo que pase con
+    // el desfase horario, y no aparenta una hora exacta que no ocurrió.
+    paidAt = clinicWallClockToInstant(d.fechaCobro, 12 * 60);
+  }
+
   /*
    * La tasa se lee AQUÍ, no llega del formulario.
    *
    * Es lo que convierte dólares en los bolívares que entran en la gaveta: si
    * viniera del cliente, se podría registrar un cobro a una tasa inventada y
    * el arqueo cuadraría con dinero que nadie entregó.
+   *
+   * Con fecha atrasada se usa la tasa que regía ESE día, no la de hoy: si no,
+   * el monto en bolívares de un cobro de hace tres días quedaría escrito con
+   * una tasa que ese día ni existía.
    */
   const settings = await repository.getClinicSettings();
   const source = resolveRateSource(settings.preferredRateSource);
-  const rate = await getCurrentRate(source);
+  const rate = paidAt ? await getRateAsOf(source, paidAt) : await getCurrentRate(source);
 
   if (!rate) {
     return {
@@ -292,6 +390,7 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
     exchangeRate: rate.rate,
     exchangeRateSource: rate.source,
     userId: auth.userId,
+    paidAt,
   });
 
   if (!result.ok) {
@@ -299,7 +398,6 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
       const mensajes: Record<string, string> = {
         status: 'Esa factura está anulada.',
         invoiceId: 'Esa factura ya está saldada.',
-        amountCents: 'El importe supera el saldo pendiente.',
       };
       return { ok: false, error: mensajes[result.field] ?? 'No se pudo registrar el cobro.' };
     }
@@ -309,6 +407,55 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
   revalidatePath(`/facturas/${d.invoiceId}`);
   revalidatePath('/caja');
   revalidatePath('/agenda');
+
+  // Pagó de más: el vuelto quedó de bonificación. Se avisa para que quien
+  // cobró sepa que no hay que devolverlo en efectivo — ya quedó guardado.
+  if (result.data.creditAddedCents > 0) {
+    return {
+      ok: true,
+      warning: `Pagó de más: se guardaron $${(result.data.creditAddedCents / 100).toFixed(2)} como bonificación a favor del paciente.`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Gasta la bonificación disponible del paciente contra el saldo de esta
+ * factura. Queda registrada como un cobro más, con método "Bonificación".
+ */
+export async function applyPatientCreditAction(invoiceId: string): Promise<ActionResult> {
+  const auth = await autorizar();
+  if (!auth.ok) return auth.result;
+
+  const parsed = cuidSchema.safeParse(invoiceId);
+  if (!parsed.success) return { ok: false, error: 'Identificador inválido' };
+
+  const settings = await repository.getClinicSettings();
+  const source = resolveRateSource(settings.preferredRateSource);
+  const rate = await getCurrentRate(source);
+  if (!rate) {
+    return { ok: false, error: 'No hay tasa de cambio disponible. Actualízala antes de cobrar.' };
+  }
+
+  const result = await repository.applyPatientCredit({
+    invoiceId: parsed.data,
+    exchangeRate: rate.rate,
+    exchangeRateSource: rate.source,
+    userId: auth.userId,
+  });
+
+  if (!result.ok) {
+    const mensajes: Record<string, string> = {
+      NO_CREDIT: 'Este paciente no tiene bonificación disponible.',
+      status: 'Esa factura está anulada.',
+      invoiceId: 'Esa factura ya está saldada.',
+    };
+    const clave = result.reason === 'DUPLICATE' ? result.field : result.reason;
+    return { ok: false, error: mensajes[clave] ?? 'No se pudo aplicar la bonificación.' };
+  }
+
+  revalidatePath(`/facturas/${parsed.data}`);
+  revalidatePath('/caja');
   return { ok: true };
 }
 
@@ -376,6 +523,42 @@ export async function reverseInvoiceAction(id: string, reason: string): Promise<
   }
 
   revalidatePath(`/facturas/${parsed.data}`);
+  revalidatePath('/facturas');
+  revalidatePath('/caja');
+  revalidatePath('/dashboard');
+  return { ok: true };
+}
+
+/**
+ * Borra una factura de PRUEBA de verdad — la fila desaparece, no queda ni
+ * anulada. Es la excepción a "una factura entregada existió y no se borra":
+ * sólo para limpiar lo que nunca debió existir. Sólo Super Admin.
+ */
+export async function deleteInvoicePermanentlyAction(id: string): Promise<ActionResult> {
+  const authorization = await checkApiRole('SUPER_ADMIN');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error: authorization.status === 401 ? 'Tu sesión expiró.' : 'Sólo un administrador puede hacer esto.',
+    };
+  }
+
+  const parsed = cuidSchema.safeParse(id);
+  if (!parsed.success) return { ok: false, error: 'Identificador inválido' };
+
+  const result = await repository.deleteInvoicePermanently({
+    id: parsed.data,
+    userId: authorization.user.id,
+  });
+
+  if (!result.ok) {
+    const mensajes: Record<string, string> = {
+      PAID_OUT: 'No se puede: ya se liquidó al odontólogo su parte de este cobro.',
+      NOT_FOUND: 'Esa factura ya no existe.',
+    };
+    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo borrar la factura.' };
+  }
+
   revalidatePath('/facturas');
   revalidatePath('/caja');
   revalidatePath('/dashboard');

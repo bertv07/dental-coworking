@@ -717,6 +717,18 @@ export interface DataRepository {
     userId: string;
   }): Promise<WriteResult<{ id: string }>>;
 
+  /**
+   * Abre una factura SIN cita — venta de mostrador, o una que se olvidó
+   * registrar el día que pasó. Nace vacía, sin líneas: se añaden a mano
+   * desde la propia factura, igual que a cualquier otra.
+   */
+  createDirectInvoice(params: {
+    patientId: string;
+    dentistId: string | null;
+    issuedAt: Date;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
   listInvoices(params?: {
     status?: InvoiceStatus;
     patientId?: string;
@@ -770,7 +782,36 @@ export interface DataRepository {
     exchangeRate: number;
     exchangeRateSource: string;
     userId: string;
-  }): Promise<WriteResult<{ id: string; balanceCents: number }>>;
+    /**
+     * Fecha del cobro. `undefined` = ahora mismo (el caso normal). Con fecha
+     * se usa para una venta que se olvidó registrar el día que pasó — el
+     * cobro cae en la caja de ESE día, no en la de hoy.
+     */
+    paidAt?: Date;
+  }): Promise<
+    WriteResult<{
+      id: string;
+      balanceCents: number;
+      /** > 0 si se pagó de más: ese vuelto quedó como bonificación del paciente. */
+      creditAddedCents: number;
+    }>
+  >;
+
+  /**
+   * Gasta la bonificación del paciente contra el saldo de esta factura.
+   * Queda registrada como un cobro más, con método `CREDIT`.
+   */
+  applyPatientCredit(params: {
+    invoiceId: string;
+    exchangeRate: number;
+    exchangeRateSource: string;
+    userId: string;
+  }): Promise<
+    | { ok: true; data: { id: string; balanceCents: number; appliedCents: number } }
+    | { ok: false; reason: 'NOT_FOUND' }
+    | { ok: false; reason: 'DUPLICATE'; field: string }
+    | { ok: false; reason: 'NO_CREDIT' }
+  >;
 
   /** Anula la factura. No se borra: el papel se entregó. */
   voidInvoice(params: {
@@ -1009,6 +1050,48 @@ export interface DataRepository {
     id: string;
     userId: string;
   }): Promise<WriteResult<{ id: string }>>;
+
+  /**
+   * Borra una factura de PRUEBA de verdad — filas fuera de la base, no una
+   * marca. Es la excepción a "una factura entregada existió y no se borra":
+   * existe SÓLO para limpiar datos de prueba, no para deshacer una venta
+   * real (para eso está `reverseInvoice`, que sí deja rastro).
+   *
+   * Borra también sus cobros. Rechaza si alguno ya se liquidó a un
+   * odontólogo: esa liquidación sumó ese cobro y borrarlo la dejaría mal
+   * cuadrada sin que nadie se entere.
+   */
+  deleteInvoicePermanently(params: {
+    id: string;
+    userId: string;
+  }): Promise<
+    | { ok: true; data: { id: string } }
+    | { ok: false; reason: 'NOT_FOUND' }
+    | { ok: false; reason: 'PAID_OUT' }
+  >;
+
+  /**
+   * Borra un paciente de PRUEBA de verdad, junto con TODO lo que le
+   * pertenece: citas, facturas, líneas y cobros. Deja la cédula y el
+   * teléfono libres para reutilizarse — eso es justo lo que rompía dejarlo
+   * como borrado lógico con un dato de prueba.
+   *
+   * NO borra el expediente escaneado ni las conversaciones de WhatsApp: esos
+   * dos tienen su propio borrado lógico a propósito (`PatientDocument` y
+   * `WhatsAppConversation` documentan por qué no se destruyen nunca). Aquí
+   * se archivan igual que si se hubieran borrado uno a uno.
+   *
+   * Rechaza si algún cobro ya se liquidó a un odontólogo, por la misma razón
+   * que `deleteInvoicePermanently`.
+   */
+  deletePatientPermanently(params: {
+    id: string;
+    userId: string;
+  }): Promise<
+    | { ok: true; data: { id: string } }
+    | { ok: false; reason: 'NOT_FOUND' }
+    | { ok: false; reason: 'PAID_OUT' }
+  >;
 
   // --- Instrumental del odontólogo -----------------------------------------
 

@@ -19,7 +19,7 @@ import {
   repartirPago,
   totalLinea,
 } from '@/backend/repositories/invoice-helpers';
-import { MINUTES_PER_DAY, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
+import { MINUTES_PER_DAY, clinicWallClockToInstant, clinicDayRange } from '@/backend/domain/clinic-calendar';
 
 /**
  * Traduce un error de escritura de Prisma al resultado tipado del contrato.
@@ -107,7 +107,7 @@ function toAppointmentWithRelations<
 
 /** Todo lo que necesita una factura para pintarse: líneas, pagos y nombres. */
 const INVOICE_RELATIONS = {
-  patient: { select: { fullName: true } },
+  patient: { select: { fullName: true, creditBalanceCents: true } },
   dentist: { select: { fullName: true } },
   lines: {
     select: {
@@ -160,7 +160,7 @@ function toInvoice(row: {
   dentistShareCents: number;
   notes: string | null;
   issuedAt: Date;
-  patient: { fullName: string };
+  patient: { fullName: string; creditBalanceCents: number };
   dentist: { fullName: string } | null;
   lines: Array<{
     id: string;
@@ -179,7 +179,7 @@ function toInvoice(row: {
     amountCents: number;
     amountBs: Prisma.Decimal;
     exchangeRate: Prisma.Decimal;
-    method: 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE';
+    method: 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE' | 'CREDIT';
     methodLabel: string | null;
     paidAt: Date | null;
   }>;
@@ -202,6 +202,7 @@ function toInvoice(row: {
     dentistShareCents: row.dentistShareCents,
     paidCents,
     balanceCents: row.totalCents - paidCents,
+    patientCreditCents: row.patient.creditBalanceCents,
     notes: row.notes,
     issuedAt: row.issuedAt,
     lines: row.lines.map((l) => ({
@@ -1259,10 +1260,11 @@ export const prismaRepository: DataRepository = {
   },
 
   async getDailyCash(date) {
-    // Día completo en la zona de la clínica, no en la del servidor.
-    const dayStart = new Date(date);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    // Día completo en la zona de la clínica, no en la del servidor: un
+    // `setHours(0,0,0,0)` opera en la hora local del PROCESO, y un
+    // contenedor sin `TZ` corre en UTC — ahí un cobro de las 9pm en Caracas
+    // caía en la caja de "mañana".
+    const { from: dayStart, to: dayEnd } = clinicDayRange(date);
 
     const payments = await prisma.payment.findMany({
       where: { status: 'PAID', paidAt: { gte: dayStart, lt: dayEnd } },
@@ -2284,6 +2286,35 @@ export const prismaRepository: DataRepository = {
     }
   },
 
+  async createDirectInvoice({ patientId, dentistId, issuedAt, userId }) {
+    try {
+      const paciente = await prisma.patient.findFirst({
+        where: { id: patientId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!paciente) return { ok: false, reason: 'NOT_FOUND' };
+
+      const factura = await prisma.invoice.create({
+        data: { patientId, dentistId, issuedByUserId: userId, issuedAt },
+        select: { id: true },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'invoice.opened_direct',
+          entityType: 'Invoice',
+          entityId: factura.id,
+          after: { patientId, dentistId, issuedAt },
+        },
+      });
+
+      return { ok: true, data: factura };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
   async listInvoices(params) {
     const rows = await prisma.invoice.findMany({
       where: {
@@ -2490,6 +2521,7 @@ export const prismaRepository: DataRepository = {
     exchangeRate,
     exchangeRateSource,
     userId,
+    paidAt,
   }) {
     try {
       return await prisma.$transaction(async (tx) => {
@@ -2497,6 +2529,7 @@ export const prismaRepository: DataRepository = {
           where: { id: invoiceId },
           select: {
             id: true,
+            patientId: true,
             appointmentId: true,
             status: true,
             totalCents: true,
@@ -2517,26 +2550,35 @@ export const prismaRepository: DataRepository = {
         const saldo = factura.totalCents - yaCobrado;
 
         /*
-         * No se cobra de más. Sin esto, dos clics seguidos en «Cobrar»
-         * meterían el importe dos veces y la caja del día cuadraría con un
-         * dinero que nadie entregó.
+         * No se registra un cobro sobre una factura ya saldada. Sin esto,
+         * dos clics seguidos en «Cobrar» meterían el importe dos veces y la
+         * caja del día cuadraría con un dinero que nadie entregó.
          */
         if (saldo <= 0) {
           return { ok: false as const, reason: 'DUPLICATE' as const, field: 'invoiceId' };
         }
-        if (amountCents > saldo) {
-          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'amountCents' };
-        }
+
+        /*
+         * PAGAR DE MÁS SÍ SE ACEPTA — el vuelto que no se le da en efectivo
+         * al paciente se le queda de bonificación, no se pierde ni se
+         * rechaza el cobro entero por unos centavos de más.
+         *
+         * Al pago sólo entra lo que de verdad se aplicó a ESTA factura
+         * (`aplicadoCents`): así `recalcularFactura` —que suma los pagos—
+         * nunca ve una factura "cobrada" por encima de su total.
+         */
+        const aplicadoCents = Math.min(amountCents, saldo);
+        const excedenteCents = amountCents - aplicadoCents;
 
         const reparto = repartirPago({
-          amountCents,
+          amountCents: aplicadoCents,
           totalCents: factura.totalCents,
           clinicShareCents: factura.clinicShareCents,
           yaCobradoCents: yaCobrado,
           yaAsignadoClinicaCents: factura.payments.reduce((s, p) => s + p.clinicShareCents, 0),
         });
 
-        const amountBs = Math.round((amountCents / 100) * exchangeRate * 100) / 100;
+        const amountBs = Math.round((aplicadoCents / 100) * exchangeRate * 100) / 100;
 
         const pago = await tx.payment.create({
           data: {
@@ -2544,7 +2586,7 @@ export const prismaRepository: DataRepository = {
             // Se conserva el vínculo con la cita: los informes que agrupan
             // por odontólogo siguen pasando por ahí.
             appointmentId: factura.appointmentId,
-            amountCents,
+            amountCents: aplicadoCents,
             exchangeRate,
             amountBs,
             exchangeRateSource,
@@ -2557,16 +2599,23 @@ export const prismaRepository: DataRepository = {
             method,
             methodLabel,
             status: 'PAID',
-            paidAt: new Date(),
+            paidAt: paidAt ?? new Date(),
             externalReference,
           },
           select: { id: true },
         });
 
+        if (excedenteCents > 0) {
+          await tx.patient.update({
+            where: { id: factura.patientId },
+            data: { creditBalanceCents: { increment: excedenteCents } },
+          });
+        }
+
         await recalcularFactura(tx, invoiceId);
 
         // Cobrada del todo implica cita atendida.
-        const nuevoSaldo = saldo - amountCents;
+        const nuevoSaldo = saldo - aplicadoCents;
         if (nuevoSaldo === 0 && factura.appointmentId) {
           await tx.appointment.update({
             where: { id: factura.appointmentId },
@@ -2582,18 +2631,133 @@ export const prismaRepository: DataRepository = {
             entityId: invoiceId,
             after: {
               paymentId: pago.id,
-              amountCents,
+              amountCents: aplicadoCents,
               amountBs,
               exchangeRate,
               saldoRestante: nuevoSaldo,
               // Un pago parcial hay que poder distinguirlo después de uno
               // completo que se quedó corto por error.
               esParcial: nuevoSaldo > 0,
+              ...(excedenteCents > 0 ? { bonificacionGeneradaCents: excedenteCents } : {}),
             },
           },
         });
 
-        return { ok: true as const, data: { id: pago.id, balanceCents: nuevoSaldo } };
+        return {
+          ok: true as const,
+          data: { id: pago.id, balanceCents: nuevoSaldo, creditAddedCents: excedenteCents },
+        };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  /**
+   * Gasta la bonificación del paciente contra el saldo de esta factura.
+   *
+   * Se registra como un `Payment` más, con método `CREDIT`: así aparece en
+   * la lista de cobros de la factura igual que cualquier otro, y NO se
+   * cuenta aparte al sumar cuánto se cobró — es dinero que ya había entrado
+   * antes, cuando se generó la bonificación.
+   */
+  async applyPatientCredit({ invoiceId, exchangeRate, exchangeRateSource, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const factura = await tx.invoice.findUnique({
+          where: { id: invoiceId },
+          select: {
+            id: true,
+            patientId: true,
+            appointmentId: true,
+            status: true,
+            totalCents: true,
+            clinicShareCents: true,
+            patient: { select: { creditBalanceCents: true } },
+            payments: {
+              where: { status: 'PAID' },
+              select: { amountCents: true, clinicShareCents: true },
+            },
+          },
+        });
+
+        if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        if (factura.status === 'VOID') {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
+        }
+
+        const yaCobrado = factura.payments.reduce((s, p) => s + p.amountCents, 0);
+        const saldo = factura.totalCents - yaCobrado;
+        if (saldo <= 0) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'invoiceId' };
+        }
+        if (factura.patient.creditBalanceCents <= 0) {
+          return { ok: false as const, reason: 'NO_CREDIT' as const };
+        }
+
+        const aplicadoCents = Math.min(factura.patient.creditBalanceCents, saldo);
+
+        const reparto = repartirPago({
+          amountCents: aplicadoCents,
+          totalCents: factura.totalCents,
+          clinicShareCents: factura.clinicShareCents,
+          yaCobradoCents: yaCobrado,
+          yaAsignadoClinicaCents: factura.payments.reduce((s, p) => s + p.clinicShareCents, 0),
+        });
+
+        const amountBs = Math.round((aplicadoCents / 100) * exchangeRate * 100) / 100;
+
+        const pago = await tx.payment.create({
+          data: {
+            invoiceId,
+            appointmentId: factura.appointmentId,
+            amountCents: aplicadoCents,
+            exchangeRate,
+            amountBs,
+            exchangeRateSource,
+            commissionPercentApplied:
+              factura.totalCents === 0
+                ? 0
+                : Math.round((factura.clinicShareCents / factura.totalCents) * 100),
+            clinicShareCents: reparto.clinicShareCents,
+            dentistShareCents: reparto.dentistShareCents,
+            method: 'CREDIT',
+            methodLabel: 'Bonificación',
+            status: 'PAID',
+            paidAt: new Date(),
+          },
+          select: { id: true },
+        });
+
+        await tx.patient.update({
+          where: { id: factura.patientId },
+          data: { creditBalanceCents: { decrement: aplicadoCents } },
+        });
+
+        await recalcularFactura(tx, invoiceId);
+
+        const nuevoSaldo = saldo - aplicadoCents;
+        if (nuevoSaldo === 0 && factura.appointmentId) {
+          await tx.appointment.update({
+            where: { id: factura.appointmentId },
+            data: { status: 'COMPLETED' },
+          });
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'invoice.credit_applied',
+            entityType: 'Invoice',
+            entityId: invoiceId,
+            after: { paymentId: pago.id, amountCents: aplicadoCents, saldoRestante: nuevoSaldo },
+          },
+        });
+
+        return {
+          ok: true as const,
+          data: { id: pago.id, balanceCents: nuevoSaldo, appliedCents: aplicadoCents },
+        };
       });
     } catch (error) {
       return toWriteFailure(error);
@@ -3523,13 +3687,15 @@ export const prismaRepository: DataRepository = {
   },
 
   async listPatientDocuments(patientId) {
-    return prisma.patientDocument.findMany({
+    const rows = await prisma.patientDocument.findMany({
       where: { patientId, deletedAt: null },
       // `content` NO se selecciona: un paciente con diez escaneos mandaría
-      // varios MB al navegador sólo por abrir su ficha.
+      // varios MB al navegador sólo por abrir su ficha. Tampoco `patientId`:
+      // ya viene del filtro, así que aquí siempre es el mismo — no hace
+      // falta que el tipo lo cargue como nullable por los huérfanos que
+      // deja `deletePatientPermanently`.
       select: {
         id: true,
-        patientId: true,
         kind: true,
         fileName: true,
         mimeType: true,
@@ -3539,6 +3705,7 @@ export const prismaRepository: DataRepository = {
       },
       orderBy: { createdAt: 'desc' },
     });
+    return rows.map((row) => ({ ...row, patientId }));
   },
 
   async getPatientDocumentFile(id) {
@@ -3602,6 +3769,125 @@ export const prismaRepository: DataRepository = {
     } catch (error) {
       return toWriteFailure(error);
     }
+  },
+
+  async deleteInvoicePermanently({ id, userId }) {
+    return prisma.$transaction(async (tx) => {
+      const factura = await tx.invoice.findUnique({
+        where: { id },
+        select: {
+          number: true,
+          patientId: true,
+          totalCents: true,
+          payments: { select: { id: true, payoutId: true } },
+        },
+      });
+      if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+      if (factura.payments.some((p) => p.payoutId !== null)) {
+        return { ok: false as const, reason: 'PAID_OUT' as const };
+      }
+
+      // El registro de auditoría se escribe ANTES de borrar: después ya no
+      // quedará ninguna fila de la que sacar el número o el total.
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'invoice.deleted_permanently',
+          entityType: 'Invoice',
+          entityId: id,
+          after: { number: factura.number, totalCents: factura.totalCents, patientId: factura.patientId },
+        },
+      });
+
+      // Los cobros no tienen `onDelete: Cascade` desde la factura a
+      // propósito (es la misma protección que impide anular una factura
+      // cobrada sin querer) — aquí hay que borrarlos primero a mano.
+      await tx.payment.deleteMany({ where: { invoiceId: id } });
+      // Las líneas sí cascadean solas.
+      await tx.invoice.delete({ where: { id } });
+
+      return { ok: true as const, data: { id } };
+    });
+  },
+
+  async deletePatientPermanently({ id, userId }) {
+    return prisma.$transaction(async (tx) => {
+      const paciente = await tx.patient.findUnique({
+        where: { id },
+        select: { fullName: true, phoneE164: true, documentId: true },
+      });
+      if (!paciente) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+      const [citas, facturas] = await Promise.all([
+        tx.appointment.findMany({ where: { patientId: id }, select: { id: true } }),
+        tx.invoice.findMany({ where: { patientId: id }, select: { id: true } }),
+      ]);
+      const citaIds = citas.map((c) => c.id);
+      const facturaIds = facturas.map((f) => f.id);
+
+      const cobros = await tx.payment.findMany({
+        where: {
+          OR: [
+            ...(facturaIds.length > 0 ? [{ invoiceId: { in: facturaIds } }] : []),
+            ...(citaIds.length > 0 ? [{ appointmentId: { in: citaIds } }] : []),
+          ],
+        },
+        select: { id: true, payoutId: true },
+      });
+      if (cobros.some((c) => c.payoutId !== null)) {
+        return { ok: false as const, reason: 'PAID_OUT' as const };
+      }
+
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'patient.deleted_permanently',
+          entityType: 'Patient',
+          entityId: id,
+          after: {
+            fullName: paciente.fullName,
+            phoneE164: paciente.phoneE164,
+            documentId: paciente.documentId,
+            appointmentCount: citaIds.length,
+            invoiceCount: facturaIds.length,
+          },
+        },
+      });
+
+      if (cobros.length > 0) {
+        await tx.payment.deleteMany({ where: { id: { in: cobros.map((c) => c.id) } } });
+      }
+      // Las líneas de factura cascadean solas; las citas primero porque una
+      // factura puede apuntar a una de ellas.
+      if (facturaIds.length > 0) {
+        await tx.invoice.deleteMany({ where: { id: { in: facturaIds } } });
+      }
+      if (citaIds.length > 0) {
+        await tx.appointment.deleteMany({ where: { id: { in: citaIds } } });
+      }
+
+      /*
+       * El expediente escaneado y las conversaciones de WhatsApp NO se
+       * destruyen aquí: sus propios modelos documentan por qué (un
+       * consentimiento firmado y la prueba de lo que se le prometió a un
+       * paciente no se borran de verdad, ni siquiera al eliminar la ficha).
+       * Se archivan igual que si se hubieran borrado uno por uno.
+       */
+      await tx.patientDocument.updateMany({
+        where: { patientId: id, deletedAt: null },
+        data: { deletedAt: new Date() },
+      });
+      await tx.whatsAppConversation.updateMany({
+        where: { patientId: id, deletedAt: null },
+        data: { deletedAt: new Date() },
+      });
+
+      // El paciente en sí SÍ se borra de verdad: es lo que pidió esta
+      // función, y es lo que libera el teléfono y la cédula para reusarse.
+      await tx.patient.delete({ where: { id } });
+
+      return { ok: true as const, data: { id } };
+    });
   },
 
   // --- Instrumental --------------------------------------------------------

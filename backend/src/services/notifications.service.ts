@@ -1,6 +1,7 @@
 import 'server-only';
 import { repository } from '@/backend/repositories';
 import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
+import { clinicDayRange } from '@/backend/domain/clinic-calendar';
 import type { NotificationItem } from '@/frontend/components/layout/TopbarMenus';
 
 /**
@@ -43,8 +44,8 @@ function formatRelative(date: Date | null): string {
  */
 export async function getNotifications(): Promise<NotificationItem[]> {
   const now = new Date();
-  const endOfDay = new Date(now);
-  endOfDay.setHours(23, 59, 59, 999);
+  // Fin del día EN CARACAS, no en la zona del servidor — ver clinicDayRange.
+  const { to: endOfDay } = clinicDayRange(now);
 
   // La tasa preferida de la clínica, NO siempre BCV: aquí es normal poner
   // los precios en dólares y cobrar a tasa EURO. Avisar de que "la tasa BCV"

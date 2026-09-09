@@ -80,6 +80,9 @@ enum PaymentMethod {
   CARD
   TRANSFER
   INSURANCE
+  /// Pagado con la bonificación a favor del paciente, no con dinero nuevo.
+  /// Ver `Patient.creditBalanceCents`.
+  CREDIT
 }
 
 enum PaymentStatus {
@@ -511,6 +514,12 @@ model Patient {
   marketingConsent Boolean   @default(false)
   consentGrantedAt DateTime? @db.Timestamptz(3)
 
+  /// Bonificación a favor del paciente, en centavos de dólar. Nace cuando
+  /// paga de más en una factura (el vuelto que no se le da en efectivo se le
+  /// queda a favor) y se gasta como método de pago `CREDIT` en una factura
+  /// futura. Nunca se edita a mano fuera de esos dos movimientos.
+  creditBalanceCents Int @default(0)
+
   /// Expediente clínico. Uno por paciente, creado al imprimirlo.
   invoices  Invoice[]
   documents PatientDocument[]
@@ -724,9 +733,13 @@ model Appointment {
 /// No se transcribe nada: el original es el papel, y teclearlo otra vez sólo
 /// crearía una segunda versión capaz de contradecir a la que vale.
 model PatientDocument {
-  id        String  @id @default(cuid())
-  patientId String
-  patient   Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  id String @id @default(cuid())
+
+  /// Opcional a propósito: `SetNull`, no `Cascade`. Un consentimiento firmado
+  /// que existió no se destruye ni siquiera al borrar la ficha del paciente
+  /// (ver `deletePatientPermanently`) — se queda huérfano, no desaparece.
+  patientId String?
+  patient   Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
 
   kind PatientDocumentKind @default(EXPEDIENTE)
 

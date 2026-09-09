@@ -231,6 +231,44 @@ export async function deletePatientAction(id: string): Promise<ActionResult> {
   });
 }
 
+/**
+ * Borra un paciente de PRUEBA de verdad, con todo lo suyo: citas, facturas y
+ * cobros. A diferencia de `deletePatientAction` (borrado lógico, lo usa
+ * recepción a diario), esto libera el teléfono y la cédula para reusarse —
+ * que es justo lo que un paciente de prueba deja atascado si sólo se
+ * archiva. Por eso sólo Super Admin, y sólo con confirmación explícita.
+ */
+export async function deletePatientPermanentlyAction(id: string): Promise<ActionResult> {
+  const authorization = await checkApiRole('SUPER_ADMIN');
+  if (!authorization.authorized) {
+    return {
+      ok: false,
+      error: authorization.status === 401 ? 'Tu sesión expiró.' : 'Sólo un administrador puede hacer esto.',
+    };
+  }
+
+  const parsed = cuidSchema.safeParse(id);
+  if (!parsed.success) return { ok: false, error: 'Identificador inválido' };
+
+  const result = await repository.deletePatientPermanently({
+    id: parsed.data,
+    userId: authorization.user.id,
+  });
+
+  if (!result.ok) {
+    const mensajes: Record<string, string> = {
+      PAID_OUT: 'No se puede: alguno de sus cobros ya se liquidó a un odontólogo.',
+      NOT_FOUND: 'Ese paciente ya no existe.',
+    };
+    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo borrar el paciente.' };
+  }
+
+  revalidatePath('/pacientes');
+  revalidatePath('/caja');
+  revalidatePath('/dashboard');
+  return { ok: true };
+}
+
 // ===========================================================================
 //  ODONTÓLOGOS  (sólo Super Admin: define cuánto cobra cada persona)
 // ===========================================================================

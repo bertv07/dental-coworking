@@ -55,12 +55,22 @@ RUN npm run build
 # --- 3. Ejecución ------------------------------------------------------------
 FROM node:22-alpine AS runner
 WORKDIR /app
-RUN apk add --no-cache libc6-compat
+# `tzdata`: sin este paquete, Alpine no trae zonas horarias y `TZ` de abajo no
+# tiene de dónde leer el desfase de Caracas.
+RUN apk add --no-cache libc6-compat tzdata
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
+# El servidor corre en la hora de la clínica, no en la del contenedor.
+#
+# El código ya calcula los límites del día ("¿qué caja es esto?", "¿qué cita
+# es de hoy?") con `America/Caracas` de forma explícita — eso no depende de
+# esto. Pero un contenedor sin `TZ` arranca en UTC, y cualquier `new Date()`
+# que alguien escriba mañana sin pasar por esos helpers heredaría ese UTC en
+# silencio. Esto es la red de seguridad, no el arreglo real.
+ENV TZ=America/Caracas
 
 # Usuario sin privilegios. Por defecto los contenedores corren como root, y un
 # fallo de ejecución remota dentro de la aplicación heredaría ese root.

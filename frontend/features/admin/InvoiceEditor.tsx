@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import type { Invoice, InvoiceLine, PaymentMethodOption, Promotion, Treatment } from '@/backend/domain/types';
 import { formatCents, formatBs, centsToBs } from '@/backend/domain/money';
 import {
@@ -10,7 +11,9 @@ import {
   registerInvoicePaymentAction,
   voidInvoiceAction,
   reverseInvoiceAction,
+  deleteInvoicePermanentlyAction,
   applyPromotionAction,
+  applyPatientCreditAction,
 } from '@/app/actions/invoice.actions';
 import { Modal } from '@/frontend/components/motion';
 import { Badge, Card, Notice } from '@/frontend/components/ui/primitives';
@@ -47,6 +50,8 @@ interface InvoiceEditorProps {
   promotions: Promotion[];
   /** Sólo Super Admin ve el botón para reversar una venta ya cobrada. */
   isSuperAdmin: boolean;
+  /** 'YYYY-MM-DD' de hoy EN CARACAS, calculado en el servidor. Tope del selector de fecha del cobro. */
+  todayKey: string;
 }
 
 const ESTADO: Record<Invoice['status'], { label: string; tone: 'success' | 'warning' | 'danger' }> = {
@@ -63,9 +68,12 @@ export function InvoiceEditor({
   rateSource,
   promotions,
   isSuperAdmin,
+  todayKey,
 }: InvoiceEditorProps) {
+  const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<InvoiceLine | null>(null);
   const [charging, setCharging] = useState(false);
@@ -84,11 +92,16 @@ export function InvoiceEditor({
   const saldada = invoice.balanceCents <= 0;
   const activos = treatments.filter((t) => t.isActive);
 
-  function run(fn: () => Promise<{ ok: boolean; error?: string }>, onOk?: () => void) {
+  function run(
+    fn: () => Promise<{ ok: boolean; error?: string; warning?: string }>,
+    onOk?: () => void,
+  ) {
     setError(null);
+    setWarning(null);
     startTransition(async () => {
       const result = await fn();
       if (result.ok) {
+        if (result.warning) setWarning(result.warning);
         onOk?.();
         return;
       }
@@ -99,6 +112,7 @@ export function InvoiceEditor({
   return (
     <>
       {error && <Notice tone="danger">{error}</Notice>}
+      {warning && <Notice tone="warning">{warning}</Notice>}
 
       {anulada && (
         <Notice tone="danger">
@@ -271,6 +285,27 @@ export function InvoiceEditor({
               </span>
             </div>
           </>
+        )}
+
+        {!anulada && !saldada && invoice.patientCreditCents > 0 && (
+          <div style={{ marginTop: '0.75rem' }}>
+            <Notice tone="info">
+              <div className="row row--between" style={{ gap: '0.75rem', alignItems: 'center' }}>
+                <span>
+                  El paciente tiene <strong>{formatCents(invoice.patientCreditCents)}</strong> de
+                  bonificación disponible (pagó de más en otra factura).
+                </span>
+                <button
+                  type="button"
+                  className="btn btn--primary btn--sm"
+                  disabled={isPending}
+                  onClick={() => run(() => applyPatientCreditAction(invoice.id))}
+                >
+                  Usar bonificación
+                </button>
+              </div>
+            </Notice>
+          </div>
         )}
 
         {!anulada && !saldada && (
@@ -625,7 +660,8 @@ export function InvoiceEditor({
               un abono se escribe menos y la factura queda abierta.
             */}
             <span className="field__hint">
-              Para cobrar sólo una parte, escribe menos: queda pendiente el resto.
+              Para cobrar sólo una parte, escribe menos: queda pendiente el resto. Si el
+              paciente paga de más, la diferencia se guarda como bonificación a su favor.
             </span>
           </div>
 
@@ -652,6 +688,17 @@ export function InvoiceEditor({
               className="input"
               placeholder="Nº de operación, voucher…"
             />
+          </div>
+
+          <div className="field form-grid--full">
+            <label className="field__label" htmlFor="fechaCobro">
+              Fecha del cobro
+            </label>
+            <input id="fechaCobro" name="fechaCobro" type="date" className="input" max={todayKey} />
+            <span className="field__hint">
+              Vacío = ahora mismo. Rellénala sólo si se te olvidó registrar una venta de un día
+              anterior — se cuenta en la caja de ese día, con la tasa que regía entonces.
+            </span>
           </div>
 
           {exchangeRate !== null && (
@@ -709,6 +756,33 @@ export function InvoiceEditor({
             disabled={isPending}
           >
             Reversar venta (era de prueba)
+          </button>
+        </p>
+      )}
+
+      {/*
+        Borrar de verdad: la fila desaparece, no queda ni anulada. Sólo para
+        limpiar lo que nunca debió existir — por eso pide escribir el número
+        de factura, no basta un "aceptar".
+      */}
+      {isSuperAdmin && (
+        <p className="text-sm">
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            style={{ color: 'var(--color-danger)' }}
+            onClick={() => {
+              const escrito = window.prompt(
+                `Esto borra la factura Nº ${invoice.number} y sus cobros PARA SIEMPRE — no queda registro navegable, ` +
+                  `sólo el log de auditoría. Úsalo sólo si fue de prueba. Escribe el número (${invoice.number}) para confirmar:`,
+              );
+              if (escrito?.trim() === String(invoice.number)) {
+                run(() => deleteInvoicePermanentlyAction(invoice.id), () => router.push('/facturas'));
+              }
+            }}
+            disabled={isPending}
+          >
+            Borrar factura definitivamente
           </button>
         </p>
       )}
