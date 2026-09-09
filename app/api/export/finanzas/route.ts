@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { checkApiRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { fromCents, centsToBs } from '@/backend/domain/money';
 import { failUnauthorized, failForbidden, failInternal, newRequestId } from '@/backend/http/responses';
 
@@ -72,14 +72,22 @@ export async function GET(request: NextRequest) {
     const to = new Date();
     const from = new Date(to.getTime() - days * 24 * 60 * 60 * 1000);
 
-    const [summary, earnings, rate, settings] = await Promise.all([
+    // La tasa preferida de la clínica, NO siempre BCV: aquí es normal poner
+    // los precios en dólares y cobrar a tasa EURO. Fijar 'BCV' a mano haría
+    // que este informe enseñara una cifra distinta de la que de verdad cobró
+    // el mostrador.
+    const settings = await repository.getClinicSettings();
+    const rateSource = resolveRateSource(settings.preferredRateSource);
+
+    const [summary, earnings, rate] = await Promise.all([
       repository.getFinancialSummary({ from, to }),
       repository.getDentistEarnings({ from, to }),
-      getCurrentRate('BCV'),
-      repository.getClinicSettings(),
+      getCurrentRate(rateSource),
     ]);
 
     const bsRate = rate?.rate ?? null;
+    const rateLabel =
+      rateSource === 'EURO' ? 'Tasa euro aplicada' : rateSource === 'PARALELO' ? 'Tasa paralela aplicada' : 'Tasa BCV aplicada';
     const formatDate = (date: Date) =>
       new Intl.DateTimeFormat('es-VE', { dateStyle: 'short', timeZone: 'America/Caracas' }).format(
         date,
@@ -92,7 +100,7 @@ export async function GET(request: NextRequest) {
     lines.push(`${csvCell('RIF')};${csvCell(settings.taxId ?? '-')}`);
     lines.push(`${csvCell('Periodo')};${csvCell(`${formatDate(from)} a ${formatDate(to)}`)}`);
     lines.push(
-      `${csvCell('Tasa BCV aplicada')};${bsRate ? csvNumber(bsRate, 4) : csvCell('no disponible')};${csvCell('Bs/USD')}`,
+      `${csvCell(rateLabel)};${bsRate ? csvNumber(bsRate, 4) : csvCell('no disponible')};${csvCell('Bs/USD')}`,
     );
     lines.push(`${csvCell('Generado')};${csvCell(formatDate(new Date()))}`);
     lines.push('');

@@ -1,6 +1,6 @@
 import 'server-only';
 import { repository } from '@/backend/repositories';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import type { NotificationItem } from '@/frontend/components/layout/TopbarMenus';
 
 /**
@@ -46,9 +46,16 @@ export async function getNotifications(): Promise<NotificationItem[]> {
   const endOfDay = new Date(now);
   endOfDay.setHours(23, 59, 59, 999);
 
+  // La tasa preferida de la clínica, NO siempre BCV: aquí es normal poner
+  // los precios en dólares y cobrar a tasa EURO. Avisar de que "la tasa BCV"
+  // está vieja cuando la clínica ni la usa es un aviso falso que enseña a
+  // ignorar la campanita.
+  const settings = await repository.getClinicSettings();
+  const rateSource = resolveRateSource(settings.preferredRateSource);
+
   const [todayAppointments, rate] = await Promise.all([
     repository.listAppointments({ range: { from: now, to: endOfDay }, limit: 100 }),
-    getCurrentRate('BCV'),
+    getCurrentRate(rateSource),
   ]);
 
   const items: NotificationItem[] = [];
@@ -85,18 +92,21 @@ export async function getNotifications(): Promise<NotificationItem[]> {
 
   // --- Tasa de cambio desactualizada ---------------------------------------
   // Importa de verdad: si la tasa está vieja, se está cobrando mal en Bs.
+  const nombreTasa =
+    rateSource === 'EURO' ? 'euro' : rateSource === 'PARALELO' ? 'paralela' : 'BCV';
+
   if (!rate) {
     items.push({
       id: 'rate-missing',
       title: 'Sin tasa de cambio',
-      detail: 'No hay tasa BCV registrada. Los importes en bolívares no se pueden calcular.',
+      detail: `No hay tasa ${nombreTasa} registrada. Los importes en bolívares no se pueden calcular.`,
       href: '/tasa-cambio',
       tone: 'danger',
     });
   } else if (rate.isStale) {
     items.push({
       id: 'rate-stale',
-      title: 'Tasa BCV desactualizada',
+      title: `Tasa ${nombreTasa} desactualizada`,
       detail: `Última consulta hace ${formatRelative(rate.fetchedAt)}. Actualízala antes de cobrar.`,
       href: '/tasa-cambio',
       tone: 'warning',

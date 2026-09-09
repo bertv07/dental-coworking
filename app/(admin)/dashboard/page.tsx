@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { requireSuperAdmin } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
-import { getCurrentRate } from '@/backend/services/exchange-rate.service';
+import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FinanceDashboard } from '@/frontend/features/finance/FinanceDashboard';
 import { FadeIn } from '@/frontend/components/motion';
@@ -37,7 +37,14 @@ export default async function DashboardPage() {
   const from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
   const range = { from, to };
 
-  // Las tres consultas en paralelo. Secuencialmente sumarían sus latencias;
+  // La tasa preferida de la clínica, NO siempre BCV: aquí es normal poner los
+  // precios en dólares y cobrar a tasa EURO. Fijar 'BCV' a mano haría que el
+  // dashboard enseñara una cifra distinta de la que de verdad cobra el
+  // mostrador.
+  const settings = await repository.getClinicSettings();
+  const rateSource = resolveRateSource(settings.preferredRateSource);
+
+  // Las consultas en paralelo. Secuencialmente sumarían sus latencias;
   // con `Promise.all` el coste es el de la más lenta.
   const [summary, dentistEarnings, upcomingAppointments, rate] = await Promise.all([
     repository.getFinancialSummary(range),
@@ -46,7 +53,7 @@ export default async function DashboardPage() {
       range: { from: to, to: new Date(to.getTime() + 7 * 24 * 60 * 60 * 1000) },
       limit: 8,
     }),
-    getCurrentRate('BCV'),
+    getCurrentRate(rateSource),
   ]);
 
   return (
