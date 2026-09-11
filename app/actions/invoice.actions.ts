@@ -493,7 +493,11 @@ export async function voidInvoiceAction(id: string, reason: string): Promise<Act
  * a un paciente real. Sólo Super Admin: deshace dinero que el dashboard y la
  * caja ya contaron, así que no puede quedar a un clic de cualquiera.
  */
-export async function reverseInvoiceAction(id: string, reason: string): Promise<ActionResult> {
+export async function reverseInvoiceAction(
+  id: string,
+  reason: string,
+  force = false,
+): Promise<ActionResult> {
   const authorization = await checkApiRole('SUPER_ADMIN');
   if (!authorization.authorized) {
     return {
@@ -510,16 +514,18 @@ export async function reverseInvoiceAction(id: string, reason: string): Promise<
     id: parsed.data,
     reason: reason.trim().slice(0, 300),
     userId: authorization.user.id,
+    force,
   });
 
   if (!result.ok) {
     const mensajes: Record<string, string> = {
       ALREADY_VOID: 'Esa factura ya está anulada.',
       NO_PAYMENTS: 'Esa factura no tiene cobros: para anularla usa «Anular factura».',
-      PAID_OUT: 'No se puede: ya se liquidó al odontólogo su parte de este cobro.',
+      PAID_OUT:
+        'Ya se liquidó al odontólogo su parte de este cobro. Si era una liquidación de PRUEBA, puedes forzarlo — ajusta esa liquidación.',
       NOT_FOUND: 'Esa factura ya no existe.',
     };
-    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo reversar la venta.' };
+    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo reversar la venta.', field: result.reason };
   }
 
   revalidatePath(`/facturas/${parsed.data}`);
@@ -534,7 +540,10 @@ export async function reverseInvoiceAction(id: string, reason: string): Promise<
  * anulada. Es la excepción a "una factura entregada existió y no se borra":
  * sólo para limpiar lo que nunca debió existir. Sólo Super Admin.
  */
-export async function deleteInvoicePermanentlyAction(id: string): Promise<ActionResult> {
+export async function deleteInvoicePermanentlyAction(
+  id: string,
+  force = false,
+): Promise<ActionResult> {
   const authorization = await checkApiRole('SUPER_ADMIN');
   if (!authorization.authorized) {
     return {
@@ -549,14 +558,16 @@ export async function deleteInvoicePermanentlyAction(id: string): Promise<Action
   const result = await repository.deleteInvoicePermanently({
     id: parsed.data,
     userId: authorization.user.id,
+    force,
   });
 
   if (!result.ok) {
     const mensajes: Record<string, string> = {
-      PAID_OUT: 'No se puede: ya se liquidó al odontólogo su parte de este cobro.',
+      PAID_OUT:
+        'Ya se liquidó al odontólogo su parte de este cobro. Si era una liquidación de PRUEBA, puedes forzarlo — ajusta esa liquidación.',
       NOT_FOUND: 'Esa factura ya no existe.',
     };
-    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo borrar la factura.' };
+    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo borrar la factura.', field: result.reason };
   }
 
   revalidatePath('/facturas');

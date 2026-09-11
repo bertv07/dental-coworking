@@ -79,6 +79,12 @@ export function InvoiceEditor({
   const [charging, setCharging] = useState(false);
   const [promoOpen, setPromoOpen] = useState(false);
   const [promoElegida, setPromoElegida] = useState('');
+  // Se llena cuando "Reversar"/"Borrar" choca con una liquidación ya hecha:
+  // guarda lo necesario para reintentar con `force` sin volver a pedir el
+  // motivo o el número de factura.
+  const [pendienteForzar, setPendienteForzar] = useState<
+    { kind: 'reverse'; motivo: string } | { kind: 'delete' } | null
+  >(null);
 
   // Ya aplicada a esta factura = no se ofrece otra vez; el botón de aplicar
   // ya se encarga de rechazarla, pero quitarla de la lista evita el segundo
@@ -93,8 +99,9 @@ export function InvoiceEditor({
   const activos = treatments.filter((t) => t.isActive);
 
   function run(
-    fn: () => Promise<{ ok: boolean; error?: string; warning?: string }>,
+    fn: () => Promise<{ ok: boolean; error?: string; warning?: string; field?: string }>,
     onOk?: () => void,
+    onFail?: (field: string | undefined) => void,
   ) {
     setError(null);
     setWarning(null);
@@ -106,6 +113,7 @@ export function InvoiceEditor({
         return;
       }
       setError(result.error ?? 'No se pudo completar la operación');
+      onFail?.(result.field);
     });
   }
 
@@ -751,12 +759,45 @@ export function InvoiceEditor({
                 return;
               }
               const motivo = window.prompt('¿Por qué se reversa esta venta?');
-              if (motivo?.trim()) run(() => reverseInvoiceAction(invoice.id, motivo));
+              if (!motivo?.trim()) return;
+              setPendienteForzar(null);
+              run(
+                () => reverseInvoiceAction(invoice.id, motivo),
+                () => setPendienteForzar(null),
+                (field) => {
+                  if (field === 'PAID_OUT') setPendienteForzar({ kind: 'reverse', motivo });
+                },
+              );
             }}
             disabled={isPending}
           >
             Reversar venta (era de prueba)
           </button>
+
+          {pendienteForzar?.kind === 'reverse' && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              style={{ color: 'var(--color-danger)', marginLeft: '0.5rem' }}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    'Esto AJUSTA la liquidación diaria del odontólogo que ya incluía este cobro — le resta su parte, ' +
+                      'o borra esa liquidación entera si no le quedaba nada más. Úsalo sólo si esa liquidación también era de prueba. ¿Forzar?',
+                  )
+                ) {
+                  return;
+                }
+                run(
+                  () => reverseInvoiceAction(invoice.id, pendienteForzar.motivo, true),
+                  () => setPendienteForzar(null),
+                );
+              }}
+              disabled={isPending}
+            >
+              Forzar (ajusta la liquidación)
+            </button>
+          )}
         </p>
       )}
 
@@ -776,14 +817,45 @@ export function InvoiceEditor({
                 `Esto borra la factura Nº ${invoice.number} y sus cobros PARA SIEMPRE — no queda registro navegable, ` +
                   `sólo el log de auditoría. Úsalo sólo si fue de prueba. Escribe el número (${invoice.number}) para confirmar:`,
               );
-              if (escrito?.trim() === String(invoice.number)) {
-                run(() => deleteInvoicePermanentlyAction(invoice.id), () => router.push('/facturas'));
-              }
+              if (escrito?.trim() !== String(invoice.number)) return;
+              setPendienteForzar(null);
+              run(
+                () => deleteInvoicePermanentlyAction(invoice.id),
+                () => router.push('/facturas'),
+                (field) => {
+                  if (field === 'PAID_OUT') setPendienteForzar({ kind: 'delete' });
+                },
+              );
             }}
             disabled={isPending}
           >
             Borrar factura definitivamente
           </button>
+
+          {pendienteForzar?.kind === 'delete' && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              style={{ color: 'var(--color-danger)', marginLeft: '0.5rem' }}
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    'Esto AJUSTA la liquidación diaria del odontólogo que ya incluía este cobro — le resta su parte, ' +
+                      'o borra esa liquidación entera si no le quedaba nada más. Úsalo sólo si esa liquidación también era de prueba. ¿Forzar?',
+                  )
+                ) {
+                  return;
+                }
+                run(
+                  () => deleteInvoicePermanentlyAction(invoice.id, true),
+                  () => router.push('/facturas'),
+                );
+              }}
+              disabled={isPending}
+            >
+              Forzar (ajusta la liquidación)
+            </button>
+          )}
         </p>
       )}
     </>

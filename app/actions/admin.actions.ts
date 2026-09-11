@@ -238,7 +238,10 @@ export async function deletePatientAction(id: string): Promise<ActionResult> {
  * que es justo lo que un paciente de prueba deja atascado si sólo se
  * archiva. Por eso sólo Super Admin, y sólo con confirmación explícita.
  */
-export async function deletePatientPermanentlyAction(id: string): Promise<ActionResult> {
+export async function deletePatientPermanentlyAction(
+  id: string,
+  force = false,
+): Promise<ActionResult> {
   const authorization = await checkApiRole('SUPER_ADMIN');
   if (!authorization.authorized) {
     return {
@@ -253,14 +256,16 @@ export async function deletePatientPermanentlyAction(id: string): Promise<Action
   const result = await repository.deletePatientPermanently({
     id: parsed.data,
     userId: authorization.user.id,
+    force,
   });
 
   if (!result.ok) {
     const mensajes: Record<string, string> = {
-      PAID_OUT: 'No se puede: alguno de sus cobros ya se liquidó a un odontólogo.',
+      PAID_OUT:
+        'Alguno de sus cobros ya se liquidó a un odontólogo. Si esa liquidación era de PRUEBA, puedes forzarlo — se ajusta.',
       NOT_FOUND: 'Ese paciente ya no existe.',
     };
-    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo borrar el paciente.' };
+    return { ok: false, error: mensajes[result.reason] ?? 'No se pudo borrar el paciente.', field: result.reason };
   }
 
   revalidatePath('/pacientes');

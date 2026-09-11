@@ -159,14 +159,14 @@ export const treatmentFormSchema = z.object({
   category: safeTextSchema(60).pipe(z.string().min(2, 'Indica una categoría')),
 
   /**
-   * El formulario pide PESOS (más natural de escribir); aquí se convierte a
-   * CENTAVOS, que es como se almacena. Ver `domain/money.ts`.
+   * El formulario pide DÓLARES (más natural de escribir que centavos); aquí
+   * se convierte a CENTAVOS, que es como se almacena. Ver `domain/money.ts`.
    */
   priceInPesos: z.coerce
     .number()
     .min(0, 'El precio no puede ser negativo')
     .max(100_000_000, 'Precio fuera de rango')
-    .transform((pesos) => Math.round(pesos * 100))
+    .transform((dolares) => Math.round(dolares * 100))
     .pipe(centsSchema),
 
   durationMinutes: z.coerce

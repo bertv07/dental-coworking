@@ -833,6 +833,13 @@ export interface DataRepository {
     id: string;
     reason: string;
     userId: string;
+    /**
+     * Ignora el bloqueo de "ya se liquidó al odontólogo" y ajusta esa
+     * liquidación en el mismo movimiento. Sólo para venta de PRUEBA: si de
+     * verdad hubo dinero real de por medio, esto reescribe cuánto se le pagó
+     * al odontólogo sin que quede evidencia de por qué cambió.
+     */
+    force?: boolean;
   }): Promise<
     | { ok: true; data: { id: string; reversedCents: number } }
     | { ok: false; reason: 'NOT_FOUND' }
@@ -1059,11 +1066,13 @@ export interface DataRepository {
    *
    * Borra también sus cobros. Rechaza si alguno ya se liquidó a un
    * odontólogo: esa liquidación sumó ese cobro y borrarlo la dejaría mal
-   * cuadrada sin que nadie se entere.
+   * cuadrada sin que nadie se entere — salvo que se fuerce (ver `force` en
+   * `reverseInvoice`, misma idea: sólo para una liquidación de PRUEBA).
    */
   deleteInvoicePermanently(params: {
     id: string;
     userId: string;
+    force?: boolean;
   }): Promise<
     | { ok: true; data: { id: string } }
     | { ok: false; reason: 'NOT_FOUND' }
@@ -1082,11 +1091,13 @@ export interface DataRepository {
    * se archivan igual que si se hubieran borrado uno a uno.
    *
    * Rechaza si algún cobro ya se liquidó a un odontólogo, por la misma razón
-   * que `deleteInvoicePermanently`.
+   * que `deleteInvoicePermanently` — con el mismo `force` para el caso de
+   * PRUEBA.
    */
   deletePatientPermanently(params: {
     id: string;
     userId: string;
+    force?: boolean;
   }): Promise<
     | { ok: true; data: { id: string } }
     | { ok: false; reason: 'NOT_FOUND' }

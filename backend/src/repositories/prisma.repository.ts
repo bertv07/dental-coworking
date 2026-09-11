@@ -47,6 +47,38 @@ function toWriteFailure(error: unknown): Extract<WriteResult<never>, { ok: false
 }
 
 /**
+ * Descuadra a propósito una liquidación diaria para poder deshacer un cobro
+ * que ya estaba enganchado a ella — SÓLO cuando Super Admin fuerza el
+ * borrado/reversión de una venta de prueba.
+ *
+ * Se RECALCULA cada liquidación afectada desde sus cobros restantes (no se
+ * resta a ojo): así un payout con otros cobros reales de por medio conserva
+ * el total correcto, y uno que se quedó sin ninguno desaparece del todo en
+ * vez de quedar como una liquidación de $0 ensuciando el historial.
+ */
+async function ajustarLiquidacionesPorPagosRetirados(
+  tx: Prisma.TransactionClient,
+  payoutIds: Array<string | null>,
+  idsQueSeRetiran: string[],
+): Promise<void> {
+  const afectados = new Set(payoutIds.filter((id): id is string => id !== null));
+
+  for (const payoutId of afectados) {
+    const restantes = await tx.payment.findMany({
+      where: { payoutId, id: { notIn: idsQueSeRetiran } },
+      select: { dentistShareCents: true },
+    });
+
+    if (restantes.length === 0) {
+      await tx.dentistPayout.delete({ where: { id: payoutId } });
+    } else {
+      const nuevoTotal = restantes.reduce((suma, p) => suma + p.dentistShareCents, 0);
+      await tx.dentistPayout.update({ where: { id: payoutId }, data: { totalCents: nuevoTotal } });
+    }
+  }
+}
+
+/**
  * Relaciones que lleva una cita en la vista de recepción.
  *
  * Está extraído porque lo comparten tres consultas (agenda, detalle y
@@ -2808,7 +2840,7 @@ export const prismaRepository: DataRepository = {
     }
   },
 
-  async reverseInvoice({ id, reason, userId }) {
+  async reverseInvoice({ id, reason, userId, force }) {
     return prisma.$transaction(async (tx) => {
       const factura = await tx.invoice.findUnique({
         where: { id },
@@ -2817,7 +2849,7 @@ export const prismaRepository: DataRepository = {
           status: true,
           payments: {
             where: { status: 'PAID' },
-            select: { id: true, amountCents: true, payoutId: true },
+            select: { id: true, amountCents: true, payoutId: true, dentistShareCents: true },
           },
         },
       });
@@ -2826,19 +2858,37 @@ export const prismaRepository: DataRepository = {
       if (factura.status === 'VOID') return { ok: false as const, reason: 'ALREADY_VOID' as const };
       if (factura.payments.length === 0) return { ok: false as const, reason: 'NO_PAYMENTS' as const };
 
-      // Si ya se liquidó al odontólogo, la clínica ya le pagó SU parte de
-      // este dinero: reversarlo ahora dejaría esa liquidación sin respaldo.
-      // Eso ya no es "borrar una prueba", es una devolución de verdad — con
-      // su propio proceso, fuera de este botón.
-      if (factura.payments.some((p) => p.payoutId !== null)) {
+      const yaLiquidados = factura.payments.filter((p) => p.payoutId !== null);
+
+      /*
+       * Si ya se liquidó al odontólogo, la clínica ya le pagó SU parte de
+       * este dinero: reversarlo ahora dejaría esa liquidación sin respaldo.
+       * Eso ya no es "borrar una prueba", es una devolución de verdad — con
+       * su propio proceso, fuera de este botón.
+       *
+       * SALVO que Super Admin lo fuerce explícitamente: es el caso de una
+       * liquidación de PRUEBA (nunca hubo dinero real de por medio), y ahí
+       * sí hace falta poder deshacerla — ajustando esa liquidación, no
+       * dejándola mentir sobre lo que de verdad se le pagó al odontólogo.
+       */
+      if (yaLiquidados.length > 0 && !force) {
         return { ok: false as const, reason: 'PAID_OUT' as const };
       }
 
       const reversedCents = factura.payments.reduce((sum, p) => sum + p.amountCents, 0);
+      const idsARevertir = factura.payments.map((p) => p.id);
+
+      if (yaLiquidados.length > 0) {
+        await ajustarLiquidacionesPorPagosRetirados(
+          tx,
+          yaLiquidados.map((p) => p.payoutId),
+          idsARevertir,
+        );
+      }
 
       await tx.payment.updateMany({
-        where: { id: { in: factura.payments.map((p) => p.id) } },
-        data: { status: 'REFUNDED' },
+        where: { id: { in: idsARevertir } },
+        data: { status: 'REFUNDED', payoutId: null },
       });
 
       await tx.invoice.update({
@@ -2852,7 +2902,12 @@ export const prismaRepository: DataRepository = {
           action: 'invoice.reversed',
           entityType: 'Invoice',
           entityId: id,
-          after: { reason, reversedCents, paymentIds: factura.payments.map((p) => p.id) },
+          after: {
+            reason,
+            reversedCents,
+            paymentIds: idsARevertir,
+            ...(yaLiquidados.length > 0 ? { forzadoSobreLiquidacion: true } : {}),
+          },
         },
       });
 
@@ -3771,7 +3826,7 @@ export const prismaRepository: DataRepository = {
     }
   },
 
-  async deleteInvoicePermanently({ id, userId }) {
+  async deleteInvoicePermanently({ id, userId, force }) {
     return prisma.$transaction(async (tx) => {
       const factura = await tx.invoice.findUnique({
         where: { id },
@@ -3783,7 +3838,9 @@ export const prismaRepository: DataRepository = {
         },
       });
       if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
-      if (factura.payments.some((p) => p.payoutId !== null)) {
+
+      const yaLiquidados = factura.payments.filter((p) => p.payoutId !== null);
+      if (yaLiquidados.length > 0 && !force) {
         return { ok: false as const, reason: 'PAID_OUT' as const };
       }
 
@@ -3795,9 +3852,23 @@ export const prismaRepository: DataRepository = {
           action: 'invoice.deleted_permanently',
           entityType: 'Invoice',
           entityId: id,
-          after: { number: factura.number, totalCents: factura.totalCents, patientId: factura.patientId },
+          after: {
+            number: factura.number,
+            totalCents: factura.totalCents,
+            patientId: factura.patientId,
+            ...(yaLiquidados.length > 0 ? { forzadoSobreLiquidacion: true } : {}),
+          },
         },
       });
+
+      const idsAPagos = factura.payments.map((p) => p.id);
+      if (yaLiquidados.length > 0) {
+        await ajustarLiquidacionesPorPagosRetirados(
+          tx,
+          yaLiquidados.map((p) => p.payoutId),
+          idsAPagos,
+        );
+      }
 
       // Los cobros no tienen `onDelete: Cascade` desde la factura a
       // propósito (es la misma protección que impide anular una factura
@@ -3810,7 +3881,7 @@ export const prismaRepository: DataRepository = {
     });
   },
 
-  async deletePatientPermanently({ id, userId }) {
+  async deletePatientPermanently({ id, userId, force }) {
     return prisma.$transaction(async (tx) => {
       const paciente = await tx.patient.findUnique({
         where: { id },
@@ -3834,7 +3905,8 @@ export const prismaRepository: DataRepository = {
         },
         select: { id: true, payoutId: true },
       });
-      if (cobros.some((c) => c.payoutId !== null)) {
+      const yaLiquidados = cobros.filter((c) => c.payoutId !== null);
+      if (yaLiquidados.length > 0 && !force) {
         return { ok: false as const, reason: 'PAID_OUT' as const };
       }
 
@@ -3850,9 +3922,18 @@ export const prismaRepository: DataRepository = {
             documentId: paciente.documentId,
             appointmentCount: citaIds.length,
             invoiceCount: facturaIds.length,
+            ...(yaLiquidados.length > 0 ? { forzadoSobreLiquidacion: true } : {}),
           },
         },
       });
+
+      if (yaLiquidados.length > 0) {
+        await ajustarLiquidacionesPorPagosRetirados(
+          tx,
+          yaLiquidados.map((c) => c.payoutId),
+          cobros.map((c) => c.id),
+        );
+      }
 
       if (cobros.length > 0) {
         await tx.payment.deleteMany({ where: { id: { in: cobros.map((c) => c.id) } } });

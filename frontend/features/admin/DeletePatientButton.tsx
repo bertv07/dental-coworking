@@ -22,8 +22,24 @@ export function DeletePatientButton({
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [escrito, setEscrito] = useState('');
+  // Se activa cuando el borrado choca con una liquidación de odontólogo ya
+  // hecha con alguno de los cobros de este paciente.
+  const [puedeForzar, setPuedeForzar] = useState(false);
 
   const habilitado = escrito.trim() === patientName.trim();
+
+  function intentar(force: boolean) {
+    setError(null);
+    startTransition(async () => {
+      const result = await deletePatientPermanentlyAction(patientId, force);
+      if (!result.ok) {
+        setError(result.error ?? 'No se pudo borrar el paciente');
+        setPuedeForzar(result.field === 'PAID_OUT');
+        return;
+      }
+      router.push('/pacientes');
+    });
+  }
 
   return (
     <Card title="Zona de peligro" subtitle="Sólo para pacientes de prueba">
@@ -53,19 +69,35 @@ export function DeletePatientButton({
         style={{ marginTop: '0.75rem' }}
         disabled={!habilitado || isPending}
         onClick={() => {
-          setError(null);
-          startTransition(async () => {
-            const result = await deletePatientPermanentlyAction(patientId);
-            if (!result.ok) {
-              setError(result.error ?? 'No se pudo borrar el paciente');
-              return;
-            }
-            router.push('/pacientes');
-          });
+          setPuedeForzar(false);
+          intentar(false);
         }}
       >
         {isPending ? 'Borrando…' : 'Borrar paciente definitivamente'}
       </button>
+
+      {puedeForzar && (
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          style={{ marginTop: '0.5rem', marginLeft: '0.5rem', color: 'var(--color-danger)' }}
+          disabled={isPending}
+          onClick={() => {
+            if (
+              !window.confirm(
+                'Esto AJUSTA la(s) liquidación(es) diaria(s) del odontólogo que ya incluían cobros de este paciente ' +
+                  '— les resta su parte, o las borra enteras si no les quedaba nada más. Úsalo sólo si esas ' +
+                  'liquidaciones también eran de prueba. ¿Forzar?',
+              )
+            ) {
+              return;
+            }
+            intentar(true);
+          }}
+        >
+          Forzar (ajusta la liquidación)
+        </button>
+      )}
     </Card>
   );
 }

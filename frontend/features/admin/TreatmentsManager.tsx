@@ -206,14 +206,14 @@ export function TreatmentsManager({
             error={errorFor('category')}
           />
           <TextField
-            label="Precio (pesos)"
+            label="Precio en dólares"
             name="priceInPesos"
             type="number"
             required
             min={0}
-            step={1000}
-            hint="Se almacena en centavos internamente"
-            // Se convierte de centavos a pesos para mostrarlo en el campo.
+            step={0.01}
+            hint="La lista de precios está en dólares"
+            // Se convierte de centavos a dólares para mostrarlo en el campo.
             defaultValue={editing ? editing.basePriceCents / 100 : ''}
             error={errorFor('priceInPesos')}
           />
