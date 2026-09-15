@@ -1125,9 +1125,6 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
-  async savePrescriptionTemplate() {
-    return { ok: false, reason: 'NOT_FOUND' };
-  },
 
   async deletePrescriptionTemplate() {
     return { ok: false, reason: 'NOT_FOUND' };

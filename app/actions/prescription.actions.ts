@@ -4,7 +4,6 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import { checkApiRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
-import { prescriptionElementsSchema } from '@/backend/domain/prescription';
 
 /**
  * ===========================================================================
@@ -140,56 +139,7 @@ export async function createPrescriptionTemplateAction(
 }
 
 // ---------------------------------------------------------------------------
-//  Guardar el diseño
-// ---------------------------------------------------------------------------
-
-const guardarSchema = z.object({
-  id: z.string().min(1).max(40),
-  name: z.string().trim().min(2).max(80),
-  widthPx: z.number().int().min(100).max(5000),
-  heightPx: z.number().int().min(100).max(5000),
-  elements: prescriptionElementsSchema,
-});
-
-export async function savePrescriptionTemplateAction(
-  input: unknown,
-): Promise<PrescriptionResult> {
-  const auth = await autorizar();
-  if (!auth.ok) return { ok: false, error: auth.error };
-
-  const parsed = guardarSchema.safeParse(input);
-  if (!parsed.success) {
-    const problema = parsed.error.issues[0];
-    return {
-      ok: false,
-      error: `No se pudo guardar: ${problema?.path.join('.')} — ${problema?.message}`,
-    };
-  }
-
-  const actual = await repository.getPrescriptionTemplate(parsed.data.id);
-  if (!actual) return { ok: false, error: 'Ese recetario ya no existe.' };
-
-  const veto = puedeTocar(auth, actual);
-  if (veto) return { ok: false, error: veto };
-
-  const result = await repository.savePrescriptionTemplate({
-    id: parsed.data.id,
-    name: parsed.data.name,
-    widthPx: parsed.data.widthPx,
-    heightPx: parsed.data.heightPx,
-    elements: parsed.data.elements,
-    userId: auth.userId,
-  });
-
-  if (!result.ok) return { ok: false, error: 'No se pudo guardar el recetario.' };
-
-  revalidatePath('/recetarios');
-  revalidatePath(`/recetarios/${parsed.data.id}`);
-  return { ok: true, id: parsed.data.id };
-}
-
-// ---------------------------------------------------------------------------
-//  Subir una imagen (el recipe escaneado, un logo, una firma)
+//  Subir una imagen (el recipe escaneado)
 // ---------------------------------------------------------------------------
 
 export interface UploadAssetResult {

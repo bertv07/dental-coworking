@@ -3591,9 +3591,17 @@ export const prismaRepository: DataRepository = {
         name: true,
         widthPx: true,
         heightPx: true,
-        elements: true,
         updatedAt: true,
         dentist: { select: { fullName: true } },
+        /*
+         * La imagen del recipe. Sólo el id: el binario se sirve aparte por
+         * `/api/recetarios/{id}/imagen/{assetId}`, y traerlo aquí mandaría
+         * varios MB al navegador sólo por pintar la lista.
+         *
+         * `take: 1` sobre la más reciente: si alguien vuelve a subir su
+         * recipe, manda la última, no la primera.
+         */
+        assets: { select: { id: true }, orderBy: { createdAt: 'desc' }, take: 1 },
       },
       orderBy: [{ isDefault: 'desc' }, { updatedAt: 'desc' }],
     });
@@ -3605,7 +3613,7 @@ export const prismaRepository: DataRepository = {
       name: f.name,
       widthPx: f.widthPx,
       heightPx: f.heightPx,
-      elementCount: Array.isArray(f.elements) ? f.elements.length : 0,
+      imageAssetId: f.assets[0]?.id ?? null,
       updatedAt: f.updatedAt,
     }));
   },
@@ -3619,9 +3627,9 @@ export const prismaRepository: DataRepository = {
         name: true,
         widthPx: true,
         heightPx: true,
-        elements: true,
         updatedAt: true,
         dentist: { select: { fullName: true } },
+        assets: { select: { id: true }, orderBy: { createdAt: 'desc' }, take: 1 },
       },
     });
     if (!f) return null;
@@ -3633,8 +3641,7 @@ export const prismaRepository: DataRepository = {
       name: f.name,
       widthPx: f.widthPx,
       heightPx: f.heightPx,
-      elementCount: Array.isArray(f.elements) ? f.elements.length : 0,
-      elements: f.elements,
+      imageAssetId: f.assets[0]?.id ?? null,
       updatedAt: f.updatedAt,
     };
   },
@@ -3651,27 +3658,6 @@ export const prismaRepository: DataRepository = {
     }
   },
 
-  async savePrescriptionTemplate({ id, name, widthPx, heightPx, elements, userId }) {
-    try {
-      const actualizado = await prisma.prescriptionTemplate.update({
-        where: { id },
-        data: {
-          name,
-          widthPx,
-          heightPx,
-          // Ya viene validado por `prescriptionElementsSchema` en la acción:
-          // aquí no se vuelve a mirar porque el tipo de la columna es JSON.
-          elements: elements as never,
-          createdByUserId: undefined,
-        },
-        select: { id: true },
-      });
-      void userId;
-      return { ok: true, data: actualizado };
-    } catch (error) {
-      return toWriteFailure(error);
-    }
-  },
 
   async deletePrescriptionTemplate({ id, userId }) {
     try {

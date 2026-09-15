@@ -58,6 +58,15 @@ export const createAppointmentSchema = z.object({
     .toUpperCase()
     .regex(/^[A-Z0-9_]{2,40}$/, 'Código de tratamiento inválido'),
 
+  /**
+   * Por dónde llegó el paciente. Se omite = WhatsApp, que es el caso normal.
+   *
+   * No cambia nada del agendamiento: el hueco, la duración y el precio se
+   * calculan igual. Sirve para poder contar al final del mes por qué canal
+   * entró cada paciente, que es lo que dice dónde vale la pena la pauta.
+   */
+  channel: z.enum(['WHATSAPP', 'INSTAGRAM']).optional(),
+
   /** Inicio solicitado, ISO 8601 con zona horaria obligatoria. */
   startsAt: isoDateTimeSchema,
 

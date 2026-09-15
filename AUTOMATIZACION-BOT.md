@@ -340,7 +340,110 @@ Sirve para que n8n deje de responder en ese chat sin tener que preguntar.
 Aun así, **sigue llamando a `/conversation` en cada mensaje**: ese evento es
 un atajo, no la fuente de verdad.
 
-### 4.3 Reglas que el flujo debe respetar
+### 4.3 El webhook de CORREO (Gmail) — lo que hay que montar en n8n
+
+Es un **segundo webhook, aparte del de WhatsApp**. El panel nunca habla con
+Gmail: le manda el correo ya redactado a n8n, que es quien tiene la cuenta
+conectada.
+
+```
+STAFF_EMAIL_WEBHOOK_URL=""     ← me falta esto también
+```
+
+**Un solo webhook para todos los correos.** El cuerpo trae un campo `type` y
+n8n hace un *switch* sobre él. Así no hay que crear una URL, un nodo y una
+credencial nueva cada vez que la clínica quiera avisar de algo más.
+
+Va firmado con **el mismo HMAC** que todo lo demás (cabeceras
+`X-Automation-Timestamp` y `X-Automation-Signature`; aquí no va `Key-Id`).
+
+#### Tipos que puede recibir
+
+| `type` | Cuándo se dispara | A quién va |
+|---|---|---|
+| `APPOINTMENT_SCHEDULED` | Se agenda una cita desde el panel | Al odontólogo, con copia a la clínica |
+| `STAFF_INVITE` | Se crea una cuenta de personal | A la persona, con su clave temporal |
+| `STAFF_PASSWORD_RECOVERY` | Alguien pide restablecer su clave | A la persona, con un enlace de un solo uso |
+
+#### `APPOINTMENT_SCHEDULED` — el que pediste
+
+Esto es **exactamente** lo que le va a llegar a n8n (capturado del sistema
+real, no inventado):
+
+```json
+{
+  "type": "APPOINTMENT_SCHEDULED",
+  "to": "tomas.rondon@dentalcoworking.com.ve",
+  "cc": "contacto@dentalcoworking.com.ve",
+  "dentistName": "Dr. Tomás Rondón",
+  "patientName": "María Fernanda Istúriz",
+  "patientPhone": "+584142234567",
+  "treatment": "Consulta y valoración",
+  "room": "C1",
+  "startsAt": "2026-09-11T19:24:15.144Z",
+  "startsAtLabel": "viernes, 11 de septiembre, 3:24 p. m.",
+  "durationMinutes": 45,
+  "notes": null,
+  "bookedBy": "Paula Gómez",
+  "clinicName": "Dental Coworking",
+  "issuedAt": "2026-09-15T18:12:31.167Z"
+}
+```
+
+**Usa `startsAtLabel` para el cuerpo del correo, no `startsAt`.** El primero
+ya viene escrito en hora de Caracas; el segundo es el instante en UTC y si el
+flujo lo formatea por su cuenta el correo puede anunciar la cita con una hora
+de diferencia. `startsAt` está ahí sólo por si necesitas calcular algo.
+
+`cc` puede venir en `null` (si la clínica no tiene correo cargado): el nodo
+debe tolerarlo y mandar sólo al `to`.
+
+**Plantilla sugerida para el Gmail:**
+
+```
+Asunto: Cita nueva — {{patientName}}, {{startsAtLabel}}
+
+{{dentistName}}:
+
+Le agendaron una cita.
+
+  Paciente:    {{patientName}}  ({{patientPhone}})
+  Tratamiento: {{treatment}}  ({{durationMinutes}} min)
+  Cuándo:      {{startsAtLabel}}
+  Consultorio: {{room}}
+
+Agendada por {{bookedBy}}.
+{{clinicName}}
+```
+
+#### Los otros dos tipos (ya existían)
+
+`STAFF_INVITE` y `STAFF_PASSWORD_RECOVERY` traen:
+
+```json
+{
+  "type": "STAFF_INVITE",
+  "to": "...", "fullName": "...", "role": "ASSISTANT",
+  "temporaryPassword": "Xk4mNp…",   // sólo en STAFF_INVITE
+  "resetUrl": null,                  // sólo en STAFF_PASSWORD_RECOVERY
+  "loginUrl": "https://…/login",
+  "issuedAt": "..."
+}
+```
+
+> ⚠️ La clave temporal **no se guarda en claro en ningún sitio**. Si el correo
+> no sale, no se puede reenviar la misma: hay que regenerarla desde el panel.
+
+#### Qué debe responder el webhook
+
+`2xx` si lo entregó. Cualquier otra cosa se registra como fallo:
+
+- En las **citas**, la cita queda creada igual — un correo caído no puede
+  deshacer un hueco ya apartado con el paciente delante.
+- En las **altas de personal**, el panel avisa a quien la creó de que tiene
+  que darle la clave a mano.
+
+### 4.4 Reglas que el flujo debe respetar
 
 1. **Llamar a `/conversation` en cada mensaje entrante.** Sin excepción.
 2. **Leer los códigos de `/catalog`, no escribirlos en el flujo.**
@@ -369,7 +472,91 @@ Cosas del panel, no de n8n, que afectan a lo que el bot puede ofrecer:
 
 ---
 
-## 6. Probado y funcionando
+## 6. Estado de la conexión con n8n — probado contra producción
+
+Probado el 15/09/2026 contra `https://n8n-n8n.msoa0w.easypanel.host`, firmando
+con el HMAC real. Esto es lo que respondió cada webhook:
+
+| Webhook | Estado | Qué falta |
+|---|---|---|
+| `panel-envio` | ✅ **200** en 1 s | Nada. Los mensajes del panel ya salen a WhatsApp. |
+| `staff-email` | ⚠️ **parcial** | Responde 200 a `STAFF_INVITE`, pero rechaza `APPOINTMENT_SCHEDULED` con `UNKNOWN_STAFF_EMAIL_TYPE`. Falta esa rama. |
+| `panel-estado-ia` | ❌ **404** | *"The requested webhook is not registered. The workflow must be active."* Hay que crear o **activar** ese flujo. |
+
+### 6.1 Arreglar `staff-email` — falta una rama
+
+El flujo ya verifica el HMAC y manda correos bien; sólo no conoce el tipo
+nuevo. En el nodo *Switch* que mira `{{ $json.type }}`, añade una salida más:
+
+```
+STAFF_INVITE            → (ya existe)
+STAFF_PASSWORD_RECOVERY → (ya existe)
+APPOINTMENT_SCHEDULED   → ← AÑADIR ESTA
+```
+
+Y en esa salida, un nodo Gmail con:
+
+```
+Para:     {{ $json.to }}
+CC:       {{ $json.cc }}          ← puede venir null: deja el campo vacío si lo es
+Asunto:   Cita nueva — {{ $json.patientName }}, {{ $json.startsAtLabel }}
+Cuerpo:   (la plantilla de la sección 4.3)
+```
+
+El cuerpo completo del mensaje que va a recibir está en la sección 4.3.
+
+### 6.2 Crear/activar `panel-estado-ia`
+
+Es el más simple de los tres: recibe un aviso de que alguien encendió o apagó
+la IA en un chat y **no tiene que responder nada** más que un `200`.
+
+```json
+{ "event": "ai.disabled", "conversationId": "...", "phone": "+58...",
+  "aiEnabled": false, "reason": "...", "changedBy": "Paula Gómez", "at": "..." }
+```
+
+> No es crítico: si este webhook falla, el panel lo anota en su log y sigue.
+> El bot no se entera por aquí de que la IA se apagó — se entera porque
+> **pregunta a `/conversation` en cada mensaje**, que es la fuente de verdad.
+> Esto es sólo un atajo para que n8n reaccione al instante.
+
+---
+
+## 7. Dos cosas mal en el `.env`
+
+### `DEFAULT_CLINIC_COMMISSION_PERCENT=40` — está al revés
+
+Ese número es **siempre la parte de la CLÍNICA**. Con 40, la clínica se
+quedaría con el 40 % y el odontólogo con el 60 % — al revés del reparto de
+esta clínica, que es **60 clínica / 40 odontólogo**.
+
+```diff
+- DEFAULT_CLINIC_COMMISSION_PERCENT="40"
++ DEFAULT_CLINIC_COMMISSION_PERCENT="60"
+```
+
+Hoy esa variable **no la lee ningún código** (el reparto por defecto sale de
+*Configuración* en el panel), así que no está causando daño ahora mismo. Pero
+si algún día se conecta, invertiría el reparto de cada odontólogo nuevo sin
+que nadie lo note. Déjala en 60 o bórrala.
+
+Lo que sí conviene revisar en el panel: **Configuración → comisión por
+defecto** debe decir **60**.
+
+### `OPENAI_KEY` tiene una errata y no es de OpenAI
+
+```
+OPENAI_KEY=ssk-or-v1-XXXX…
+           ↑↑ dos eses, y el prefijo `sk-or-v1` es de OpenRouter, no de OpenAI
+```
+
+Es la misma llave que `OPENROUTER_KEY` pero con una `s` de más al principio.
+Si algún nodo la usa, fallará la autenticación. O la corriges, o la borras y
+dejas sólo `OPENROUTER_KEY`.
+
+---
+
+## 8. Probado y funcionando
 
 Flujo completo verificado contra el servidor real el 15/09/2026:
 

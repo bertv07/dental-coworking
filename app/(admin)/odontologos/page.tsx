@@ -5,7 +5,6 @@ import type { DentistEarnings } from '@/backend/domain/types';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { Stat } from '@/frontend/components/ui/primitives';
 import { DentistsManager } from '@/frontend/features/admin/DentistsManager';
-import { DentistRoster } from '@/frontend/features/admin/DentistRoster';
 import { RetiredDentists } from '@/frontend/features/admin/RetiredDentists';
 import { prisma } from '@/backend/db/client';
 import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/motion';
@@ -34,11 +33,23 @@ export const dynamic = 'force-dynamic';
 export default async function DentistsPage() {
   const user = await requireRole('ASSISTANT');
 
-  // --- Recepción: el listado, sin un solo importe -------------------------
+  // --- Recepción: puede agregar y dar de baja, pero sin un solo importe ----
   if (user.role !== 'SUPER_ADMIN') {
-    // Sólo los activos: a recepción no le sirve alguien que ya no atiende, y
-    // reactivarlo es cosa de administración.
-    const dentists = await repository.listDentists();
+    /*
+     * Recepción arma el cuerpo odontológico: agrega a quien empieza y da de
+     * baja a quien deja de venir, el mismo día. Antes esto era un listado de
+     * sólo lectura y había que esperar al administrador, con el problema de
+     * que mientras tanto el sistema seguía ofreciendo para cita a alguien
+     * que ya no atiende.
+     *
+     * Lo que NO toca recepción es el dinero: ni la comisión de cada quien ni
+     * lo que produce. Eso no se esconde con CSS — las fichas se construyen
+     * campo a campo más abajo y esos importes no llegan al navegador.
+     *
+     * Se incluyen los inactivos para poder reactivar a quien volvió: la baja
+     * es lógica y reversible, así que una equivocación se deshace sola.
+     */
+    const dentists = await repository.listDentists({ includeInactive: true });
     // Para sugerirlas al editar: si conviven «CIRUGÍA ORAL» y «cirujano», el
     // bot deja de encontrar al especialista que le piden.
     const knownSpecialties = [
@@ -54,22 +65,34 @@ export default async function DentistsPage() {
           />
         </FadeIn>
         <FadeIn delay={0.08}>
-          <DentistRoster
+          <DentistsManager
             /*
-             * Se construye campo a campo en vez de pasar el objeto entero:
-             * `Dentist` lleva `clinicCommissionPercent`, y con un spread se
-             * colaría en el payload aunque la tabla no lo pintara.
+             * Campo a campo y NO con un spread: `Dentist` lleva
+             * `clinicCommissionPercent`, y con `{...d}` se colaría en el
+             * payload que viaja al navegador aunque la tabla no lo pintara.
+             *
+             * Se manda en 60 —el reparto de la clínica— porque el tipo lo
+             * exige, pero recepción ni lo ve ni lo envía: el servidor le pone
+             * el de la clínica al crear, y al editar ignora lo que venga.
              */
             dentists={dentists.map((d) => ({
               id: d.id,
+              userId: null,
               fullName: d.fullName,
               licenseNumber: d.licenseNumber,
               email: d.email,
               phone: d.phone,
+              photoUrl: d.photoUrl,
               specialties: d.specialties,
+              clinicCommissionPercent: 60,
+              birthDate: d.birthDate,
               isActive: d.isActive,
+              createdAt: d.createdAt,
+              deletedAt: d.deletedAt,
             }))}
+            earningsByDentist={{}}
             knownSpecialties={knownSpecialties}
+            esSuperAdmin={false}
           />
         </FadeIn>
       </div>
@@ -194,6 +217,7 @@ export default async function DentistsPage() {
           dentists={dentists}
           earningsByDentist={earningsByDentist}
           knownSpecialties={knownSpecialties}
+          esSuperAdmin={user.role === 'SUPER_ADMIN'}
         />
       </FadeIn>
 

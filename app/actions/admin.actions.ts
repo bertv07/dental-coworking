@@ -36,6 +36,7 @@ import {
 } from '@/backend/services/staff-invite.service';
 import { clinicDayKey, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
 import { scheduleAppointment } from '@/backend/services/scheduling.service';
+import { notifyAppointmentScheduled } from '@/backend/services/appointment-notification.service';
 import { resolveRateSource } from '@/backend/services/exchange-rate.service';
 
 /**
@@ -359,12 +360,45 @@ async function explicarChoque(
 export async function createDentistAction(input: unknown): Promise<ActionResult> {
   const validation = dentistFormSchema.safeParse(input);
 
-  // Sin cuenta, el camino es el CRUD de siempre.
+  /*
+   * Sin cuenta, el camino es el CRUD de siempre — y lo puede hacer RECEPCIÓN.
+   *
+   * Antes exigía Super Admin por un motivo concreto: esta ficha lleva
+   * `clinicCommissionPercent`, o sea cuánto cobra esa persona. Pero eso
+   * dejaba a recepción sin poder dar de alta a alguien que empieza mañana,
+   * esperando a que el administrador tuviera un rato.
+   *
+   * Se resuelve separando las dos cosas: recepción da el alta, pero el
+   * reparto lo pone el servidor con el de la clínica. Si hay que pactarle
+   * otro, lo cambia el administrador después, que es quien lo negocia.
+   */
   if (!validation.success || !validation.data.createAccount) {
+    const quien = await checkApiRole('ASSISTANT');
+    const esAdministrador = quien.authorized && quien.user.role === 'SUPER_ADMIN';
+
+    /*
+     * La comisión se INYECTA antes de validar, no dentro del handler.
+     *
+     * El esquema la exige y el formulario de recepción no la pinta —así que
+     * tampoco la envía—: validando primero, el alta se caía por un campo que
+     * recepción no puede ver, y el error no tenía dónde mostrarse. Quedaba
+     * un formulario que no guardaba y no decía por qué.
+     *
+     * Inyectarla aquí resuelve las dos cosas a la vez: pasa la validación y
+     * hace imposible que recepción mande otra, mande lo que mande.
+     */
+    const entrada = esAdministrador
+      ? input
+      : {
+          ...(typeof input === 'object' && input !== null ? input : {}),
+          clinicCommissionPercent: (await repository.getClinicSettings())
+            .defaultCommissionPercent,
+        };
+
     const result = await runAction({
-      minimumRole: 'SUPER_ADMIN',
+      minimumRole: 'ASSISTANT',
       schema: dentistFormSchema,
-      input,
+      input: entrada,
       revalidate: '/odontologos',
       auditAction: 'dentist.created',
       handler: (data) => repository.createDentist(toDentistInput(data)),
@@ -541,7 +575,7 @@ export async function updateDentistAction(
 /** Devuelve al servicio a alguien que estaba dado de baja. */
 export async function reactivateDentistAction(id: string): Promise<ActionResult> {
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: cuidSchema,
     input: id,
     revalidate: '/odontologos',
@@ -550,9 +584,21 @@ export async function reactivateDentistAction(id: string): Promise<ActionResult>
   });
 }
 
+/**
+ * Da de baja a un odontólogo. Lo puede hacer RECEPCIÓN.
+ *
+ * Es quien arma la agenda: si alguien deja de venir, tiene que poder sacarlo
+ * de la lista el mismo día en vez de seguir ofreciéndolo para citas hasta que
+ * el administrador tenga un rato.
+ *
+ * Se puede dejar en sus manos porque NO borra nada: es una baja lógica. La
+ * ficha se queda con todo su historial —citas, cobros, liquidaciones— y se
+ * revierte con `reactivateDentistAction`, que también puede recepción. Una
+ * baja por error se deshace en dos clics.
+ */
 export async function deleteDentistAction(id: string): Promise<ActionResult> {
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: cuidSchema,
     input: id,
     revalidate: '/odontologos',
@@ -739,13 +785,32 @@ export async function deleteRoomAction(id: string): Promise<ActionResult> {
 // ===========================================================================
 
 export async function createAppointmentAction(input: unknown): Promise<ActionResult> {
+  const quien = await checkApiRole('ASSISTANT');
+
   return runAction({
     minimumRole: 'ASSISTANT',
     schema: appointmentFormSchema,
     input,
     revalidate: '/agenda',
     auditAction: 'appointment.created_from_panel',
-    handler: (data) => repository.createAppointmentFromPanel(data),
+    handler: async (data) => {
+      const creada = await repository.createAppointmentFromPanel(data);
+
+      /*
+       * El aviso al odontólogo va DESPUÉS de crear y sin `await` bloqueante
+       * sobre el resultado: si el correo falla, la cita ya está apartada y
+       * el paciente está delante del mostrador. Deshacerla por un webhook
+       * lento sería el peor intercambio posible.
+       */
+      if (creada.ok) {
+        await notifyAppointmentScheduled({
+          appointmentId: creada.data.id,
+          bookedByName: quien.authorized ? quien.user.name : undefined,
+        });
+      }
+
+      return creada;
+    },
   });
 }
 
@@ -824,6 +889,13 @@ export async function createAppointmentWithExtrasAction(
       error: 'No se pudo crear la cita. Revisa que el hueco siga libre.',
     };
   }
+
+  // Mismo aviso que en el alta simple: al odontólogo le acaban de meter a
+  // alguien en su agenda y es quien tiene que enterarse.
+  await notifyAppointmentScheduled({
+    appointmentId: creada.data.id,
+    bookedByName: authorization.user.name,
+  });
 
   // Los extras, uno a uno y con el precio que decide el servidor.
   const fallidos: string[] = [];

@@ -260,7 +260,7 @@ export async function scheduleAppointment(
     // Precio congelado: si mañana sube la tarifa, esta cita conserva la
     // que se le prometió al paciente.
     agreedPriceCents: treatment.basePriceCents,
-    source: 'WHATSAPP_AI',
+    source: input.channel === 'INSTAGRAM' ? 'INSTAGRAM_AI' : 'WHATSAPP_AI',
     notes: input.notes ?? null,
     idempotencyKey: input.idempotencyKey,
   });

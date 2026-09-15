@@ -24,7 +24,12 @@ export type AppointmentStatus =
   | 'CANCELLED'
   | 'NO_SHOW';
 
-export type AppointmentSource = 'WHATSAPP_AI' | 'ADMIN_PANEL' | 'PHONE_CALL' | 'WALK_IN';
+export type AppointmentSource =
+  | 'WHATSAPP_AI'
+  | 'ADMIN_PANEL'
+  | 'PHONE_CALL'
+  | 'WALK_IN'
+  | 'INSTAGRAM_AI';
 export type PaymentMethod = 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE' | 'CREDIT';
 export type PaymentStatus = 'PENDING' | 'PAID' | 'REFUNDED' | 'FAILED';
 export type PayoutStatus = 'ACCRUED' | 'PAID' | 'ON_HOLD';
@@ -573,15 +578,22 @@ export interface PrescriptionTemplateSummary {
   name: string;
   widthPx: number;
   heightPx: number;
-  /** Cuántos elementos tiene, para poder decir «vacío» sin cargarlos. */
-  elementCount: number;
+  /**
+   * La imagen del recipe escaneado. `null` = se creó la ficha pero la subida
+   * falló, y hay que reintentarla.
+   *
+   * Sólo el id: el binario se sirve por `/api/recetarios/{id}/imagen/{assetId}`.
+   */
+  imageAssetId: string | null;
   updatedAt: Date;
 }
 
-export interface PrescriptionTemplateFull extends PrescriptionTemplateSummary {
-  /** Sin tipar aquí a propósito: lo valida `prescriptionElementsSchema`. */
-  elements: unknown;
-}
+/**
+ * Antes traía además los `elements` del editor que se colocaban encima de la
+ * hoja. Ese editor se quitó —el recipe que vale es el que la odontóloga ya
+ * usa en papel— así que hoy es igual que el resumen.
+ */
+export type PrescriptionTemplateFull = PrescriptionTemplateSummary;
 
 export type PromotionBenefit = 'FREE_TREATMENT' | 'PERCENT_OFF' | 'AMOUNT_OFF' | 'PACKAGE_PRICE';
 

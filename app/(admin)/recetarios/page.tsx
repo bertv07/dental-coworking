@@ -10,7 +10,8 @@ import { NewPrescriptionTemplate } from '@/frontend/features/prescriptions/NewPr
  * ===========================================================================
  *  /recetarios — los recipes de cada odontóloga
  * ===========================================================================
- *  Cada una sube el suyo y lo edita dentro del panel.
+ *  Cada una sube el suyo, escaneado, tal cual lo usa en papel. No se edita
+ *  ni se personaliza nada dentro del panel: el recipe que vale es ese.
  *
  *  QUIÉN VE QUÉ
  *  Recepción y el admin ven todos, porque a menudo es recepción quien tiene
@@ -44,7 +45,7 @@ export default async function RecetariosPage() {
       <FadeIn>
         <PageHead
           title="Recetarios"
-          subtitle="Sube tu recipe y colócale encima lo que necesites"
+          subtitle="Súbelo escaneado y recepción lo imprime"
         />
       </FadeIn>
 
@@ -60,7 +61,7 @@ export default async function RecetariosPage() {
         <Card title="Tus recetarios" subtitle={`${templates.length} en total`}>
           {templates.length === 0 ? (
             <EmptyState>
-              Todavía no hay ninguno. Crea uno arriba y sube tu recipe escaneado.
+              Todavía no hay ninguno. Sube tu recipe escaneado arriba.
             </EmptyState>
           ) : (
             <div className="row row--wrap" style={{ gap: '0.75rem' }}>
@@ -80,10 +81,10 @@ export default async function RecetariosPage() {
                     {t.dentistName ?? 'De la clínica'}
                   </div>
                   <div className="recipe-card__meta">
-                    {t.elementCount === 0 ? (
-                      <Badge tone="warning">Vacío</Badge>
+                    {t.imageAssetId === null ? (
+                      <Badge tone="warning">Sin imagen</Badge>
                     ) : (
-                      <>{t.elementCount} elementos</>
+                      <Badge tone="success">Listo para imprimir</Badge>
                     )}
                   </div>
                 </Link>

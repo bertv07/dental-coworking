@@ -73,6 +73,10 @@ enum AppointmentSource {
   ADMIN_PANEL // Creada a mano desde el panel
   PHONE_CALL
   WALK_IN
+  /// La IA, pero por Instagram en vez de WhatsApp. Va aparte y no mezclada
+  /// en WHATSAPP_AI: al final del mes hay que poder decir por qué canal
+  /// entró cada paciente para saber dónde vale la pena la pauta.
+  INSTAGRAM_AI
 }
 
 enum PaymentMethod {

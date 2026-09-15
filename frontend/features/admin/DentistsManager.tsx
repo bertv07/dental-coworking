@@ -36,6 +36,11 @@ interface DentistsManagerProps {
    * pida un cirujano se le ofrece medio equipo o ninguno.
    */
   knownSpecialties: string[];
+  /**
+   * Recepción da de alta odontólogos, pero no decide cuánto cobran ni
+   * reparte accesos al panel: esos dos campos sólo los ve el administrador.
+   */
+  esSuperAdmin: boolean;
   dentists: Dentist[];
   /** Producción del periodo, indexada por id de odontólogo. */
   earningsByDentist: Record<string, DentistEarnings | undefined>;
@@ -45,6 +50,7 @@ export function DentistsManager({
   dentists,
   earningsByDentist,
   knownSpecialties,
+  esSuperAdmin,
 }: DentistsManagerProps) {
   const crud = useCrud<Dentist>({
     create: createDentistAction,
@@ -122,9 +128,19 @@ export function DentistsManager({
                     <th>Odontólogo</th>
                     <th>Especialidades</th>
                     <th>Registro</th>
-                    <th className="table__num">Comisión</th>
-                    <th className="table__num">Producción 30d</th>
-                    <th className="table__num">Le corresponde</th>
+                    {/*
+                      Las tres columnas de dinero son del administrador. A
+                      recepción no se le ocultan con CSS: no se pintan, y los
+                      importes ni siquiera se le mandan al navegador (ver la
+                      página, que le pasa las fichas sin comisión).
+                    */}
+                    {esSuperAdmin && (
+                      <>
+                        <th className="table__num">Comisión</th>
+                        <th className="table__num">Producción 30d</th>
+                        <th className="table__num">Le corresponde</th>
+                      </>
+                    )}
                     <th>Estado</th>
                     <th style={{ textAlign: 'right' }}>Acciones</th>
                   </tr>
@@ -155,27 +171,34 @@ export function DentistsManager({
                             </div>
                           </td>
                           <td className="mono text-xs muted">{dentist.licenseNumber}</td>
-                          <td className="table__num">
-                            {/*
-                              Comisión distinta de la estándar (40%) → se
-                              resalta. El admin debe poder detectar los
-                              acuerdos especiales de un vistazo.
-                            */}
-                            <Badge
-                              tone={dentist.clinicCommissionPercent === 60 ? 'neutral' : 'warning'}
-                            >
-                              {dentist.clinicCommissionPercent}% / {100 - dentist.clinicCommissionPercent}%
-                            </Badge>
-                          </td>
-                          <td className="table__num mono">
-                            {earnings ? formatCents(earnings.grossCents) : '—'}
-                          </td>
-                          <td
-                            className="table__num mono table__strong"
-                            style={{ color: 'var(--color-primary)' }}
-                          >
-                            {earnings ? formatCents(earnings.dentistShareCents) : '—'}
-                          </td>
+                          {esSuperAdmin && (
+                            <>
+                              <td className="table__num">
+                                {/*
+                                  Comisión distinta de la estándar → se
+                                  resalta. El admin debe poder detectar los
+                                  acuerdos especiales de un vistazo.
+                                */}
+                                <Badge
+                                  tone={
+                                    dentist.clinicCommissionPercent === 60 ? 'neutral' : 'warning'
+                                  }
+                                >
+                                  {dentist.clinicCommissionPercent}% /{' '}
+                                  {100 - dentist.clinicCommissionPercent}%
+                                </Badge>
+                              </td>
+                              <td className="table__num mono">
+                                {earnings ? formatCents(earnings.grossCents) : '—'}
+                              </td>
+                              <td
+                                className="table__num mono table__strong"
+                                style={{ color: 'var(--color-primary)' }}
+                              >
+                                {earnings ? formatCents(earnings.dentistShareCents) : '—'}
+                              </td>
+                            </>
+                          )}
                           <td>
                             {dentist.isActive ? (
                               <Badge tone="success">Activo</Badge>
@@ -197,7 +220,7 @@ export function DentistsManager({
                                 Sin `userId` no hay contraseña que regenerar:
                                 ese odontólogo no entra al panel.
                               */}
-                              {dentist.userId && (
+                              {dentist.userId && esSuperAdmin && (
                                 <button
                                   type="button"
                                   className="btn btn--ghost btn--sm"
@@ -312,17 +335,25 @@ export function DentistsManager({
             defaultValue={editing?.specialties.join(', ')}
             error={errorFor('specialties')}
           />
-          <TextField
-            label="Comisión de la clínica (%)"
-            name="clinicCommissionPercent"
-            type="number"
-            required
-            min={0}
-            max={100}
-            hint="El odontólogo recibe el porcentaje restante. Estándar de la clínica: 60 / 40."
-            defaultValue={editing?.clinicCommissionPercent ?? 60}
-            error={errorFor('clinicCommissionPercent')}
-          />
+          {/*
+            Cuánto cobra cada persona lo negocia el administrador, no
+            recepción. A recepción ni se le enseña: el servidor le pone el
+            reparto de la clínica al dar de alta, y el administrador lo
+            ajusta después si se pactó otro.
+          */}
+          {esSuperAdmin && (
+            <TextField
+              label="Comisión de la clínica (%)"
+              name="clinicCommissionPercent"
+              type="number"
+              required
+              min={0}
+              max={100}
+              hint="El odontólogo recibe el porcentaje restante. Estándar de la clínica: 60 / 40."
+              defaultValue={editing?.clinicCommissionPercent ?? 60}
+              error={errorFor('clinicCommissionPercent')}
+            />
+          )}
           <TextField
             label="Fecha de nacimiento"
             name="birthDate"
@@ -347,7 +378,7 @@ export function DentistsManager({
             de alguien que ya la tiene no es una casilla: es restablecerle la
             clave, que es otra operación y con otras consecuencias.
           */}
-          {!editing && (
+          {!editing && esSuperAdmin && (
             <>
               <CheckboxField
                 label="Crear su cuenta de acceso al panel"

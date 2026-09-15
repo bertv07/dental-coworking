@@ -999,14 +999,6 @@ export interface DataRepository {
     userId: string;
   }): Promise<WriteResult<{ id: string }>>;
 
-  savePrescriptionTemplate(params: {
-    id: string;
-    name: string;
-    widthPx: number;
-    heightPx: number;
-    elements: unknown;
-    userId: string;
-  }): Promise<WriteResult<{ id: string }>>;
 
   deletePrescriptionTemplate(params: { id: string; userId: string }): Promise<WriteResult<null>>;
 
