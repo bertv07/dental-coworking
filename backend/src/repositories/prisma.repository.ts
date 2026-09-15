@@ -4885,6 +4885,42 @@ export const prismaRepository: DataRepository = {
     if (existing) {
       /*
        * ---------------------------------------------------------------
+       *  UN CHAT BORRADO (O ARCHIVADO) VUELVE SI EL PACIENTE ESCRIBE
+       * ---------------------------------------------------------------
+       *  Borrar un chat lo saca del monitor, y así debe quedarse mientras
+       *  nadie escriba. Pero si la persona vuelve a escribir, ese mensaje
+       *  no puede caer en un hilo invisible: recepción no lo vería nunca y
+       *  el paciente se quedaría esperando una respuesta que nadie sabe
+       *  que tiene que dar.
+       *
+       *  Se reabre aquí y no al recibir el mensaje porque ésta es la
+       *  llamada que la automatización hace SIEMPRE y primero, antes de
+       *  decidir si contesta.
+       *
+       *  El archivado sigue la misma regla: archivar es "quítamelo de en
+       *  medio hasta que haya algo nuevo", y esto es algo nuevo.
+       */
+      if (existing.deletedAt !== null || existing.archivedAt !== null) {
+        await prisma.$transaction([
+          prisma.whatsAppConversation.update({
+            where: { id: existing.id },
+            data: { deletedAt: null, archivedAt: null },
+          }),
+          prisma.auditLog.create({
+            data: {
+              userId: null,
+              action: 'whatsapp.conversation_reopened',
+              entityType: 'WhatsAppConversation',
+              entityId: existing.id,
+              before: { deletedAt: existing.deletedAt, archivedAt: existing.archivedAt },
+              after: { motivo: 'El paciente volvió a escribir' },
+            },
+          }),
+        ]);
+      }
+
+      /*
+       * ---------------------------------------------------------------
        *  AQUÍ VUELVE EL BOT
        * ---------------------------------------------------------------
        *  Esta función es lo primero que consulta la automatización con cada

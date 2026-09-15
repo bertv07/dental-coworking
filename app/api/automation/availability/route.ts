@@ -144,6 +144,15 @@ export async function POST(request: NextRequest) {
         'hoy es ' + hoyEnLaClinica() + '.',
       CERRADO: 'Ese día la clínica no atiende. Ofrece otro día de la semana.',
       LLENO: 'Ese día está lleno. No es un error: ofrécele otra fecha.',
+      /*
+       * Es el único motivo que NO se arregla ofreciendo otra fecha: hay que
+       * volver al catálogo. Se dice explícitamente porque el bot, ante una
+       * lista vacía, tiende a proponer otro día — y con un código inválido
+       * se quedaría vacío para siempre.
+       */
+      TRATAMIENTO_DESCONOCIDO:
+        'Ese treatmentCode no existe o está desactivado. NO ofrezcas otra fecha: ' +
+        'vuelve a consultar POST /api/automation/catalog y usa uno de los códigos de ahí.',
     };
 
     return ok({

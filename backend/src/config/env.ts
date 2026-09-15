@@ -37,7 +37,12 @@ const envSchema = z.object({
   // 60 = la clínica se queda con el 60 % y el odontólogo cobra el 40 %.
   DEFAULT_CLINIC_COMMISSION_PERCENT: z.coerce.number().int().min(0).max(100).default(60),
 
-  CLINIC_TIMEZONE: z.string().default('America/Bogota'),
+  /*
+   * La clínica está en Caracas. El default era 'America/Bogota' —una hora de
+   * diferencia— y sólo se notaba si alguien olvidaba poner la variable en el
+   * despliegue: ahí el bot empezaría a ofrecer horas corridas una hora.
+   */
+  CLINIC_TIMEZONE: z.string().default('America/Caracas'),
 
   /**
    * Cuántos proxies inversos de confianza hay entre internet y este proceso.

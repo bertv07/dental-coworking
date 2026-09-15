@@ -436,7 +436,11 @@ async function trabajaEnEseMomento(
  * domingo que la clínica no abre. Tres situaciones distintas que pedían tres
  * respuestas distintas y recibían la misma.
  */
-export type MotivoSinHuecos = 'PASADO' | 'CERRADO' | 'LLENO';
+export type MotivoSinHuecos =
+  | 'PASADO'
+  | 'CERRADO'
+  | 'LLENO'
+  | 'TRATAMIENTO_DESCONOCIDO';
 
 export interface Disponibilidad {
   slots: AvailableSlot[];
@@ -459,8 +463,18 @@ export async function buscarDisponibilidad(params: {
   dentistId?: string;
   maxSlots: number;
 }): Promise<Disponibilidad> {
+  /*
+   * Código que no existe (o que se desactivó al cargar la lista de precios
+   * real) NO puede devolver una lista vacía a secas.
+   *
+   * Eso es indistinguible de «ese día está lleno», y el bot reaccionaba
+   * ofreciendo otra fecha: como el problema era el código y no el día,
+   * volvía a quedarse vacío con CUALQUIER fecha y la conversación entraba
+   * en bucle sin agendar nunca. Con un motivo propio, el flujo sabe que
+   * tiene que releer el catálogo en vez de seguir probando días.
+   */
   const treatment = await repository.findTreatmentByCode(params.treatmentCode);
-  if (!treatment) return { slots: [] };
+  if (!treatment) return { slots: [], motivo: 'TRATAMIENTO_DESCONOCIDO' };
 
   const [dentists, rooms] = await Promise.all([
     repository.listDentists(),
