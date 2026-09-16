@@ -77,6 +77,9 @@ export function InvoiceEditor({
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<InvoiceLine | null>(null);
   const [charging, setCharging] = useState(false);
+  // Fecha elegida en «Registrar cobro». Decide si hay que pedir la tasa de
+  // ese día: para un cobro de hoy la pone la fuente oficial.
+  const [fechaCobro, setFechaCobro] = useState('');
   const [promoOpen, setPromoOpen] = useState(false);
   const [promoElegida, setPromoElegida] = useState('');
   // Se llena cuando "Reversar"/"Borrar" choca con una liquidación ya hecha:
@@ -702,12 +705,50 @@ export function InvoiceEditor({
             <label className="field__label" htmlFor="fechaCobro">
               Fecha del cobro
             </label>
-            <input id="fechaCobro" name="fechaCobro" type="date" className="input" max={todayKey} />
+            <input
+              id="fechaCobro"
+              name="fechaCobro"
+              type="date"
+              className="input"
+              max={todayKey}
+              value={fechaCobro}
+              onChange={(e) => setFechaCobro(e.target.value)}
+            />
             <span className="field__hint">
               Vacío = ahora mismo. Rellénala sólo si se te olvidó registrar una venta de un día
               anterior — se cuenta en la caja de ese día, con la tasa que regía entonces.
             </span>
           </div>
+
+          {/*
+            La tasa de un día pasado NO se puede pedir a la API: DolarAPI sólo
+            da la de hoy. Si el sistema la guardó ese día, se usa esa y este
+            campo sobra; si no, hay que escribirla, porque quien cobró ese día
+            sí la sabe —está en el recibo— y el sistema no.
+
+            Se deja vacío a propósito: sólo entra si de verdad hace falta, y
+            el servidor lo ignora en un cobro de hoy.
+          */}
+          {fechaCobro !== '' && fechaCobro !== todayKey && (
+            <div className="field form-grid--full">
+              <label className="field__label" htmlFor="tasaManual">
+                Tasa de ese día (Bs por dólar)
+              </label>
+              <input
+                id="tasaManual"
+                name="tasaManual"
+                type="number"
+                min={0.01}
+                step={0.01}
+                className="input"
+                placeholder="Sólo si el sistema no la tiene guardada"
+              />
+              <span className="field__hint">
+                Déjalo vacío primero: si el sistema guardó la tasa de ese día, la usa sola. Si
+                te avisa que no la tiene, escríbela aquí.
+              </span>
+            </div>
+          )}
 
           {exchangeRate !== null && (
             <div className="form-grid--full">

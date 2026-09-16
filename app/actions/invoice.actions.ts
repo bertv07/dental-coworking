@@ -320,6 +320,17 @@ const cobroSchema = z.object({
     .union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal('')])
     .optional()
     .transform((v) => (v ? v : null)),
+
+  /**
+   * Tasa de ese día, escrita a mano. SÓLO se usa —y sólo se acepta— cuando
+   * el cobro va con fecha atrasada y el sistema no guardó la tasa de ese
+   * día. En un cobro de hoy se ignora: ahí manda la fuente oficial, porque
+   * si no cualquiera podría cobrar a una tasa inventada.
+   */
+  tasaManual: z
+    .union([z.coerce.number().positive('La tasa tiene que ser mayor que cero'), z.literal('')])
+    .optional()
+    .transform((v) => (typeof v === 'number' ? v : null)),
 });
 
 /**
@@ -372,13 +383,53 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
    */
   const settings = await repository.getClinicSettings();
   const source = resolveRateSource(settings.preferredRateSource);
-  const rate = paidAt ? await getRateAsOf(source, paidAt) : await getCurrentRate(source);
 
-  if (!rate) {
-    return {
-      ok: false,
-      error: 'No hay tasa de cambio disponible. Actualízala antes de cobrar.',
-    };
+  let tasa: number;
+  let fuenteTasa: string;
+
+  if (paidAt) {
+    /*
+     * COBRO ATRASADO: se exige la tasa de ESE día.
+     *
+     * No se pide a la API porque DolarAPI no tiene histórico —`?fecha=` se
+     * ignora y responde la de hoy—, así que la única fuente fiable de un día
+     * pasado es lo que el sistema guardó ese día.
+     *
+     * Y si no hay, NO se coge una cercana: la tasa se mueve casi a diario, y
+     * una aproximada escribe en la factura unos bolívares que nunca entraron
+     * en la gaveta. Se le pide a quien cobra, que ese día sí la sabe.
+     */
+    const delDia = await getRateAsOf(source, paidAt);
+
+    if (delDia.rate) {
+      tasa = delDia.rate.rate;
+      fuenteTasa = delDia.rate.source;
+    } else if (d.tasaManual !== null) {
+      tasa = d.tasaManual;
+      // Queda escrito que esa tasa la puso una persona, no la fuente oficial.
+      fuenteTasa = `${source}_MANUAL`;
+    } else {
+      const pista = delDia.aproximada
+        ? ` La más cercana que tengo es ${delDia.aproximada.rate.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs del ${new Intl.DateTimeFormat('es-VE', { day: 'numeric', month: 'long', timeZone: 'America/Caracas' }).format(delDia.aproximada.publishedAt)}.`
+        : '';
+      return {
+        ok: false,
+        field: 'tasaManual',
+        error:
+          `No tengo la tasa del ${d.fechaCobro}, así que no puedo calcular los bolívares de ese día.${pista}` +
+          ' Escribe la tasa que se usó ese día para registrarlo.',
+      };
+    }
+  } else {
+    const actual = await getCurrentRate(source);
+    if (!actual) {
+      return {
+        ok: false,
+        error: 'No hay tasa de cambio disponible. Actualízala antes de cobrar.',
+      };
+    }
+    tasa = actual.rate;
+    fuenteTasa = actual.source;
   }
 
   const result = await repository.registerInvoicePayment({
@@ -387,8 +438,8 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
     method: kind as 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE',
     methodLabel: labelParts.join('|') || null,
     externalReference: d.externalReference,
-    exchangeRate: rate.rate,
-    exchangeRateSource: rate.source,
+    exchangeRate: tasa,
+    exchangeRateSource: fuenteTasa,
     userId: auth.userId,
     paidAt,
   });

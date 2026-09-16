@@ -1,5 +1,6 @@
 import 'server-only';
 import { prisma } from '@/backend/db/client';
+import { clinicDayRange } from '@/backend/domain/clinic-calendar';
 
 /**
  * ===========================================================================
@@ -219,19 +220,22 @@ export async function getCurrentRate(source: RateSource = 'BCV'): Promise<Curren
  * día. Se toma la última tasa publicada EN o ANTES de esa fecha; si la
  * clínica no tenía ninguna tan vieja, se usa la más antigua que haya.
  */
-export async function getRateAsOf(source: RateSource, date: Date): Promise<CurrentRate | null> {
-  const row =
-    (await prisma.exchangeRate.findFirst({
-      where: { source, publishedAt: { lte: date } },
-      orderBy: { publishedAt: 'desc' },
-    })) ??
-    (await prisma.exchangeRate.findFirst({
-      where: { source },
-      orderBy: { publishedAt: 'asc' },
-    }));
+export interface TasaDeEseDia {
+  /** La tasa que de verdad regía ese día. `null` si no hay ninguna guardada. */
+  rate: CurrentRate | null;
+  /**
+   * Lo más cercano que se encontró, cuando no hay del día exacto. NO se usa
+   * para cobrar: es sólo para poder decirle a quien cobra «la más cercana
+   * que tengo es la del martes, ¿es esa?».
+   */
+  aproximada: CurrentRate | null;
+}
 
-  if (!row) return null;
-
+function aCurrentRate(row: {
+  rate: unknown;
+  publishedAt: Date;
+  fetchedAt: Date;
+}, source: RateSource): CurrentRate {
   return {
     rate: Number(row.rate),
     source,
@@ -239,6 +243,47 @@ export async function getRateAsOf(source: RateSource, date: Date): Promise<Curre
     fetchedAt: row.fetchedAt,
     isStale: false,
   };
+}
+
+/**
+ * La tasa que regía EN UNA FECHA CONCRETA.
+ *
+ * ---------------------------------------------------------------------
+ *  POR QUÉ NO SE LE PIDE A LA API
+ * ---------------------------------------------------------------------
+ *  Porque DolarAPI no tiene histórico: `?fecha=` se ignora y devuelve
+ *  siempre la de hoy. Comprobado. Así que la única fuente fiable para un
+ *  día pasado es lo que ESTE sistema guardó ese día.
+ *
+ * ---------------------------------------------------------------------
+ *  Y POR QUÉ NO VALE "LA MÁS CERCANA"
+ * ---------------------------------------------------------------------
+ *  Antes, si no había tasa del día pedido, se cogía la anterior más próxima
+ *  —y si no, la más antigua que hubiera—. En Venezuela la tasa se mueve casi
+ *  a diario: cobrar un martes con la tasa del viernes pasado escribe en la
+ *  factura un monto en bolívares que nunca entró en la gaveta, y nadie se
+ *  entera porque el número parece razonable.
+ *
+ *  Ahora se exige la del MISMO DÍA de la clínica. Si no la hay, se devuelve
+ *  `rate: null` y quien cobra tiene que escribirla a mano: ese día la sabe
+ *  ella —está en el recibo— y el sistema no.
+ */
+export async function getRateAsOf(source: RateSource, date: Date): Promise<TasaDeEseDia> {
+  const { from, to } = clinicDayRange(date);
+
+  const delDia = await prisma.exchangeRate.findFirst({
+    where: { source, publishedAt: { gte: from, lt: to } },
+    orderBy: { publishedAt: 'desc' },
+  });
+
+  if (delDia) return { rate: aCurrentRate(delDia, source), aproximada: null };
+
+  const cercana = await prisma.exchangeRate.findFirst({
+    where: { source, publishedAt: { lt: to } },
+    orderBy: { publishedAt: 'desc' },
+  });
+
+  return { rate: null, aproximada: cercana ? aCurrentRate(cercana, source) : null };
 }
 
 /** Las tres fuentes a la vez, para el panel de control cambiario. */
