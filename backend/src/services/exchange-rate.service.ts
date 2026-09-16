@@ -1,6 +1,10 @@
 import 'server-only';
 import { prisma } from '@/backend/db/client';
-import { clinicDayRange } from '@/backend/domain/clinic-calendar';
+import {
+  clinicDayKey,
+  clinicDayRange,
+  clinicWallClockToInstant,
+} from '@/backend/domain/clinic-calendar';
 
 /**
  * ===========================================================================
@@ -46,6 +50,17 @@ const DOLARAPI_ENDPOINTS: Record<RateSource, string> = {
   BCV: 'https://ve.dolarapi.com/v1/dolares/oficial',
   PARALELO: 'https://ve.dolarapi.com/v1/dolares/paralelo',
   EURO: 'https://ve.dolarapi.com/v1/euros/oficial',
+};
+
+/**
+ * Histórico oficial, por fecha. La fecha va en la RUTA y con barras
+ * (`2026/09/10`), no como `?fecha=` ni con guiones: con cualquier otra
+ * forma la API responde vacío sin error, que es justo lo que despista.
+ */
+const DOLARAPI_HISTORICO: Record<RateSource, string> = {
+  BCV: 'https://ve.dolarapi.com/v1/historicos/dolares/oficial',
+  PARALELO: 'https://ve.dolarapi.com/v1/historicos/dolares/paralelo',
+  EURO: 'https://ve.dolarapi.com/v1/historicos/euros/oficial',
 };
 
 /** Etiqueta para pantallas y comprobantes. */
@@ -221,21 +236,16 @@ export async function getCurrentRate(source: RateSource = 'BCV'): Promise<Curren
  * clínica no tenía ninguna tan vieja, se usa la más antigua que haya.
  */
 export interface TasaDeEseDia {
-  /** La tasa que de verdad regía ese día. `null` si no hay ninguna guardada. */
+  /** La tasa que regía ese día. `null` sólo si la API no la tiene y no hay nada guardado. */
   rate: CurrentRate | null;
-  /**
-   * Lo más cercano que se encontró, cuando no hay del día exacto. NO se usa
-   * para cobrar: es sólo para poder decirle a quien cobra «la más cercana
-   * que tengo es la del martes, ¿es esa?».
-   */
+  /** Lo más cercano encontrado, para poder explicarlo si no hay nada mejor. */
   aproximada: CurrentRate | null;
 }
 
-function aCurrentRate(row: {
-  rate: unknown;
-  publishedAt: Date;
-  fetchedAt: Date;
-}, source: RateSource): CurrentRate {
+function aCurrentRate(
+  row: { rate: unknown; publishedAt: Date; fetchedAt: Date },
+  source: RateSource,
+): CurrentRate {
   return {
     rate: Number(row.rate),
     source,
@@ -245,39 +255,131 @@ function aCurrentRate(row: {
   };
 }
 
+/** Una fila del histórico de DolarAPI. */
+interface FilaHistorico {
+  fecha?: string;
+  promedio?: number | null;
+  venta?: number | null;
+  compra?: number | null;
+}
+
+/**
+ * Trae del histórico OFICIAL la tasa que regía en una fecha, y la guarda.
+ *
+ * ---------------------------------------------------------------------
+ *  POR QUÉ SE PIDE LA LISTA Y NO EL DÍA SUELTO
+ * ---------------------------------------------------------------------
+ *  El endpoint por día existe, pero devuelve VACÍO en fines de semana y
+ *  feriados: el BCV no publica esos días. Y "no publicó" no significa "no
+ *  hay tasa" — significa que sigue vigente la última publicada. Un cobro
+ *  de un sábado se hizo a la tasa del viernes.
+ *
+ *  Pidiendo la lista se resuelven los dos casos con una sola llamada: se
+ *  busca la última publicación EN o ANTES de esa fecha, que es la
+ *  definición exacta de "la tasa que regía ese día".
+ *
+ *  Lo que se trae se GUARDA con la fecha oficial de publicación, así que la
+ *  segunda vez que alguien facture ese día ya no hace falta la red.
+ */
+async function traerDelHistorico(
+  source: RateSource,
+  date: Date,
+): Promise<CurrentRate | null> {
+  try {
+    const response = await fetch(DOLARAPI_HISTORICO[source], {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+    });
+    if (!response.ok) return null;
+
+    const filas = (await response.json()) as FilaHistorico[];
+    if (!Array.isArray(filas)) return null;
+
+    // El día de la clínica al que pertenece la fecha pedida.
+    const diaPedido = clinicDayKey(date);
+
+    // La última publicación en o antes de ese día. La lista viene ordenada
+    // de más antigua a más reciente, pero no se da por hecho.
+    let mejor: { fecha: string; valor: number } | null = null;
+    for (const fila of filas) {
+      if (!fila.fecha || fila.fecha > diaPedido) continue;
+      const valor = fila.promedio ?? fila.venta ?? fila.compra;
+      if (typeof valor !== 'number' || !Number.isFinite(valor) || valor <= 0) continue;
+      if (!mejor || fila.fecha > mejor.fecha) mejor = { fecha: fila.fecha, valor };
+    }
+
+    if (!mejor) return null;
+
+    /*
+     * Se guarda con la fecha OFICIAL de publicación, no con la del cobro:
+     * es la misma tasa para todos los días que van hasta la siguiente
+     * publicación, y duplicarla por cada día facturado llenaría la tabla de
+     * filas que dicen lo mismo.
+     *
+     * `isCurrent: false` siempre: esto es historia, no la tasa de hoy.
+     * Marcarla vigente pondría a cobrar al mostrador con una tasa vieja.
+     */
+    const publishedAt = clinicWallClockToInstant(mejor.fecha, 0);
+
+    /*
+     * Se busca por DÍA y no por instante exacto: si esa tasa ya la habíamos
+     * capturado en vivo, su `publishedAt` lleva la hora que reportó la API
+     * ese día y no coincidiría con esta medianoche. Comparando por instante
+     * se insertaría una fila duplicada por cada factura atrasada.
+     */
+    const diaOficial = clinicDayRange(publishedAt);
+    const yaEsta = await prisma.exchangeRate.findFirst({
+      where: { source, publishedAt: { gte: diaOficial.from, lt: diaOficial.to } },
+    });
+
+    const guardada =
+      yaEsta ??
+      (await prisma.exchangeRate.create({
+        data: { source, rate: mejor.valor, publishedAt, isCurrent: false },
+      }));
+
+    return aCurrentRate(guardada, source);
+  } catch (error) {
+    console.warn(
+      JSON.stringify({
+        level: 'warn',
+        event: 'dolarapi.historico_failed',
+        source,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+    return null;
+  }
+}
+
 /**
  * La tasa que regía EN UNA FECHA CONCRETA.
  *
- * ---------------------------------------------------------------------
- *  POR QUÉ NO SE LE PIDE A LA API
- * ---------------------------------------------------------------------
- *  Porque DolarAPI no tiene histórico: `?fecha=` se ignora y devuelve
- *  siempre la de hoy. Comprobado. Así que la única fuente fiable para un
- *  día pasado es lo que ESTE sistema guardó ese día.
+ * Orden: lo que ya está guardado de ese día → el histórico oficial de la
+ * API (que además se guarda) → nada, y entonces quien cobra la escribe.
  *
- * ---------------------------------------------------------------------
- *  Y POR QUÉ NO VALE "LA MÁS CERCANA"
- * ---------------------------------------------------------------------
- *  Antes, si no había tasa del día pedido, se cogía la anterior más próxima
- *  —y si no, la más antigua que hubiera—. En Venezuela la tasa se mueve casi
- *  a diario: cobrar un martes con la tasa del viernes pasado escribe en la
- *  factura un monto en bolívares que nunca entró en la gaveta, y nadie se
- *  entera porque el número parece razonable.
- *
- *  Ahora se exige la del MISMO DÍA de la clínica. Si no la hay, se devuelve
- *  `rate: null` y quien cobra tiene que escribirla a mano: ese día la sabe
- *  ella —está en el recibo— y el sistema no.
+ * Lo que NO se hace es coger "la más parecida" de lo que hubiera suelto en
+ * la base. La tasa se mueve casi a diario —954 a 977 en una semana— y
+ * nuestras filas son sólo las que alguien capturó al abrir el panel: con
+ * huecos de días. El histórico del BCV sí es continuo y autoritativo.
  */
 export async function getRateAsOf(source: RateSource, date: Date): Promise<TasaDeEseDia> {
   const { from, to } = clinicDayRange(date);
 
+  // 1. ¿La capturamos ese mismo día?
   const delDia = await prisma.exchangeRate.findFirst({
     where: { source, publishedAt: { gte: from, lt: to } },
     orderBy: { publishedAt: 'desc' },
   });
-
   if (delDia) return { rate: aCurrentRate(delDia, source), aproximada: null };
 
+  // 2. Si no, al histórico oficial — y queda guardada para la próxima.
+  const historica = await traerDelHistorico(source, date);
+  if (historica) return { rate: historica, aproximada: null };
+
+  // 3. Sin red y sin histórico: se ofrece la referencia más cercana, pero
+  //    NO se usa para cobrar. La escribe quien cobró ese día.
   const cercana = await prisma.exchangeRate.findFirst({
     where: { source, publishedAt: { lt: to } },
     orderBy: { publishedAt: 'desc' },

@@ -443,6 +443,25 @@ Agendada por {{bookedBy}}.
 - En las **altas de personal**, el panel avisa a quien la creó de que tiene
   que darle la clave a mano.
 
+### 4.5 Tasa de cambio histórica (informativo)
+
+El panel resuelve solo la tasa de cualquier fecha pasada contra el
+histórico oficial de DolarAPI:
+
+```
+GET https://ve.dolarapi.com/v1/historicos/euros/oficial
+GET https://ve.dolarapi.com/v1/historicos/euros/oficial/2026/09/10
+```
+
+Ojo con el formato si alguna vez lo usas desde n8n: la fecha va **en la
+ruta y con barras** (`2026/09/10`). Con guiones o como `?fecha=` la API
+responde **vacío, sin error** — que es justo lo que despista.
+
+Y el endpoint por día viene vacío en fines de semana y feriados porque el
+BCV no publica: eso no significa que no haya tasa, significa que sigue
+vigente la última publicada. Por eso el panel pide la lista completa y se
+queda con la última publicación anterior o igual a la fecha.
+
 ### 4.4 Reglas que el flujo debe respetar
 
 1. **Llamar a `/conversation` en cada mensaje entrante.** Sin excepción.
