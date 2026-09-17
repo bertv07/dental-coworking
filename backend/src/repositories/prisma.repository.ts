@@ -4703,6 +4703,21 @@ export const prismaRepository: DataRepository = {
       .map((m) => ({ ...m, attachmentId: m.attachment?.id ?? null }));
   },
 
+  async getConversationMessagesSince(conversationId, since) {
+    const filas = await prisma.whatsAppMessage.findMany({
+      // `gt` y no `gte`: `since` es el último mensaje que el panel YA tiene.
+      // Con `gte` volvería siempre ése y el monitor lo trataría como nuevo.
+      where: { conversationId, sentAt: { gt: since } },
+      include: { attachment: { select: { id: true } } },
+      orderBy: { sentAt: 'asc' },
+      // Nadie escribe cincuenta mensajes entre dos vueltas del monitor. Si
+      // pasara, la siguiente vuelta trae el resto.
+      take: 50,
+    });
+
+    return filas.map((m) => ({ ...m, attachmentId: m.attachment?.id ?? null }));
+  },
+
   async createOutboundMessage({ conversationId, body, userId }) {
     try {
       // Se calcula ANTES de la transacción: es una lectura de configuración

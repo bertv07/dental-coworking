@@ -1309,6 +1309,18 @@ export interface DataRepository {
   /** Suma uno al contador de uso. Ordena la lista por lo que de verdad se usa. */
   registerTemplateUse(id: string): Promise<void>;
   getConversationMessages(conversationId: string): Promise<WhatsAppMessage[]>;
+
+  /**
+   * Los mensajes de un hilo POSTERIORES a un instante dado.
+   *
+   * Es lo que consulta el monitor cada pocos segundos para enterarse de que
+   * el paciente escribió, sin volver a traerse las doscientas líneas del
+   * hilo entero en cada vuelta.
+   */
+  getConversationMessagesSince(
+    conversationId: string,
+    since: Date,
+  ): Promise<WhatsAppMessage[]>;
   /**
    * Registra un mensaje SALIENTE escrito por un humano desde el panel.
    *

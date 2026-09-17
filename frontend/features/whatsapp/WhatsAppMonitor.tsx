@@ -1,6 +1,14 @@
 'use client';
 
-import { Fragment, useEffect, useRef, useState, useTransition, useOptimistic } from 'react';
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useTransition,
+  useOptimistic,
+} from 'react';
 import type {
   ConversationListItem,
   MessageTemplate,
@@ -197,21 +205,63 @@ export function WhatsAppMonitor({
   const [adjunto, setAdjunto] = useState<File | null>(null);
   const adjuntoRef = useRef<HTMLInputElement>(null);
 
-  /*
-   * El hilo se abre SIEMPRE por el final, como WhatsApp.
+  /* =====================================================================
+   *  El hilo se abre SIEMPRE por el final, como WhatsApp
+   * =====================================================================
+   *  Antes arrancaba arriba del todo: al entrar en un chat de hace unos días
+   *  se veía la conversación vieja y lo que el paciente acababa de escribir
+   *  quedaba debajo del scroll. Recepción daba el chat por no contestado.
    *
-   * Sin esto el panel arrancaba arriba del todo: al entrar en un chat de hace
-   * unos días se veía la conversación vieja y lo que el paciente acababa de
-   * escribir quedaba debajo del scroll, invisible salvo que a alguien se le
-   * ocurriera bajar. Recepción daba el chat por no contestado.
-   *
-   * La dependencia es `messages`, no `selectedId`: así también baja al enviar
-   * una respuesta, que es cuando el mensaje nuevo aparece al final.
-   */
+   *  Subir a leer atrás sí es cosa de quien mira; bajar no debería serlo.
+   * ===================================================================== */
   const hiloRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+
+  function alFondo() {
     const hilo = hiloRef.current;
     if (hilo) hilo.scrollTop = hilo.scrollHeight;
+  }
+
+  /*
+   * `useLayoutEffect` y no `useEffect`: coloca el scroll ANTES de pintar, así
+   * no se ve el salto desde arriba. Depende de `selectedId`, no de los
+   * mensajes: cambiar de chat siempre lleva al final, sin excepción.
+   */
+  useLayoutEffect(alFondo, [selectedId]);
+
+  /*
+   * ¿Estaba mirando el final cuando llegó lo nuevo?
+   *
+   * Hace falta para el sondeo: si recepción subió a releer algo de la semana
+   * pasada y entra un mensaje, arrastrarla al fondo le quitaría de delante lo
+   * que está leyendo. Se baja sólo cuando ya estaba abajo —o casi, de ahí el
+   * margen de 80px, que cubre el rebote del scroll y media burbuja—.
+   */
+  const estabaAlFondo = useRef(true);
+  function recordarPosicion() {
+    const hilo = hiloRef.current;
+    if (hilo) {
+      estabaAlFondo.current = hilo.scrollHeight - hilo.scrollTop - hilo.clientHeight < 80;
+    }
+  }
+
+  useEffect(() => {
+    if (estabaAlFondo.current) alFondo();
+  }, [messages]);
+
+  /*
+   * Las fotos llegan después del texto y empujan el hilo hacia abajo: si no
+   * se vuelve a bajar al cargarlas, el último mensaje se sale de la pantalla
+   * justo después de haberlo colocado bien.
+   */
+  useEffect(() => {
+    const hilo = hiloRef.current;
+    if (!hilo) return;
+    const imagenes = Array.from(hilo.querySelectorAll('img'));
+    const alCargar = () => {
+      if (estabaAlFondo.current) alFondo();
+    };
+    imagenes.forEach((img) => img.addEventListener('load', alCargar));
+    return () => imagenes.forEach((img) => img.removeEventListener('load', alCargar));
   }, [messages]);
   const [sendWarning, setSendWarning] = useState<string | null>(null);
 
@@ -279,8 +329,18 @@ export function WhatsAppMonitor({
    * la Server Action falla. Sin esto, el interruptor se quedaría "pegado"
    * durante el viaje al servidor y daría sensación de que no respondió.
    */
+  /*
+   * La lista VIVE, no es el prop tal cual.
+   *
+   * El sondeo la reemplaza cada pocos segundos para que un chat nuevo suba
+   * arriba y los avisos cambien sin recargar. El prop sigue mandando cuando
+   * el servidor vuelve a renderizar (buscar, cambiar a archivadas), y eso lo
+   * resuelve el `key` del padre, que remonta el componente entero.
+   */
+  const [listaViva, setListaViva] = useState(conversations);
+
   const [optimisticConversations, setOptimisticAi] = useOptimistic(
-    conversations,
+    listaViva,
     (current, update: { id: string; aiEnabled: boolean }) =>
       current.map((conversation) =>
         conversation.id === update.id
@@ -292,6 +352,95 @@ export function WhatsAppMonitor({
   const selected = optimisticConversations.find(
     (conversation) => conversation.id === selectedId,
   );
+
+  /* =====================================================================
+   *  Que llegue solo: sondeo cada cuatro segundos
+   * =====================================================================
+   *  Los mensajes entrantes los escribe n8n contra la API, en otro proceso.
+   *  El panel no puede "enterarse" de nada salvo preguntando, así que
+   *  pregunta: trae la lista y sólo los mensajes posteriores al último que
+   *  ya tiene.
+   *
+   *  Se para cuando la pestaña está oculta. Recepción deja el panel abierto
+   *  todo el día detrás de otras ventanas; sondear ahí es gastar batería y
+   *  consultas para pintar algo que nadie mira. Al volver, el `visibilitychange`
+   *  dispara una vuelta inmediata, así que lo primero que se ve ya está al día.
+   * ===================================================================== */
+  // En un ref y no en estado: el temporizador necesita leer el valor de AHORA,
+  // y guardarlo en estado volvería a crear el intervalo en cada mensaje.
+  const contextoSondeo = useRef({ selectedId, messages });
+  contextoSondeo.current = { selectedId, messages };
+
+  useEffect(() => {
+    let vivo = true;
+
+    async function consultar() {
+      if (!vivo || document.visibilityState !== 'visible') return;
+
+      const { selectedId: abierto, messages: actuales } = contextoSondeo.current;
+      const ultimo = actuales[actuales.length - 1]?.sentAt;
+
+      const query = new URLSearchParams();
+      if (viendoArchivadas) query.set('archivadas', '1');
+      if (abierto && ultimo) {
+        query.set('conversationId', abierto);
+        query.set('since', ultimo.toISOString());
+      }
+
+      try {
+        const response = await fetch(`/api/whatsapp/updates?${query}`);
+        if (!response.ok || !vivo) return;
+        const payload = await response.json();
+
+        setListaViva(
+          payload.data.conversations.map((c: ConversationListItem) => ({
+            ...c,
+            // Las fechas viajan como string en JSON: hay que rehidratarlas.
+            lastMessageAt: c.lastMessageAt ? new Date(c.lastMessageAt) : null,
+            aiAutoResumeAt: c.aiAutoResumeAt ? new Date(c.aiAutoResumeAt) : null,
+            archivedAt: c.archivedAt ? new Date(c.archivedAt) : null,
+          })),
+        );
+
+        if (payload.data.messages.length === 0) return;
+
+        setMessages((previos) => {
+          /*
+           * Se comprueba que el chat NO haya cambiado mientras viajaba la
+           * respuesta: si recepción saltó a otro hilo en ese medio segundo,
+           * estos mensajes son del anterior y meterlos ahí mezclaría dos
+           * conversaciones en pantalla.
+           */
+          if (contextoSondeo.current.selectedId !== abierto) return previos;
+
+          // Por id, no por posición: el mensaje que acabamos de enviar ya
+          // puede estar puesto, y el sondeo lo devolvería otra vez.
+          const yaEstan = new Set(previos.map((m) => m.id));
+          const nuevos = payload.data.messages
+            .filter((m: WhatsAppMessage) => !yaEstan.has(m.id))
+            .map((m: WhatsAppMessage) => ({ ...m, sentAt: new Date(m.sentAt) }));
+
+          return nuevos.length > 0 ? [...previos, ...nuevos] : previos;
+        });
+      } catch {
+        /*
+         * Se traga a propósito: un fallo de red en una vuelta no es nada que
+         * contarle a recepción —la siguiente llega en cuatro segundos—, y un
+         * cartel de error parpadeando cada vez que el wifi tose haría dudar
+         * de mensajes que sí están bien.
+         */
+      }
+    }
+
+    const intervalo = setInterval(consultar, 4000);
+    document.addEventListener('visibilitychange', consultar);
+
+    return () => {
+      vivo = false;
+      clearInterval(intervalo);
+      document.removeEventListener('visibilitychange', consultar);
+    };
+  }, [viendoArchivadas]);
 
   /** Carga los mensajes del chat elegido. */
   function handleSelect(conversationId: string) {
@@ -656,7 +805,7 @@ export function WhatsAppMonitor({
             </div>
 
             {/* Historial de mensajes */}
-            <div className="chat__messages" ref={hiloRef}>
+            <div className="chat__messages" ref={hiloRef} onScroll={recordarPosicion}>
               {messages.length === 0 ? (
                 <EmptyState>Sin mensajes en esta conversación.</EmptyState>
               ) : (

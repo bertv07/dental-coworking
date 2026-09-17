@@ -1509,6 +1509,12 @@ export const mockRepository: DataRepository = {
     ) as WhatsAppMessage[];
   },
 
+  async getConversationMessagesSince(conversationId, since) {
+    return messages
+      .filter((m) => m.conversationId === conversationId && m.sentAt > since)
+      .sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime()) as WhatsAppMessage[];
+  },
+
   async createOutboundMessage() {
     // El envío de mensajes sólo tiene sentido contra la base de datos real.
     return { ok: false, reason: 'NOT_FOUND' };
