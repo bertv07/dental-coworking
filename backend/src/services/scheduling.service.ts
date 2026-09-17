@@ -501,6 +501,24 @@ export async function buscarDisponibilidad(params: {
   const paso = ajustes.slotMinutes || SLOT_GRANULARITY_MINUTES;
 
   /*
+   * Descanso del mediodía. La jornada de la clínica es PARTIDA: mañana y
+   * tarde, y entre medias no hay nadie.
+   *
+   * Sin esto el bot ofrecía las 12:30 —dentro de «8:00 a 18:00»— y el
+   * paciente se presentaba a una puerta cerrada. Se exigen los dos valores:
+   * un inicio sin fin no define un descanso, y aplicarlo a medias sería peor
+   * que no aplicarlo.
+   */
+  const descanso =
+    ajustes.breakStartMinute !== null &&
+    ajustes.breakStartMinute !== undefined &&
+    ajustes.breakEndMinute !== null &&
+    ajustes.breakEndMinute !== undefined &&
+    ajustes.breakEndMinute > ajustes.breakStartMinute
+      ? { desde: ajustes.breakStartMinute, hasta: ajustes.breakEndMinute }
+      : null;
+
+  /*
    * EL HORARIO DE CADA ODONTÓLOGA, que es lo que faltaba del todo.
    *
    * Este servicio sólo miraba las citas ya ocupadas, así que daba por
@@ -550,6 +568,13 @@ export async function buscarDisponibilidad(params: {
     // La cita debe caber entera dentro del horario de atención.
     const endMinute = minutoEnLaClinica(endsAt, zona);
     if (endMinute > cierra || endMinute <= minute) break;
+
+    /*
+     * Y no puede pisar el descanso: ni empezar dentro, ni acabar dentro, ni
+     * cruzarlo de lado a lado. Una limpieza de 45 minutos a las 11:45 termina
+     * a las 12:30, con media consulta en la hora en que no hay nadie.
+     */
+    if (descanso && minute < descanso.hasta && endMinute > descanso.desde) continue;
 
     for (const dentist of candidateDentists) {
       if (slots.length >= params.maxSlots) break;

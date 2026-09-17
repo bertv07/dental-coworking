@@ -1353,6 +1353,14 @@ model ClinicSettings {
   /// Granularidad de la agenda en minutos.
   slotMinutes Int @default(30)
 
+  /// Descanso del mediodía, en minutos desde medianoche. La jornada de la
+  /// clínica es partida —mañana y tarde— y entre medias no se atiende.
+  ///
+  /// Nulo = jornada corrida. Se guardan los dos o ninguno: un inicio sin
+  /// fin no define nada y el servicio lo ignoraría en silencio.
+  breakStartMinute Int? // 720 = 12:00
+  breakEndMinute   Int? // 780 = 13:00
+
   /// Moneda en la que se MUESTRAN los importes por defecto: "USD" o "VES".
   displayCurrency String @default("USD")
 

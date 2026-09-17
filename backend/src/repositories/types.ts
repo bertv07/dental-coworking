@@ -238,6 +238,12 @@ export interface ClinicSettingsInput {
   openingMinute: number;
   closingMinute: number;
   slotMinutes: number;
+  /**
+   * Descanso del mediodía. La jornada es PARTIDA: mañana y tarde. `null` en
+   * ambos = jornada corrida.
+   */
+  breakStartMinute: number | null;
+  breakEndMinute: number | null;
   displayCurrency: string;
   preferredRateSource: string;
   /**

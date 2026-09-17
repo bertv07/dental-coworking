@@ -653,6 +653,25 @@ export const clinicSettingsSchema = z
       .transform((v) => Number(v.slice(0, 2)) * 60 + Number(v.slice(3, 5))),
 
     slotMinutes: z.coerce.number().int().min(5).max(120),
+    /**
+     * Descanso del mediodía, en HH:MM. Vacío = jornada corrida.
+     *
+     * Se exigen los DOS o ninguno: un inicio sin fin no define un descanso, y
+     * el buscador de huecos lo ignoraría sin decir nada — la clínica creería
+     * tener el mediodía cerrado y el bot seguiría ofreciéndolo.
+     */
+    breakStartTime: z
+      .union([z.string().regex(/^\d{2}:\d{2}$/, 'Formato HH:MM'), z.literal('')])
+      .optional()
+      .transform((v) => (v ? Number(v.slice(0, 2)) * 60 + Number(v.slice(3, 5)) : null)),
+    breakEndTime: z
+      .union([z.string().regex(/^\d{2}:\d{2}$/, 'Formato HH:MM'), z.literal('')])
+      .optional()
+      .transform((v) => (v ? Number(v.slice(0, 2)) * 60 + Number(v.slice(3, 5)) : null)),
+    breakEndMinute: z
+      .union([z.coerce.number().int().min(0).max(1439), z.literal('')])
+      .optional()
+      .transform((v) => (typeof v === 'number' ? v : null)),
 
     /** Moneda en la que se muestran los importes por defecto. */
     displayCurrency: z.enum(['USD', 'VES']),
@@ -674,7 +693,24 @@ export const clinicSettingsSchema = z
   .refine((d) => d.closingTime > d.openingTime, {
     message: 'La hora de cierre debe ser posterior a la de apertura',
     path: ['closingTime'],
-  });
+  })
+  // Los dos o ninguno: medio descanso no es un descanso.
+  .refine((d) => (d.breakStartTime === null) === (d.breakEndTime === null), {
+    message: 'Indica el inicio y el fin del descanso, o deja los dos vacíos',
+    path: ['breakEndTime'],
+  })
+  .refine(
+    (d) =>
+      d.breakStartTime === null ||
+      d.breakEndTime === null ||
+      (d.breakEndTime > d.breakStartTime &&
+        d.breakStartTime >= d.openingTime &&
+        d.breakEndTime <= d.closingTime),
+    {
+      message: 'El descanso tiene que caer dentro de la jornada y terminar después de empezar',
+      path: ['breakEndTime'],
+    },
+  );
 
 export type ClinicSettingsFormInput = z.infer<typeof clinicSettingsSchema>;
 

@@ -230,6 +230,8 @@ const mockSettings = {
   openingMinute: 480,
   closingMinute: 1080,
   slotMinutes: 30,
+  breakStartMinute: null,
+  breakEndMinute: null,
   displayCurrency: 'USD',
   preferredRateSource: 'BCV',
   aiAutoResumeHours: 4,

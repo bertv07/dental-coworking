@@ -1545,6 +1545,8 @@ export async function updateClinicSettingsAction(input: unknown): Promise<Action
           openingMinute: data.openingTime,
           closingMinute: data.closingTime,
           slotMinutes: data.slotMinutes,
+          breakStartMinute: data.breakStartTime,
+          breakEndMinute: data.breakEndTime,
           displayCurrency: data.displayCurrency,
           preferredRateSource: data.preferredRateSource,
           aiAutoResumeHours: data.aiAutoResumeHours,

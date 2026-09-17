@@ -62,9 +62,18 @@ export const safeTextSchema = (maxLength: number) =>
     });
 
 /** Nombre de persona. Límite generoso: los nombres compuestos son largos. */
-export const personNameSchema = safeTextSchema(120).pipe(
-  z.string().min(2, 'El nombre debe tener al menos 2 caracteres'),
-);
+export const personNameSchema = safeTextSchema(120)
+  /*
+   * Los espacios de más se colapsan a uno.
+   *
+   * En la base había «Emilmar  Palma Faneite» con doble espacio, y eso rompe
+   * todo lo que cruce por nombre: búsquedas, avisos del bot y cualquier
+   * comparación. Nadie lo ve en pantalla —HTML colapsa los espacios— así que
+   * se arrastra durante meses. Se limpia al guardar, que es el único momento
+   * en que se puede.
+   */
+  .transform((v) => v.replace(/\s+/g, ' ').trim())
+  .pipe(z.string().min(2, 'El nombre debe tener al menos 2 caracteres'));
 
 /** Email normalizado a minúsculas para que la unicidad funcione de verdad. */
 export const emailSchema = z
