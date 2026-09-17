@@ -76,9 +76,17 @@ export const RATE_SOURCE_LABEL: Record<RateSource, string> = {
  * Existe para no repetir el ternario por siete pantallas: cada vez que se
  * añade una fuente habría que acordarse de las siete, y la que se olvida
  * sigue cobrando con la tasa vieja sin avisar.
+ *
+ * EL RESPALDO ES EURO, NO BCV. La clínica lista en dólares y cobra en
+ * bolívares al euro oficial; ésa es la regla del negocio, no una preferencia
+ * que se pueda perder. Con el respaldo anterior, un ajuste sin valor o con
+ * uno viejo hacía cobrar en silencio a la tasa BCV —unos cuantos bolívares
+ * por dólar de diferencia en cada factura—. Coincide con el `@default` de
+ * `ClinicSettings.preferredRateSource`, para que la base y el código no
+ * puedan discrepar.
  */
 export function resolveRateSource(valor: string | null | undefined): RateSource {
-  return valor === 'PARALELO' || valor === 'EURO' ? valor : 'BCV';
+  return valor === 'PARALELO' || valor === 'BCV' ? valor : 'EURO';
 }
 
 /** No se vuelve a consultar la API si la última lectura tiene menos de esto. */

@@ -148,10 +148,13 @@ const ROLE_LEVEL: Record<UserRole, number> = {
 export function Sidebar({
   userRole,
   pendingChats = 0,
+  pendingTariffs = 0,
   rateLabel,
 }: {
   userRole: UserRole;
   pendingChats?: number;
+  /** Tarifas propuestas por odontólogos que nadie ha revisado todavía. */
+  pendingTariffs?: number;
   /** "BCV (dólar oficial)", "Euro oficial (BCV)"… — la tasa real de la clínica. */
   rateLabel: string;
 }) {
@@ -193,7 +196,12 @@ export function Sidebar({
 
               {visibleLinks.map(({ href, label, Icon, badge }) => {
                 const isActive = pathname === href || pathname.startsWith(`${href}/`);
-                const badgeCount = href === '/whatsapp' ? pendingChats : badge;
+                const badgeCount =
+                  href === '/whatsapp'
+                    ? pendingChats
+                    : href === '/tarifas'
+                      ? pendingTariffs
+                      : badge;
 
                 return (
                   <Link

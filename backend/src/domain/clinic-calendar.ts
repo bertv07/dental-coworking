@@ -189,3 +189,23 @@ export function parseDayKey(value: unknown): string | null {
   // cambió el valor, la fecha original no existía.
   return date.toISOString().slice(0, 10) === value ? value : null;
 }
+
+/**
+ * 540 → "9:00 am", 780 → "1:00 pm", 720 → "12:00 m".
+ *
+ * La clínica lee el reloj en formato de 12 horas: «17:00» se entiende, pero
+ * nadie lo dice así en el mostrador, y en la pantalla de horarios chocaba con
+ * los campos de la izquierda —que el navegador SÍ pinta con am/pm— dando la
+ * sensación de que eran dos horas distintas.
+ *
+ * Se construye a mano y no con `Intl` porque `Intl` escribe «a. m.» con
+ * puntos y espacios, que alarga cada etiqueta y descuadra las listas.
+ * Mediodía se marca «m», como se usa en Venezuela.
+ */
+export function minuteToLabel12h(minute: number): string {
+  const h = Math.floor(minute / 60) % 24;
+  const m = String(minute % 60).padStart(2, '0');
+  if (h === 12) return `12:${m} m`;
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${m} ${h < 12 ? 'am' : 'pm'}`;
+}

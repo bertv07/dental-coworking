@@ -11,6 +11,7 @@ import { Modal } from '@/frontend/components/motion';
 import { TextAreaField, FormFooter } from '@/frontend/components/ui/form';
 import { Badge, Card, EmptyState, Notice } from '@/frontend/components/ui/primitives';
 import { IconPlus, IconTrash } from '@/frontend/components/ui/icons';
+import { minuteToLabel12h } from '@/backend/domain/clinic-calendar';
 
 /**
  * ===========================================================================
@@ -67,7 +68,15 @@ const STATUS: Record<
   REJECTED: { label: 'Rechazada', tone: 'danger' },
 };
 
-/** 540 → "09:00". El horario se guarda en minutos desde medianoche. */
+/**
+ * 540 → "09:00". SÓLO para el `value` de los `<input type="time">`: ese es el
+ * formato que exige el HTML. Lo que el usuario LEE lo pinta el navegador en
+ * su propio formato (aquí, am/pm).
+ *
+ * Para texto que se muestre tal cual, usar `minuteToLabel12h`: en el resumen
+ * de la semana se escapaba el formato de 24 horas y el horario parecía otro
+ * al salir de la edición.
+ */
 function minuteToLabel(minute: number): string {
   return `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 }
@@ -86,7 +95,7 @@ function formatWeek(blocks: ScheduleBlock[]): string {
       const horas = blocks
         .filter((b) => b.weekday === day.value)
         .sort((a, b) => a.startMinute - b.startMinute)
-        .map((b) => `${minuteToLabel(b.startMinute)}–${minuteToLabel(b.endMinute)}`)
+        .map((b) => `${minuteToLabel12h(b.startMinute)}–${minuteToLabel12h(b.endMinute)}`)
         .join(', ');
       return `${day.label}: ${horas}`;
     })

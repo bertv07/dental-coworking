@@ -1105,10 +1105,21 @@ export async function saveDentistTariffAction(input: unknown): Promise<ActionRes
   }
 }
 
-/** Aprueba o rechaza una propuesta. Sólo el administrador. */
+/**
+ * Aprueba o rechaza una propuesta de tarifa.
+ *
+ * TAMBIÉN RECEPCIÓN, no sólo el administrador. Es quien cotiza y factura con
+ * esos precios, así que es la primera interesada en que el de la doctora
+ * esté vigente; dejándolo sólo en manos del administrador las propuestas se
+ * quedaban semanas sin revisar y el mostrador seguía cobrando el de lista.
+ *
+ * Lo que recepción sigue sin ver es el REPARTO —qué porcentaje se queda cada
+ * quien—: eso se negocia entre la clínica y el odontólogo, y su pantalla
+ * construye las filas sin ese campo.
+ */
 export async function reviewDentistTariffAction(input: unknown): Promise<ActionResult> {
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: tariffReviewSchema,
     input,
     revalidate: '/tarifas',

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
 
 /**
  * ===========================================================================
@@ -182,3 +183,28 @@ export const dateRangeSchema = z
     (data) => data.to.getTime() - data.from.getTime() <= 366 * 24 * 60 * 60 * 1000,
     { message: 'El rango no puede exceder un año', path: ['to'] },
   );
+
+/**
+ * `<input type="datetime-local">` entrega "2026-08-15T14:00" SIN zona: es una
+ * hora de RELOJ DE PARED, no un instante. Esto la ancla a la zona de la
+ * clínica.
+ *
+ * Antes cada formulario se inventaba el desfase a mano y no coincidían: el
+ * alta desde recepción escribía "-05:00" (Bogotá) mientras el resto del panel
+ * pintaba en Caracas. Resultado: recepción escribía las 11:00, se guardaban
+ * las 16:00 UTC y la agenda las mostraba a las 12:00. Una hora de más en cada
+ * cita que daba el mostrador.
+ *
+ * `clinicWallClockToInstant` resuelve la zona con tzdata en vez de con un
+ * número fijo, así que no hay dos sitios que puedan volver a discrepar.
+ */
+export const wallClockDateTimeSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, 'Fecha y hora requeridas')
+  .transform((value) => {
+    // El `regex` de arriba ya garantiza la forma, pero TypeScript no lo sabe.
+    const dayKey = value.slice(0, 10);
+    const horas = Number(value.slice(11, 13));
+    const minutos = Number(value.slice(14, 16));
+    return clinicWallClockToInstant(dayKey, horas * 60 + minutos);
+  });

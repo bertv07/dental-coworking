@@ -27,6 +27,13 @@ export interface ActionResult {
   ok: boolean;
   error?: string;
   field?: string;
+  /**
+   * Id del medicamento guardado. Lo necesita la pantalla para subir la foto
+   * del que ACABA de crear: antes sólo se podía poner foto reabriendo una
+   * ficha ya existente, así que quien daba de alta un medicamento con su
+   * foto se quedaba sin ella sin que nada se lo dijera.
+   */
+  id?: string;
 }
 
 const medicamentoSchema = z.object({
@@ -90,7 +97,7 @@ export async function saveMedicationAction(
   if (!result.ok) return { ok: false, error: 'No se pudo guardar el medicamento.' };
 
   revalidatePath('/medicamentos');
-  return { ok: true };
+  return { ok: true, id: result.data.id };
 }
 
 export async function deleteMedicationAction(id: string): Promise<ActionResult> {

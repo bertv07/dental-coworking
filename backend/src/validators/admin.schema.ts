@@ -7,6 +7,7 @@ import {
   safeTextSchema,
   centsSchema,
   percentSchema,
+  wallClockDateTimeSchema,
 } from '@/backend/validators/common';
 import { PASSWORD_POLICY } from '@/backend/auth/password';
 
@@ -248,18 +249,8 @@ export const appointmentFormSchema = z.object({
   roomId: cuidSchema,
   treatmentId: cuidSchema,
 
-  /**
-   * `datetime-local` del navegador entrega "2026-08-15T14:00" SIN zona.
-   * Se interpreta en la zona de la clínica, no en la del servidor: si no,
-   * un despliegue en otra región desplazaría todas las citas varias horas.
-   */
-  startsAt: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, 'Fecha y hora requeridas')
-    // -05:00 = America/Bogota. Fijo a propósito: la clínica es una sola y
-    // está en una única zona. Si algún día hay sedes en varias, esto pasa a
-    // ser un campo de la sede, no una constante.
-    .transform((value) => new Date(`${value}:00-05:00`)),
+  /** Hora de reloj de pared de la clínica. Ver `wallClockDateTimeSchema`. */
+  startsAt: wallClockDateTimeSchema,
 
   notes: z
     .union([safeTextSchema(500), z.literal('')])
@@ -359,12 +350,8 @@ export const ownAppointmentSchema = z.object({
     .toUpperCase()
     .regex(/^[A-Z0-9_]{2,40}$/, 'Elige un tratamiento'),
 
-  /** `datetime-local` del navegador: "2026-08-20T14:00", sin zona. */
-  startsAt: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/, 'Fecha y hora requeridas')
-    // -04:00 = America/Caracas. Igual que en el alta desde recepción.
-    .transform((value) => new Date(`${value}:00-04:00`)),
+  /** Hora de reloj de pared de la clínica. Ver `wallClockDateTimeSchema`. */
+  startsAt: wallClockDateTimeSchema,
 
   notes: z
     .union([safeTextSchema(500), z.literal('')])

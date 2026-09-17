@@ -6,6 +6,7 @@ import { Card, Notice } from '@/frontend/components/ui/primitives';
 import { TariffsManager } from '@/frontend/features/admin/TariffsManager';
 import { TariffList } from '@/frontend/features/admin/TariffList';
 import { ListPricesPanel } from '@/frontend/features/admin/ListPricesPanel';
+import { PendingTariffs } from '@/frontend/features/admin/PendingTariffs';
 
 /**
  * ===========================================================================
@@ -42,8 +43,10 @@ export default async function TariffsPage() {
 
   // --- Recepción: los precios aprobados, para poder cotizar ---------------
   if (user.role === 'ASSISTANT') {
-    const [agreements, treatments] = await Promise.all([
+    const [agreements, pendientesRecepcion, treatments] = await Promise.all([
       repository.listDentistTreatments({ status: 'APPROVED' }),
+      // Recepción también aprueba: es quien cotiza con estos precios.
+      repository.listDentistTreatments({ status: 'PENDING' }),
       repository.listTreatments(),
     ]);
 
@@ -64,16 +67,44 @@ export default async function TariffsPage() {
         <FadeIn>
           <PageHead
             title="Tarifas"
-            subtitle="Precios pactados por odontólogo, para cotizar y facturar"
+            subtitle={
+              pendientesRecepcion.length > 0
+                ? `${pendientesRecepcion.length} propuesta(s) esperando tu aprobación`
+                : 'Precios pactados por odontólogo, para cotizar y facturar'
+            }
           />
         </FadeIn>
 
         <FadeIn delay={0.06}>
           <Notice tone="info">
-            Sólo aparecen las tarifas <strong>ya aprobadas</strong>: son las que se
-            cobran de verdad. Lo que no esté aquí se cobra al precio de lista.
+            Abajo aparecen las tarifas <strong>ya aprobadas</strong>: son las que se
+            cobran de verdad. Lo que no esté ahí se cobra al precio de lista.
           </Notice>
         </FadeIn>
+
+        {/*
+          La bandeja va ARRIBA del todo y sólo cuando hay algo: es la única
+          parte de esta pantalla que pide una decisión, y mientras no se tome
+          se está facturando un precio que el odontólogo ya no quiere cobrar.
+        */}
+        {pendientesRecepcion.length > 0 && (
+          <FadeIn delay={0.08}>
+            <PendingTariffs
+              /*
+               * Campo a campo, sin `customCommissionPercent`: el reparto no
+               * es asunto del mostrador y no debe viajar al navegador.
+               */
+              tariffs={pendientesRecepcion.map((a) => ({
+                id: a.id,
+                dentistName: a.dentistName,
+                treatmentName: a.treatmentName,
+                listPriceCents: a.treatmentBasePriceCents,
+                proposedPriceCents: a.customPriceCents,
+                notes: a.reviewNotes,
+              }))}
+            />
+          </FadeIn>
+        )}
 
         <FadeIn delay={0.1}>
           {/*

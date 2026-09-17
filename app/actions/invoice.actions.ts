@@ -389,15 +389,17 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
 
   if (paidAt) {
     /*
-     * COBRO ATRASADO: se exige la tasa de ESE día.
+     * COBRO ATRASADO: se usa la tasa de ESE día.
      *
-     * No se pide a la API porque DolarAPI no tiene histórico —`?fecha=` se
-     * ignora y responde la de hoy—, así que la única fuente fiable de un día
-     * pasado es lo que el sistema guardó ese día.
+     * `getRateAsOf` la busca primero en lo que el sistema guardó ese día y,
+     * si no está, en el histórico oficial de DolarAPI, que sí publica día a
+     * día; de paso la guarda para la próxima. La pantalla ya se la enseñó a
+     * recepción al elegir la fecha.
      *
-     * Y si no hay, NO se coge una cercana: la tasa se mueve casi a diario, y
-     * una aproximada escribe en la factura unos bolívares que nunca entraron
-     * en la gaveta. Se le pide a quien cobra, que ese día sí la sabe.
+     * Si no hay ninguna, NO se coge una cercana: la tasa se mueve casi a
+     * diario, y una aproximada escribe en la factura unos bolívares que
+     * nunca entraron en la gaveta. Se le pide a quien cobra, que ese día sí
+     * la sabe.
      */
     const delDia = await getRateAsOf(source, paidAt);
 
@@ -661,4 +663,63 @@ export async function applyPromotionAction(input: unknown): Promise<ActionResult
 
   revalidatePath(`/facturas/${parsed.data.invoiceId}`);
   return { ok: true, invoiceId: parsed.data.invoiceId };
+}
+
+/* ===========================================================================
+ *  Consultar la tasa de un día pasado ANTES de cobrar
+ * ===========================================================================
+ *  Sin esto, la única forma de enterarse de que faltaba la tasa era mandar
+ *  el cobro y que lo rebotara. Ahora, al elegir la fecha, recepción ve la
+ *  tasa que se va a usar —o el aviso de que hay que escribirla— antes de
+ *  tocar nada.
+ *
+ *  Es SÓLO informativa: el cobro vuelve a leer la tasa en el servidor. Que
+ *  se enseñe aquí no la convierte en un dato en el que se pueda confiar.
+ * =========================================================================== */
+
+export interface TasaDelDiaConsulta {
+  /** Tasa oficial de ese día. `null` → hay que escribirla a mano. */
+  rate: number | null;
+  /** 'EURO', 'BCV'… La fuente configurada en la clínica. */
+  source: string;
+  /** Día del que es la tasa, ya en texto: "1 de septiembre de 2026". */
+  fechaLabel: string;
+  /** Referencia más cercana cuando no hay la del día. Nunca se cobra con ella. */
+  aproximada: { rate: number; fechaLabel: string } | null;
+}
+
+export async function consultarTasaDelDiaAction(
+  fecha: unknown,
+): Promise<TasaDelDiaConsulta | null> {
+  const auth = await autorizar();
+  if (!auth.ok) return null;
+
+  const dia = typeof fecha === 'string' ? fecha.trim() : '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) return null;
+
+  const settings = await repository.getClinicSettings();
+  const source = resolveRateSource(settings.preferredRateSource);
+
+  // Mediodía: así la conversión a instante no cae en el borde del día.
+  const instante = clinicWallClockToInstant(dia, 12 * 60);
+  if (dia > clinicDayKey(new Date())) return null;
+
+  const etiqueta = (d: Date) =>
+    new Intl.DateTimeFormat('es-VE', {
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+      timeZone: 'America/Caracas',
+    }).format(d);
+
+  const delDia = await getRateAsOf(source, instante);
+
+  return {
+    rate: delDia.rate?.rate ?? null,
+    source,
+    fechaLabel: etiqueta(instante),
+    aproximada: delDia.aproximada
+      ? { rate: delDia.aproximada.rate, fechaLabel: etiqueta(delDia.aproximada.publishedAt) }
+      : null,
+  };
 }

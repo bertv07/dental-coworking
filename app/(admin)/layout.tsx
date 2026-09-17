@@ -84,6 +84,21 @@ export default async function AdminLayout({ children }: { children: ReactNode })
     (conversation) => conversation.needsHumanAttention,
   ).length;
 
+  /*
+   * Badge de tarifas esperando aprobación.
+   *
+   * Una tarifa propuesta y no revisada es dinero que no se está cobrando: la
+   * odontóloga cree que su precio nuevo ya está y el mostrador sigue
+   * facturando el de lista. Antes sólo se veía entrando a /tarifas a mirar,
+   * así que se quedaban ahí semanas.
+   *
+   * Es de quien aprueba (recepción y administración), no del odontólogo: a
+   * él ya se le dice en su propia pantalla que está pendiente.
+   */
+  const pendingTariffs = isDentist
+    ? 0
+    : (await repository.listDentistTreatments({ status: 'PENDING' })).length;
+
   // Para el pie del sidebar: "se cobra a tasa X", NO siempre BCV — aquí es
   // normal poner los precios en dólares y cobrar a tasa EURO.
   const settings = await repository.getClinicSettings();
@@ -91,7 +106,12 @@ export default async function AdminLayout({ children }: { children: ReactNode })
 
   return (
     <AppShell
-      sidebar={<Sidebar userRole={user.role} pendingChats={pendingChats} rateLabel={rateLabel} />}
+      sidebar={<Sidebar
+          userRole={user.role}
+          pendingChats={pendingChats}
+          pendingTariffs={pendingTariffs}
+          rateLabel={rateLabel}
+        />}
     >
       <Topbar
         userName={user.name}

@@ -98,68 +98,59 @@ export function ExchangeRatePanel({
       )}
 
       <div className="stat-grid">
-        {/* --- BCV: la tasa con la que factura la clínica --- */}
-        <div className="rate-card rate-card--primary">
-          <div className="rate-card__label">Tasa BCV (oficial)</div>
-          <div className="rate-card__value">
-            {bcv ? bcv.rate.toLocaleString('es-VE', { minimumFractionDigits: 4 }) : '—'}
-          </div>
-          <div className="rate-card__meta">
-            Bs por dólar
-            {bcv && <> · publicada {formatDateTime(bcv.publishedAt)}</>}
-          </div>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            style={{ marginTop: '1rem', background: 'rgba(255,255,255,0.15)', color: '#fff', borderColor: 'rgba(255,255,255,0.3)' }}
-            onClick={() => refresh('BCV')}
-            disabled={isPending}
-          >
-            <IconRefresh size={14} /> {isPending ? 'Consultando…' : 'Actualizar'}
-          </button>
-        </div>
+        {/*
+          LA TARJETA AZUL ES LA QUE SE COBRA, no siempre la del BCV.
 
-        {/* --- Paralelo: sólo referencia, la clínica no factura con esta --- */}
-        <div className="rate-card">
-          <div className="rate-card__label muted">Paralelo (referencia)</div>
-          <div className="rate-card__value">
-            {paralelo ? paralelo.rate.toLocaleString('es-VE', { minimumFractionDigits: 4 }) : '—'}
-          </div>
-          <div className="rate-card__meta">
-            Bs por dólar
-            {paralelo && <> · {formatDateTime(paralelo.publishedAt)}</>}
-          </div>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            style={{ marginTop: '1rem' }}
-            onClick={() => refresh('PARALELO')}
-            disabled={isPending}
-          >
-            <IconRefresh size={14} /> Actualizar
-          </button>
-        </div>
-
-        {/* --- Euro oficial: la clínica cobra referenciada a esta ------- */}
-        <div className="rate-card">
-          <div className="rate-card__label muted">Euro oficial (BCV)</div>
-          <div className="rate-card__value">
-            {euro ? euro.rate.toLocaleString('es-VE', { minimumFractionDigits: 4 }) : '—'}
-          </div>
-          <div className="rate-card__meta">
-            Bs por euro
-            {euro && <> · {formatDateTime(euro.publishedAt)}</>}
-          </div>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            style={{ marginTop: '1rem' }}
-            onClick={() => refresh('EURO')}
-            disabled={isPending}
-          >
-            <IconRefresh size={14} /> Actualizar
-          </button>
-        </div>
+          Antes el resaltado estaba fijo en BCV mientras la clínica cobraba al
+          euro: la pantalla decía en grande una tasa con la que no se factura
+          nada. Ahora el azul lo lleva `activeSource`, así que mirar de reojo
+          basta para saber con qué se está cobrando hoy.
+        */}
+        {([
+          { fuente: 'BCV' as const, titulo: 'Tasa BCV (oficial)', tasa: bcv, unidad: 'Bs por dólar' },
+          { fuente: 'PARALELO' as const, titulo: 'Paralelo (referencia)', tasa: paralelo, unidad: 'Bs por dólar' },
+          { fuente: 'EURO' as const, titulo: 'Euro oficial (BCV)', tasa: euro, unidad: 'Bs por euro' },
+        ]).map(({ fuente, titulo, tasa, unidad }) => {
+          const esActiva = fuente === activeSource;
+          return (
+            <div
+              key={fuente}
+              className={`rate-card ${esActiva ? 'rate-card--primary' : ''}`}
+            >
+              <div className={`rate-card__label ${esActiva ? '' : 'muted'}`}>
+                {titulo}
+                {esActiva && ' · en uso'}
+              </div>
+              <div className="rate-card__value">
+                {tasa ? tasa.rate.toLocaleString('es-VE', { minimumFractionDigits: 4 }) : '—'}
+              </div>
+              <div className="rate-card__meta">
+                {unidad}
+                {tasa && <> · publicada {formatDateTime(tasa.publishedAt)}</>}
+              </div>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                /* Sobre el azul, el botón fantasma no se lee: se le da borde
+                   y texto claros sólo en la tarjeta activa. */
+                style={
+                  esActiva
+                    ? {
+                        marginTop: '1rem',
+                        background: 'rgba(255,255,255,0.15)',
+                        color: '#fff',
+                        borderColor: 'rgba(255,255,255,0.3)',
+                      }
+                    : { marginTop: '1rem' }
+                }
+                onClick={() => refresh(fuente)}
+                disabled={isPending}
+              >
+                <IconRefresh size={14} /> {isPending ? 'Consultando…' : 'Actualizar'}
+              </button>
+            </div>
+          );
+        })}
 
         <div className="rate-card">
           <div className="rate-card__label muted">Brecha cambiaria</div>

@@ -80,12 +80,18 @@ export function MedicationsManager({ medications }: { medications: Medication[] 
       /*
        * La foto va en un segundo paso, y sólo si se eligió una.
        *
+       * El id sale de la respuesta, no de `editando`: al dar de alta un
+       * medicamento nuevo `editando` es null, y con la condición anterior la
+       * foto elegida se tiraba en silencio. Ahora vale igual para alta que
+       * para edición.
+       *
        * Si falla, la ficha YA está guardada: se avisa y se queda sin foto, en
        * vez de perder también el nombre y la pauta que acaban de teclear.
        */
-      if (foto && editando?.id) {
+      const idGuardado = r.id ?? editando?.id ?? null;
+      if (foto && idGuardado) {
         const subida = new FormData();
-        subida.set('id', editando.id);
+        subida.set('id', idGuardado);
         subida.set('file', foto);
         const img = await uploadMedicationImageAction(subida);
         if (!img.ok) {
@@ -344,13 +350,10 @@ export function MedicationsManager({ medications }: { medications: Medication[] 
               type="file"
               className="input"
               accept="image/png,image/jpeg,image/webp"
-              disabled={!editando}
               onChange={(e) => setFoto(e.target.files?.[0] ?? null)}
             />
             <span className="field__hint">
-              {editando
-                ? 'PNG, JPG o WEBP, hasta 4 MB. Sale en la hoja que se lleva el paciente.'
-                : 'Primero guarda el medicamento; después ábrelo para ponerle la foto.'}
+              PNG, JPG o WEBP, hasta 4 MB. Sale en la hoja que se lleva el paciente.
             </span>
           </div>
 

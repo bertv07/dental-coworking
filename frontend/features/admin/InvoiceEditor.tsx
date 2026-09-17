@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Invoice, InvoiceLine, PaymentMethodOption, Promotion, Treatment } from '@/backend/domain/types';
 import { formatCents, formatBs, centsToBs } from '@/backend/domain/money';
@@ -14,7 +14,9 @@ import {
   deleteInvoicePermanentlyAction,
   applyPromotionAction,
   applyPatientCreditAction,
+  consultarTasaDelDiaAction,
 } from '@/app/actions/invoice.actions';
+import type { TasaDelDiaConsulta } from '@/app/actions/invoice.actions';
 import { Modal } from '@/frontend/components/motion';
 import { Badge, Card, Notice } from '@/frontend/components/ui/primitives';
 import { IconPlus, IconTrash, IconEdit, IconCurrency, IconTag } from '@/frontend/components/ui/icons';
@@ -80,6 +82,41 @@ export function InvoiceEditor({
   // Fecha elegida en «Registrar cobro». Decide si hay que pedir la tasa de
   // ese día: para un cobro de hoy la pone la fuente oficial.
   const [fechaCobro, setFechaCobro] = useState('');
+  /*
+   * La tasa que regía el día elegido, consultada en cuanto se elige.
+   *
+   * Antes recepción escribía el cobro entero, lo mandaba, y sólo entonces se
+   * enteraba de que faltaba la tasa de ese día. Ahora se pregunta al cambiar
+   * la fecha y se enseña arriba: o «la tasa del 1 de septiembre era 968,07 y
+   * es la que se va a usar», o «no la tengo, escríbela». `null` mientras se
+   * consulta o cuando la fecha es la de hoy.
+   */
+  const [tasaDelDia, setTasaDelDia] = useState<TasaDelDiaConsulta | null>(null);
+  const [consultandoTasa, setConsultandoTasa] = useState(false);
+
+  useEffect(() => {
+    if (fechaCobro === '' || fechaCobro === todayKey) {
+      setTasaDelDia(null);
+      return;
+    }
+    /*
+     * `cancelado` evita pintar la respuesta de una fecha que ya no está
+     * elegida: si se cambia el día dos veces seguidas, la primera consulta
+     * puede volver la última y dejar en pantalla una tasa que no es.
+     */
+    let cancelado = false;
+    setConsultandoTasa(true);
+    consultarTasaDelDiaAction(fechaCobro)
+      .then((r) => {
+        if (!cancelado) setTasaDelDia(r);
+      })
+      .finally(() => {
+        if (!cancelado) setConsultandoTasa(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [fechaCobro, todayKey]);
   const [promoOpen, setPromoOpen] = useState(false);
   const [promoElegida, setPromoElegida] = useState('');
   // Se llena cuando "Reversar"/"Borrar" choca con una liquidación ya hecha:
@@ -721,36 +758,77 @@ export function InvoiceEditor({
           </div>
 
           {/*
-            La tasa de un día pasado NO se puede pedir a la API: DolarAPI sólo
-            da la de hoy. Si el sistema la guardó ese día, se usa esa y este
-            campo sobra; si no, hay que escribirla, porque quien cobró ese día
-            sí la sabe —está en el recibo— y el sistema no.
+            COBRO ATRASADO: se enseña la tasa de ESE día antes de cobrar.
 
-            Se deja vacío a propósito: sólo entra si de verdad hace falta, y
-            el servidor lo ignora en un cobro de hoy.
+            El sistema la busca en lo que guardó y, si no la tiene, en el
+            histórico oficial del BCV —que sí publica día a día—. Lo normal
+            es que aparezca y el campo manual ni haga falta.
+
+            El campo sólo se pide cuando de verdad no hay ninguna: quien
+            cobró ese día sí la sabe (está en el recibo) y el sistema no.
+            El servidor lo ignora en un cobro de hoy.
           */}
           {fechaCobro !== '' && fechaCobro !== todayKey && (
-            <div className="field form-grid--full">
-              <label className="field__label" htmlFor="tasaManual">
-                Tasa de ese día (Bs por dólar)
-              </label>
-              <input
-                id="tasaManual"
-                name="tasaManual"
-                type="number"
-                min={0.01}
-                step={0.01}
-                className="input"
-                placeholder="Sólo si el sistema no la tiene guardada"
-              />
-              <span className="field__hint">
-                Déjalo vacío primero: si el sistema guardó la tasa de ese día, la usa sola. Si
-                te avisa que no la tiene, escríbela aquí.
-              </span>
+            <div className="form-grid--full">
+              {consultandoTasa && (
+                <Notice tone="info">Buscando la tasa de ese día…</Notice>
+              )}
+
+              {!consultandoTasa && tasaDelDia?.rate != null && (
+                <Notice tone="info">
+                  Tasa {tasaDelDia.source} del {tasaDelDia.fechaLabel}:{' '}
+                  <strong>
+                    {tasaDelDia.rate.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs/USD
+                  </strong>
+                  . Es la que se va a usar en este cobro.
+                </Notice>
+              )}
+
+              {!consultandoTasa && tasaDelDia && tasaDelDia.rate === null && (
+                <>
+                  <Notice tone="warning">
+                    No tengo la tasa oficial del {tasaDelDia.fechaLabel}.
+                    {tasaDelDia.aproximada && (
+                      <>
+                        {' '}La más cercana que guardo es{' '}
+                        {tasaDelDia.aproximada.rate.toLocaleString('es-VE', {
+                          minimumFractionDigits: 2,
+                        })}{' '}
+                        Bs del {tasaDelDia.aproximada.fechaLabel}, pero no se cobra con ella.
+                      </>
+                    )}{' '}
+                    Escríbela abajo para poder registrar el cobro.
+                  </Notice>
+
+                  <div className="field">
+                    <label className="field__label" htmlFor="tasaManual">
+                      Tasa del {tasaDelDia.fechaLabel} (Bs por dólar)
+                    </label>
+                    <input
+                      id="tasaManual"
+                      name="tasaManual"
+                      type="number"
+                      min={0.01}
+                      step={0.01}
+                      className="input"
+                      defaultValue={tasaDelDia.aproximada?.rate ?? ''}
+                      placeholder="Ej: 968,07"
+                    />
+                    <span className="field__hint">
+                      Queda guardada como tasa puesta a mano, no como oficial.
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
-          {exchangeRate !== null && (
+          {/*
+            La tasa de HOY, y sólo cuando el cobro es de hoy: con una fecha
+            atrasada arriba ya se está enseñando la de ese día, y verlas las
+            dos a la vez hacía dudar de cuál se iba a aplicar.
+          */}
+          {exchangeRate !== null && (fechaCobro === '' || fechaCobro === todayKey) && (
             <div className="form-grid--full">
               <Notice tone="info">
                 Tasa {rateSource}{' '}
