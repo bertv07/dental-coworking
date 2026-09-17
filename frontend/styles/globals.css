@@ -2991,6 +2991,12 @@ a {
      de la impresora. */
   .print-sheet { max-width: none; margin: 0; padding: 0; }
 
+  /* Las fotos de los medicamentos SÍ se imprimen.
+     Por defecto los navegadores omiten fondos e imágenes de fondo al
+     imprimir; estas van en <img>, pero conviene forzar los colores para que
+     no salgan lavadas en una impresora que "ahorra tinta". */
+  .print-sheet img { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+
   /* Nada de fondos oscuros heredados del tema: el papel es blanco. */
   body { background: #fff; }
 

@@ -106,3 +106,46 @@ export async function deleteMedicationAction(id: string): Promise<ActionResult> 
   revalidatePath('/medicamentos');
   return { ok: true };
 }
+
+/** 4 MB: es la foto de una caja, no una radiografía. */
+const TAMANO_MAXIMO = 4 * 1024 * 1024;
+const TIPOS_ACEPTADOS = ['image/png', 'image/jpeg', 'image/webp'];
+
+/**
+ * Sube la foto de la caja.
+ *
+ * Va aparte del guardado normal porque un archivo no cabe en el mismo envío
+ * que el resto del formulario sin convertirlo todo a `FormData` binario, y
+ * porque así cambiar la pauta de un medicamento no obliga a volver a subir
+ * la imagen.
+ */
+export async function uploadMedicationImageAction(formData: FormData): Promise<ActionResult> {
+  const auth = await autorizar();
+  if (!auth.ok) return auth.result;
+
+  const id = String(formData.get('id') ?? '');
+  if (!cuidSchema.safeParse(id).success) return { ok: false, error: 'Identificador inválido' };
+
+  const file = formData.get('file');
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: 'Elige una imagen.' };
+  }
+  if (file.size > TAMANO_MAXIMO) {
+    return { ok: false, error: 'La imagen no puede pasar de 4 MB.' };
+  }
+  if (!TIPOS_ACEPTADOS.includes(file.type)) {
+    return { ok: false, error: 'Sube una imagen PNG, JPG o WEBP.' };
+  }
+
+  const result = await repository.saveMedicationImage({
+    id,
+    mimeType: file.type,
+    content: Buffer.from(await file.arrayBuffer()),
+    userId: auth.userId,
+  });
+
+  if (!result.ok) return { ok: false, error: 'No se pudo subir la imagen.' };
+
+  revalidatePath('/medicamentos');
+  return { ok: true };
+}

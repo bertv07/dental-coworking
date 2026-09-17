@@ -1146,6 +1146,19 @@ export interface DataRepository {
   /** Borrado lógico: siguió apareciendo en hojas ya impresas. */
   deleteMedication(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
 
+  /** La foto de la caja. Se reemplaza entera; no hay galería. */
+  saveMedicationImage(params: {
+    id: string;
+    mimeType: string;
+    content: Buffer;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /** Los bytes, para la ruta que la sirve. `null` si no tiene. */
+  getMedicationImage(
+    id: string,
+  ): Promise<{ mimeType: string; content: Buffer } | null>;
+
   // --- Instrumental del odontólogo -----------------------------------------
 
   /** Instrumental, opcionalmente el de un solo odontólogo. */

@@ -17,6 +17,10 @@ import { PrintOnLoad } from '@/frontend/features/admin/PrintOnLoad';
  *  Lleva un espacio para escribir a mano: la pauta de un caso concreto casi
  *  siempre difiere en algo de la habitual, y sin ese hueco se acaba tachando
  *  encima de lo impreso.
+ *
+ *  Y lleva la FOTO de cada caja. El paciente compara el papel con lo que le
+ *  enseñan en la farmacia: el principio activo en letra pequeña no le sirve
+ *  para saber si le están dando lo que le mandaron.
  * ===========================================================================
  */
 
@@ -72,9 +76,16 @@ export default async function ImprimirMedicamentosPage({
         </div>
       </section>
 
+      {/*
+        La FOTO va primero, y grande.
+        El paciente llega a la farmacia y compara la caja con el papel; el
+        principio activo en letra pequeña no le dice nada. Por eso ocupa una
+        columna propia en vez de ser una miniatura junto al texto.
+      */}
       <table className="print-sheet__table">
         <thead>
           <tr>
+            <th style={{ width: '26mm' }} />
             <th>Medicamento</th>
             <th>Indicación</th>
           </tr>
@@ -82,6 +93,16 @@ export default async function ImprimirMedicamentosPage({
         <tbody>
           {medicamentos.map((m) => (
             <tr key={m.id}>
+              <td>
+                {m.hasImage ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`/api/medicamentos/${m.id}/imagen`}
+                    alt=""
+                    style={{ width: '24mm', height: '24mm', objectFit: 'contain' }}
+                  />
+                ) : null}
+              </td>
               <td>
                 <strong>{m.name}</strong>
                 {m.presentation && <div className="print-sheet__note">{m.presentation}</div>}

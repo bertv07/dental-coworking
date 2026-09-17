@@ -6,6 +6,7 @@ import type { Medication } from '@/backend/domain/types';
 import {
   saveMedicationAction,
   deleteMedicationAction,
+  uploadMedicationImageAction,
 } from '@/app/actions/medication.actions';
 import { Modal } from '@/frontend/components/motion';
 import { Badge, Card, EmptyState, Notice } from '@/frontend/components/ui/primitives';
@@ -36,6 +37,8 @@ export function MedicationsManager({ medications }: { medications: Medication[] 
 
   const [editando, setEditando] = useState<Medication | null>(null);
   const [abierto, setAbierto] = useState(false);
+  /** Foto elegida en el formulario. Se sube DESPUÉS de guardar la ficha. */
+  const [foto, setFoto] = useState<File | null>(null);
 
   // Agrupados por categoría: una lista plana de cuarenta medicamentos no se
   // recorre con el paciente delante.
@@ -73,6 +76,27 @@ export function MedicationsManager({ medications }: { medications: Medication[] 
         setError(r.error ?? 'No se pudo guardar');
         return;
       }
+
+      /*
+       * La foto va en un segundo paso, y sólo si se eligió una.
+       *
+       * Si falla, la ficha YA está guardada: se avisa y se queda sin foto, en
+       * vez de perder también el nombre y la pauta que acaban de teclear.
+       */
+      if (foto && editando?.id) {
+        const subida = new FormData();
+        subida.set('id', editando.id);
+        subida.set('file', foto);
+        const img = await uploadMedicationImageAction(subida);
+        if (!img.ok) {
+          setError(`Se guardó, pero la foto no subió: ${img.error}`);
+          setFoto(null);
+          router.refresh();
+          return;
+        }
+      }
+
+      setFoto(null);
       setAbierto(false);
       setEditando(null);
       router.refresh();
@@ -143,6 +167,37 @@ export function MedicationsManager({ medications }: { medications: Medication[] 
                     onChange={() => alternar(m.id)}
                     style={{ marginTop: '0.2rem' }}
                   />
+
+                  {/*
+                    La miniatura, junto al nombre: recepción reconoce la caja
+                    antes de leer el principio activo, igual que el paciente.
+                  */}
+                  {m.hasImage ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`/api/medicamentos/${m.id}/imagen`}
+                      alt=""
+                      style={{
+                        width: 44,
+                        height: 44,
+                        objectFit: 'contain',
+                        borderRadius: 6,
+                        background: 'var(--color-surface-2, #f4f4f5)',
+                        flexShrink: 0,
+                      }}
+                    />
+                  ) : (
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: 6,
+                        background: 'var(--color-surface-2, #f4f4f5)',
+                        flexShrink: 0,
+                      }}
+                    />
+                  )}
 
                   <span style={{ flex: 1 }}>
                     <span className="table__strong">{m.name}</span>
@@ -277,6 +332,25 @@ export function MedicationsManager({ medications }: { medications: Medication[] 
             />
             <span className="field__hint">
               Sale impresa tal cual. Si en un caso concreto cambia, se corrige a mano en la hoja.
+            </span>
+          </div>
+
+          <div className="field form-grid--full">
+            <label className="field__label" htmlFor="foto">
+              Foto de la caja
+            </label>
+            <input
+              id="foto"
+              type="file"
+              className="input"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={!editando}
+              onChange={(e) => setFoto(e.target.files?.[0] ?? null)}
+            />
+            <span className="field__hint">
+              {editando
+                ? 'PNG, JPG o WEBP, hasta 4 MB. Sale en la hoja que se lleva el paciente.'
+                : 'Primero guarda el medicamento; después ábrelo para ponerle la foto.'}
             </span>
           </div>
 

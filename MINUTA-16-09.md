@@ -364,6 +364,7 @@ están en español y comentados.
   membrete, la lista, un hueco para el nombre del paciente y otro para
   observaciones a mano, y una nota de que no sustituye a la receta firmada.
 
-  Para el **enlace del bot** hace falta decidir a dónde apunta: esa pantalla
-  está detrás del login, así que no sirve para el paciente. O publicas un PDF
-  con la lista, o el bot le dice que se la entregan impresa al salir.
+  **No toca al bot.** Es sólo de recepción: la odontóloga le dice qué lleva el
+  paciente, recepción lo marca y lo imprime. Cada medicamento lleva **foto de
+  la caja**, nombre con los mg y la pauta — el paciente compara el papel con
+  lo que le enseñan en la farmacia, que es para lo que sirve.

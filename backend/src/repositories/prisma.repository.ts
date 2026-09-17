@@ -3977,7 +3977,7 @@ export const prismaRepository: DataRepository = {
   // --- Medicamentos ---------------------------------------------------------
 
   async listMedications(params) {
-    return prisma.medication.findMany({
+    const filas = await prisma.medication.findMany({
       where: {
         deletedAt: null,
         ...(params?.soloActivos ? { isActive: true } : {}),
@@ -3990,15 +3990,18 @@ export const prismaRepository: DataRepository = {
         category: true,
         sortOrder: true,
         isActive: true,
+        // El MIME basta para saber si hay foto. Los bytes NO se traen aquí.
+        imageMimeType: true,
       },
       orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
     });
+    return filas.map(({ imageMimeType, ...m }) => ({ ...m, hasImage: imageMimeType !== null }));
   },
 
   async listMedicationsByIds(ids) {
     if (ids.length === 0) return [];
 
-    return prisma.medication.findMany({
+    const filas = await prisma.medication.findMany({
       where: { id: { in: ids }, deletedAt: null },
       select: {
         id: true,
@@ -4008,11 +4011,48 @@ export const prismaRepository: DataRepository = {
         category: true,
         sortOrder: true,
         isActive: true,
+        imageMimeType: true,
       },
       // El orden lo pone el vademécum, no el orden en que se marcaron las
       // casillas: la hoja sale siempre igual, y así se lee de un vistazo.
       orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
     });
+    return filas.map(({ imageMimeType, ...m }) => ({ ...m, hasImage: imageMimeType !== null }));
+  },
+
+  async saveMedicationImage({ id, mimeType, content, userId }) {
+    try {
+      await prisma.medication.update({
+        where: { id },
+        // `new Uint8Array` y no el Buffer tal cual: el tipo generado por
+        // Prisma exige `Uint8Array<ArrayBuffer>` y un Buffer de Node no
+        // encaja. Mismo tratamiento que los adjuntos de WhatsApp.
+        data: { imageContent: new Uint8Array(content), imageMimeType: mimeType },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'medication.image_uploaded',
+          entityType: 'Medication',
+          entityId: id,
+          after: { mimeType, sizeBytes: content.length },
+        },
+      });
+
+      return { ok: true, data: { id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async getMedicationImage(id) {
+    const fila = await prisma.medication.findFirst({
+      where: { id, deletedAt: null },
+      select: { imageContent: true, imageMimeType: true },
+    });
+    if (!fila?.imageContent || !fila.imageMimeType) return null;
+    return { mimeType: fila.imageMimeType, content: Buffer.from(fila.imageContent) };
   },
 
   async saveMedication({ id, data, userId }) {

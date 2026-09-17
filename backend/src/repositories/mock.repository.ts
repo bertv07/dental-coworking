@@ -1186,6 +1186,14 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async saveMedicationImage() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async getMedicationImage() {
+    return null;
+  },
+
   async listInstruments(params) {
     return instruments.filter(
       (item) => !params?.dentistId || item.dentistId === params.dentistId,

@@ -1692,6 +1692,18 @@ model Medication {
   /// Para agrupar la lista: «Analgésicos», «Antibióticos», «Enjuagues».
   category String @default("General")
 
+  /// Foto de la caja, para que el paciente la reconozca en la farmacia.
+  ///
+  /// En la base y no en disco, igual que el expediente escaneado: se respalda
+  /// con el `pg_dump`, no exige volúmenes en el despliegue y no deja archivos
+  /// huérfanos al borrar un medicamento.
+  ///
+  /// ⚠️  NUNCA se selecciona al listar. Son cientos de KB por fila y la
+  /// pantalla trae la lista entera: pedirlos ahí mandaría megas al navegador
+  /// sólo para pintar unas miniaturas. Se sirven de una en una por su ruta.
+  imageContent  Bytes?
+  imageMimeType String?
+
   /// Orden de aparición dentro de su categoría.
   sortOrder Int @default(0)
 

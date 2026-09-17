@@ -646,4 +646,9 @@ export interface Medication {
   category: string;
   sortOrder: number;
   isActive: boolean;
+  /**
+   * Si tiene foto de la caja. Sólo el booleano: los bytes se piden por
+   * `/api/medicamentos/{id}/imagen`, uno a uno.
+   */
+  hasImage: boolean;
 }
