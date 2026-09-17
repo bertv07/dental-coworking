@@ -898,6 +898,10 @@ export const mockRepository: DataRepository = {
       .map(hydrateAppointment);
   },
 
+  async listUpcomingAppointmentsByPhone() {
+    return [];
+  },
+
   async addAppointmentAddon({ appointmentId, treatmentId, priceCents, notes }) {
     const appointment = appointments.find((item) => item.id === appointmentId);
     if (!appointment) return { ok: false, reason: 'NOT_FOUND' };
@@ -1163,6 +1167,22 @@ export const mockRepository: DataRepository = {
   },
 
   async deletePatientPermanently() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async listMedications() {
+    return [];
+  },
+
+  async listMedicationsByIds() {
+    return [];
+  },
+
+  async saveMedication() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async deleteMedication() {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 

@@ -1708,6 +1708,23 @@ export const prismaRepository: DataRepository = {
     return rows.map(toAppointmentWithRelations);
   },
 
+  async listUpcomingAppointmentsByPhone({ phoneE164, limit = 5 }) {
+    const rows = await prisma.appointment.findMany({
+      where: {
+        deletedAt: null,
+        patient: { phoneE164, deletedAt: null },
+        startsAt: { gte: new Date() },
+        // Una cancelada o ya atendida no se reagenda: se agenda otra.
+        status: { in: ['PENDING', 'CONFIRMED'] },
+      },
+      include: APPOINTMENT_RELATIONS,
+      orderBy: { startsAt: 'asc' },
+      take: limit,
+    });
+
+    return rows.map(toAppointmentWithRelations);
+  },
+
   async addAppointmentAddon({ appointmentId, treatmentId, priceCents, notes, userId }) {
     const ajustesComision = await comisionPorDefectoDeLaClinica();
     try {
@@ -3955,6 +3972,83 @@ export const prismaRepository: DataRepository = {
 
       return { ok: true as const, data: { id } };
     });
+  },
+
+  // --- Medicamentos ---------------------------------------------------------
+
+  async listMedications(params) {
+    return prisma.medication.findMany({
+      where: {
+        deletedAt: null,
+        ...(params?.soloActivos ? { isActive: true } : {}),
+      },
+      select: {
+        id: true,
+        name: true,
+        presentation: true,
+        posology: true,
+        category: true,
+        sortOrder: true,
+        isActive: true,
+      },
+      orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  },
+
+  async listMedicationsByIds(ids) {
+    if (ids.length === 0) return [];
+
+    return prisma.medication.findMany({
+      where: { id: { in: ids }, deletedAt: null },
+      select: {
+        id: true,
+        name: true,
+        presentation: true,
+        posology: true,
+        category: true,
+        sortOrder: true,
+        isActive: true,
+      },
+      // El orden lo pone el vademécum, no el orden en que se marcaron las
+      // casillas: la hoja sale siempre igual, y así se lee de un vistazo.
+      orderBy: [{ category: 'asc' }, { sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  },
+
+  async saveMedication({ id, data, userId }) {
+    try {
+      const guardado = id
+        ? await prisma.medication.update({ where: { id }, data, select: { id: true } })
+        : await prisma.medication.create({ data, select: { id: true } });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: id ? 'medication.updated' : 'medication.created',
+          entityType: 'Medication',
+          entityId: guardado.id,
+          after: { name: data.name, category: data.category },
+        },
+      });
+
+      return { ok: true, data: guardado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deleteMedication({ id, userId }) {
+    try {
+      await prisma.medication.update({ where: { id }, data: { deletedAt: new Date() } });
+
+      await prisma.auditLog.create({
+        data: { userId, action: 'medication.deleted', entityType: 'Medication', entityId: id },
+      });
+
+      return { ok: true, data: { id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
   },
 
   // --- Instrumental --------------------------------------------------------

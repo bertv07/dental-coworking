@@ -308,6 +308,13 @@ async function findFirstAvailableRoom(
   blockedUntil: Date,
   preferredRoomId?: string,
   dentistId?: string,
+  /**
+   * Cita que NO cuenta como choque: la que se está moviendo.
+   *
+   * Sin esto, al reagendar se chocaría consigo misma —el consultorio que
+   * ocupa ahora saldría ocupado— y no habría sala libre en ningún sitio.
+   */
+  excluirCitaId?: string,
 ): Promise<Room | undefined> {
   const candidates = preferredRoomId
     ? rooms.filter((room) => room.id === preferredRoomId)
@@ -323,11 +330,13 @@ async function findFirstAvailableRoom(
       });
 
   for (const room of candidates) {
-    const conflicts = await repository.findOverlappingAppointments({
-      startsAt,
-      endsAt: blockedUntil,
-      roomId: room.id,
-    });
+    const conflicts = (
+      await repository.findOverlappingAppointments({
+        startsAt,
+        endsAt: blockedUntil,
+        roomId: room.id,
+      })
+    ).filter((c) => c.id !== excluirCitaId);
     if (conflicts.length === 0) return room;
   }
   return undefined;
@@ -636,4 +645,103 @@ export async function buscarDisponibilidad(params: {
   if (!alguienTrabaja) return { slots: [], motivo: 'CERRADO' };
 
   return { slots: [], motivo: 'LLENO' };
+}
+
+/**
+ * ===========================================================================
+ *  REAGENDAR — mover una cita que ya existe
+ * ===========================================================================
+ *  Se hace aquí y no con un `updateAppointment` a secas porque mover una cita
+ *  es AGENDARLA otra vez: hay que volver a comprobar que el odontólogo esté
+ *  libre, que haya consultorio, y que el hueco no lo haya tomado otro en
+ *  mitad de la conversación.
+ *
+ *  Un update directo se saltaría las tres cosas y dejaría dos pacientes a la
+ *  misma hora — con el constraint de Postgres reventando después, en un sitio
+ *  donde ya no se puede explicar.
+ *
+ *  Lo que NO cambia al mover: el paciente, el tratamiento y el precio pactado.
+ *  Si hace falta otro tratamiento, eso es una cita distinta.
+ * ===========================================================================
+ */
+export type RescheduleResult =
+  | { outcome: 'RESCHEDULED'; appointment: Appointment }
+  | { outcome: 'NOT_FOUND' }
+  /** Ya pasó, o está cancelada/atendida: eso no se mueve, se agenda de nuevo. */
+  | { outcome: 'NOT_MOVABLE'; status: Appointment['status'] }
+  | { outcome: 'DENTIST_UNAVAILABLE'; suggestedSlots: Date[] }
+  | { outcome: 'NO_ROOM_AVAILABLE'; suggestedSlots: Date[] };
+
+export async function rescheduleAppointment(input: {
+  appointmentId: string;
+  startsAt: Date;
+  /** Cambiar de odontólogo al mover. Si se omite, se queda el mismo. */
+  dentistId?: string;
+}): Promise<RescheduleResult> {
+  const cita = await repository.findAppointmentById(input.appointmentId);
+  if (!cita) return { outcome: 'NOT_FOUND' };
+
+  // Sólo se mueven las que siguen en pie y no han pasado.
+  if (cita.status !== 'PENDING' && cita.status !== 'CONFIRMED') {
+    return { outcome: 'NOT_MOVABLE', status: cita.status };
+  }
+
+  const treatment = await repository.findTreatmentByCode(
+    (await repository.listTreatments()).find((t) => t.id === cita.treatmentId)?.code ?? '',
+  );
+  const duracion = treatment?.durationMinutes ?? cita.treatment.durationMinutes;
+  const buffer = treatment?.bufferMinutes ?? 0;
+
+  const startsAt = input.startsAt;
+  const endsAt = new Date(startsAt.getTime() + duracion * 60_000);
+  const roomBlockedUntil = new Date(endsAt.getTime() + buffer * 60_000);
+
+  const dentistId = input.dentistId ?? cita.dentistId;
+
+  /*
+   * Los choques se buscan EXCLUYENDO la propia cita: si no, se chocaría
+   * consigo misma al moverla media hora y el bot diría que está ocupado
+   * cuando el único que ocupa ese hueco es el paciente que quiere moverse.
+   */
+  const choques = (
+    await repository.findOverlappingAppointments({ startsAt, endsAt, dentistId })
+  ).filter((c) => c.id !== cita.id);
+
+  if (choques.length > 0) {
+    const t = treatment ?? { durationMinutes: duracion, bufferMinutes: buffer } as Treatment;
+    return {
+      outcome: 'DENTIST_UNAVAILABLE',
+      suggestedSlots: await suggestAlternativeSlots(startsAt, t, dentistId),
+    };
+  }
+
+  const rooms = await repository.listRooms();
+  const room = await findFirstAvailableRoom(
+    rooms,
+    startsAt,
+    roomBlockedUntil,
+    undefined,
+    dentistId,
+    cita.id,
+  );
+
+  if (!room) {
+    const t = treatment ?? { durationMinutes: duracion, bufferMinutes: buffer } as Treatment;
+    return {
+      outcome: 'NO_ROOM_AVAILABLE',
+      suggestedSlots: await suggestAlternativeSlots(startsAt, t, dentistId),
+    };
+  }
+
+  const movida = await repository.updateAppointment(cita.id, {
+    patientId: cita.patientId,
+    dentistId,
+    roomId: room.id,
+    treatmentId: cita.treatmentId,
+    startsAt,
+    notes: cita.notes,
+  });
+
+  if (!movida.ok) return { outcome: 'NOT_FOUND' };
+  return { outcome: 'RESCHEDULED', appointment: movida.data };
 }

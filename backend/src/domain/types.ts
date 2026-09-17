@@ -630,3 +630,20 @@ export interface StaffUser {
   dentistName: string | null;
   createdAt: Date;
 }
+
+/**
+ * Un medicamento del vademécum de la clínica.
+ *
+ * NO es una receta: la receta la firma la odontóloga en su recetario. Esto es
+ * la lista de lo que se indica habitualmente, para que recepción la imprima
+ * en limpio en vez de dictarla en el mostrador.
+ */
+export interface Medication {
+  id: string;
+  name: string;
+  presentation: string | null;
+  posology: string | null;
+  category: string;
+  sortOrder: number;
+  isActive: boolean;
+}

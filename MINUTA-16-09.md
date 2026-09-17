@@ -220,6 +220,39 @@ tú (Drive, PDF, una página…).
 > y los de botón **20**. «Créditos Y Financiamiento» son 25 → se corta. Usa
 > «Créditos Y Pagos».
 
+### 5b. Las opciones de agendar, por TURNO (no una lista de horas)
+
+Las listas de WhatsApp aceptan **10 filas como máximo**, y el nodo `2.12b4`
+ya corta con `.slice(0, 10)`: con un día completo, las horas de la tarde
+sencillamente no se ven.
+
+Muestra primero el turno y después las horas de ese turno:
+
+```javascript
+// En 2.12b4, en vez de listar todas las horas de golpe:
+const manana = horas.filter(x => Number(new Intl.DateTimeFormat('en-US',
+  { timeZone:'America/Caracas', hour:'2-digit', hour12:false }).format(new Date(x.startsAt))) < 12);
+const tarde  = horas.filter(x => !manana.includes(x));
+
+// Dos botones, y al tocar uno se listan SÓLO esas horas (máximo 10, ya caben).
+const payload = { messaging_product:'whatsapp', recipient_type:'individual', to: ctx.phone,
+  type:'interactive', interactive:{ type:'button',
+    body:{ text:'¿Prefiere en la mañana o en la tarde?' },
+    action:{ buttons:[
+      { type:'reply', reply:{ id:'AG_T:M', title:`Mañana (${manana.length})` } },
+      { type:'reply', reply:{ id:'AG_T:T', title:`Tarde (${tarde.length})` } },
+    ]}}};
+```
+
+Guarda `ag.horas` como ya lo haces, y en `2.12b Agenda — Decidir el paso`
+añade el caso `AG_T:` que filtra por turno y entonces sí lista las horas con
+los ids `AG_S:i` de siempre.
+
+> **Esto era lo del turno partido.** En el panel el descanso es opcional y
+> viene vacío: no cambia nada a menos que lo configures. El problema real que
+> resuelve el turno es el **límite de 10 filas de WhatsApp**, y eso se arregla
+> aquí, en el bot.
+
 ### 5. Horario: el bot tiene 9–17 escrito a mano
 
 En `2.10 Reunir el contexto del turno`:
@@ -250,9 +283,40 @@ y una salida en `2.11`. El flujo más simple que funciona hoy:
 1. Le dices que para reagendar hace falta confirmar con recepción.
 2. Escalas con `pasar_a_recepcion` (ya lo tienes montado).
 
-Para que el propio bot reagende hace falta que el panel exponga «buscar la
-cita del paciente» y «moverla», que **hoy no existe**. Dímelo y lo construyo:
-son dos endpoints.
+**Los dos endpoints ya están hechos.** El bot puede reagendar solo:
+
+**① `POST /api/automation/my-appointments`** — qué tiene pendiente
+```json
+{ "phone": "+584141234567" }
+```
+Devuelve sus próximas citas vivas (futuras, pendientes o confirmadas) con
+`appointmentId`, `startsAtLabel` (ya en hora de Caracas), tratamiento,
+odontóloga y consultorio. Lista vacía = no tiene nada pendiente: ofrécele
+agendar.
+
+**② `POST /api/automation/reschedule`** — moverla
+```json
+{
+  "appointmentId":  "c...",                       // de ①
+  "startsAt":       "2026-09-18T13:00:00.000Z",   // de /availability
+  "dentistId":      "c...",                       // opcional: cambiar de odontóloga
+  "idempotencyKey": "wa-msg-9931"
+}
+```
+
+| Código | Qué pasó | Qué hacer |
+|---|---|---|
+| `200` | Movida | Confirmar con `startsAtLabel` |
+| `404` | Esa cita ya no existe | Ofrecer agendar una nueva |
+| `409` + `status` | Cancelada o ya atendida | «Esa cita ya se atendió, ¿le agendo otra?» |
+| `409` + `suggestedSlots` | El hueco se ocupó | Ofrecer las alternativas |
+
+Mover **no cambia** el paciente, el tratamiento ni el precio pactado — eso
+sería otra cita. Y vuelve a comprobar odontóloga y consultorio, así que no
+puede dejar a dos pacientes a la misma hora.
+
+**Flujo sugerido:** `MENU_REAGENDAR` → ① para enseñarle sus citas → elige una
+→ `/availability` del nuevo día → elige hora → ②.
 
 Para «elegir odontóloga», el flujo ya soporta pedir por una en concreto —
 `/availability` acepta `dentistId`. Bastaría con una lista previa de las
@@ -293,6 +357,13 @@ están en español y comentados.
   usuario de IG no tiene. Lo más simple: que el bot le **pida el teléfono**
   antes de agendar, igual que por WhatsApp, y mande `channel: 'INSTAGRAM'`.
   Así no hace falta tocar el panel.
-- **Lista de medicamentos para imprimir desde recepción** — eso es una pantalla
-  nueva en el panel (seleccionar medicamentos e imprimir la selección). No está
-  hecho. Dime si lo quieres y lo construyo.
+- **Lista de medicamentos** — ✅ **hecha**. Hay una pantalla nueva
+  **Medicamentos** en el menú: se cargan los que la clínica indica
+  habitualmente (nombre, presentación, pauta, categoría), recepción marca los
+  que lleva el paciente y le da a **Imprimir selección**. Sale una hoja con el
+  membrete, la lista, un hueco para el nombre del paciente y otro para
+  observaciones a mano, y una nota de que no sustituye a la receta firmada.
+
+  Para el **enlace del bot** hace falta decidir a dónde apunta: esa pantalla
+  está detrás del login, así que no sirve para el paciente. O publicas un PDF
+  con la lista, o el bot le dice que se la entregan impresa al salir.

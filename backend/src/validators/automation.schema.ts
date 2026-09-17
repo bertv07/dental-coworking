@@ -4,6 +4,7 @@ import {
   personNameSchema,
   safeTextSchema,
   cuidSchema,
+  isoDateTimeSchema,
 } from '@/backend/validators/common';
 
 /**
@@ -132,3 +133,36 @@ export const mediaRequestSchema = z
   .refine((d) => Boolean(d.mediaId) || Boolean(d.messageId), {
     message: 'Indica mediaId o messageId',
   });
+
+/**
+ * POST /api/automation/my-appointments — qué tiene pendiente este paciente.
+ *
+ * Sólo el teléfono: el bot conoce el número de WhatsApp, no el id interno, y
+ * pedirle un id al paciente no tiene sentido.
+ */
+export const myAppointmentsSchema = z.object({
+  phone: phoneE164Schema,
+});
+
+/**
+ * POST /api/automation/reschedule — mover una cita que ya existe.
+ *
+ * `appointmentId` sale de `/my-appointments`, no se lo inventa el bot.
+ */
+export const rescheduleSchema = z.object({
+  appointmentId: cuidSchema,
+
+  /** Nuevo inicio, ISO 8601 CON zona horaria, tal cual vino de /availability. */
+  startsAt: isoDateTimeSchema,
+
+  /** Cambiar de odontólogo al mover. Si se omite, se queda el mismo. */
+  dentistId: cuidSchema.optional(),
+
+  /** Obligatoria: un reintento de n8n no puede mover la cita dos veces. */
+  idempotencyKey: z
+    .string()
+    .trim()
+    .min(8, 'La llave de idempotencia es demasiado corta')
+    .max(100)
+    .regex(/^[A-Za-z0-9_:-]+$/, 'Sólo alfanuméricos, guion, guion bajo y dos puntos'),
+});

@@ -1664,3 +1664,45 @@ model MessageTemplate {
   @@index([isActive, category, sortOrder])
   @@map("message_templates")
 }
+
+/// ===========================================================================
+///  MEDICAMENTOS
+/// ===========================================================================
+///  El vademécum de la clínica: lo que las odontólogas recetan habitualmente.
+///
+///  Existe para que recepción no lo escriba a mano cada vez. Se marcan los que
+///  lleva el paciente y se imprime la hoja de indicaciones — que es lo que se
+///  lleva a la farmacia.
+///
+///  NO es una receta legal: la receta la firma la odontóloga en su recetario.
+///  Esto es la lista de lo indicado, en limpio y legible.
+model Medication {
+  id String @id @default(cuid())
+
+  /// Principio activo y concentración: «Amoxicilina 500 mg».
+  name String
+
+  /// Forma y envase: «Tabletas, caja de 21».
+  presentation String?
+
+  /// Pauta habitual: «1 cada 8 horas por 7 días». Se puede ajustar al
+  /// imprimir, pero tenerla escrita evita el dictado en el mostrador.
+  posology String?
+
+  /// Para agrupar la lista: «Analgésicos», «Antibióticos», «Enjuagues».
+  category String @default("General")
+
+  /// Orden de aparición dentro de su categoría.
+  sortOrder Int @default(0)
+
+  isActive Boolean @default(true)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  /// Borrado lógico: un medicamento retirado siguió apareciendo en hojas ya
+  /// impresas, y borrarlo de verdad dejaría ese historial sin explicación.
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([isActive, category, sortOrder])
+  @@map("medications")
+}

@@ -101,6 +101,12 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
        * y quien monta la plantilla, aunque el recipe sea de la odontóloga.
        */
       { href: '/recetarios', label: 'Recetarios', Icon: IconPrescription, minimumRole: 'DENTIST' },
+      /*
+       * Medicamentos, junto a recetarios: son la misma tarea vista desde los
+       * dos lados. La odontóloga firma el recipe; recepción imprime las
+       * indicaciones en limpio para la farmacia.
+       */
+      { href: '/medicamentos', label: 'Medicamentos', Icon: IconPrescription, minimumRole: 'ASSISTANT' },
       // El instrumental es de cada odontólogo; recepción no lo gestiona.
       {
         href: '/instrumental',

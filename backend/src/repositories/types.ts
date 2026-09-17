@@ -21,6 +21,7 @@ import type {
   ScheduleChangeRequest,
   FinancialSummary,
   MessageTemplate,
+  Medication,
   Patient,
   PaymentMethodOption,
   Room,
@@ -131,6 +132,16 @@ export interface PaymentMethodInput {
   kind: 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE';
   instructions: string | null;
   currency: 'VES' | 'USD';
+  sortOrder: number;
+  isActive: boolean;
+}
+
+/** Alta o edición de un medicamento del vademécum. */
+export interface MedicationInput {
+  name: string;
+  presentation: string | null;
+  posology: string | null;
+  category: string;
   sortOrder: number;
   isActive: boolean;
 }
@@ -579,6 +590,21 @@ export interface DataRepository {
   listAppointments(params: {
     range: DateRange;
     dentistId?: string;
+    limit?: number;
+  }): Promise<AppointmentWithRelations[]>;
+
+  /**
+   * Las próximas citas de un paciente, por teléfono.
+   *
+   * Es lo que necesita el bot para poder reagendar: el paciente escribe desde
+   * su WhatsApp y hay que saber qué tiene pendiente sin pedirle un id que no
+   * conoce.
+   *
+   * Sólo las que aún no han pasado y siguen vivas: una cita cancelada o ya
+   * atendida no se reagenda, se agenda una nueva.
+   */
+  listUpcomingAppointmentsByPhone(params: {
+    phoneE164: string;
     limit?: number;
   }): Promise<AppointmentWithRelations[]>;
 
@@ -1101,6 +1127,24 @@ export interface DataRepository {
     | { ok: false; reason: 'NOT_FOUND' }
     | { ok: false; reason: 'PAID_OUT' }
   >;
+
+  // --- Medicamentos ---------------------------------------------------------
+
+  /** El vademécum. Con `soloActivos` para la pantalla de imprimir. */
+  listMedications(params?: { soloActivos?: boolean }): Promise<Medication[]>;
+
+  /** Los elegidos para imprimir, en el orden del vademécum. */
+  listMedicationsByIds(ids: string[]): Promise<Medication[]>;
+
+  saveMedication(params: {
+    /** `null` = alta. Con id, edición. */
+    id: string | null;
+    data: MedicationInput;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /** Borrado lógico: siguió apareciendo en hojas ya impresas. */
+  deleteMedication(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
 
   // --- Instrumental del odontólogo -----------------------------------------
 
