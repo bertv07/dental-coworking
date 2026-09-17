@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type { Invoice, InvoiceLine, PaymentMethodOption, Promotion, Treatment } from '@/backend/domain/types';
 import { formatCents, formatBs, centsToBs } from '@/backend/domain/money';
+import { clinicDayKey } from '@/backend/domain/clinic-calendar';
 import {
   addInvoiceLineAction,
   updateInvoiceLineAction,
@@ -81,7 +82,20 @@ export function InvoiceEditor({
   const [charging, setCharging] = useState(false);
   // Fecha elegida en «Registrar cobro». Decide si hay que pedir la tasa de
   // ese día: para un cobro de hoy la pone la fuente oficial.
-  const [fechaCobro, setFechaCobro] = useState('');
+  /*
+   * El cobro se fecha SOLO en el día de la venta, no en el de hoy.
+   *
+   * Es el motivo de que la factura lleve fecha: si recepción abre una venta
+   * del 3 de septiembre y el cobro arranca en blanco —o sea, hoy—, se
+   * registra con la tasa de hoy y en la caja de hoy. Toda la molestia de
+   * fechar la factura se pierde en el paso siguiente.
+   *
+   * Cuando la factura es de hoy se deja vacío, que ya significa "ahora".
+   */
+  const [fechaCobro, setFechaCobro] = useState(() => {
+    const diaDeLaVenta = clinicDayKey(invoice.issuedAt);
+    return diaDeLaVenta !== todayKey ? diaDeLaVenta : '';
+  });
   /*
    * La tasa que regía el día elegido, consultada en cuanto se elige.
    *
@@ -752,8 +766,8 @@ export function InvoiceEditor({
               onChange={(e) => setFechaCobro(e.target.value)}
             />
             <span className="field__hint">
-              Vacío = ahora mismo. Rellénala sólo si se te olvidó registrar una venta de un día
-              anterior — se cuenta en la caja de ese día, con la tasa que regía entonces.
+              Viene puesta con el día de la venta; vacío = ahora mismo. El cobro se cuenta
+              en la caja de ese día, con la tasa que regía entonces.
             </span>
           </div>
 

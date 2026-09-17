@@ -432,3 +432,50 @@ export async function getRateHistory(source: RateSource, limit = 30) {
     isCurrent: row.isCurrent,
   }));
 }
+
+/**
+ * Deja escrita la tasa de UN DÍA CONCRETO, puesta por una persona.
+ *
+ * Es para la venta atrasada: recepción fecha la factura el 3 de septiembre,
+ * ve la tasa que el sistema tiene de ese día y, si no coincide con el recibo
+ * que tiene en la mano, la corrige. Lo que escriba manda desde ese momento,
+ * porque quien cobró ese día sabe lo que cobró y el histórico oficial no
+ * siempre es lo que se aplicó en el mostrador.
+ *
+ * `isCurrent: false` SIEMPRE: esto es historia, nunca la tasa con la que se
+ * cobra hoy. Marcarla como actual haría que una corrección de hace tres
+ * semanas se convirtiera en la tasa del día.
+ *
+ * Se guarda al mediodía de la clínica para que caiga de lleno dentro del día
+ * y ningún borde de zona horaria la empuje al anterior; `getRateAsOf` la
+ * encuentra en su primer paso, antes de ir a la API.
+ */
+export async function guardarTasaDeEseDia(
+  source: RateSource,
+  dayKey: string,
+  rate: number,
+): Promise<void> {
+  const { from, to } = clinicDayRange(clinicWallClockToInstant(dayKey, 12 * 60));
+
+  const existente = await prisma.exchangeRate.findFirst({
+    where: { source, publishedAt: { gte: from, lt: to } },
+    orderBy: { publishedAt: 'desc' },
+  });
+
+  if (existente) {
+    // Misma tasa: no se escribe por escribir. `rate` es Decimal en la base,
+    // así que se compara el número, no el objeto.
+    if (Number(existente.rate) === rate) return;
+    await prisma.exchangeRate.update({ where: { id: existente.id }, data: { rate } });
+    return;
+  }
+
+  await prisma.exchangeRate.create({
+    data: {
+      source,
+      rate,
+      publishedAt: clinicWallClockToInstant(dayKey, 12 * 60),
+      isCurrent: false,
+    },
+  });
+}

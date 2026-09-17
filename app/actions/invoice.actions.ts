@@ -5,7 +5,12 @@ import { z } from 'zod';
 import { checkApiRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { cuidSchema } from '@/backend/validators/common';
-import { getCurrentRate, getRateAsOf, resolveRateSource } from '@/backend/services/exchange-rate.service';
+import {
+  getCurrentRate,
+  getRateAsOf,
+  guardarTasaDeEseDia,
+  resolveRateSource,
+} from '@/backend/services/exchange-rate.service';
 import { clinicDayKey, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
 
 /**
@@ -102,6 +107,21 @@ const ventaAtrasadaSchema = z.object({
     .union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal('')])
     .optional()
     .transform((v) => (v ? v : null)),
+
+  /**
+   * La tasa de ese día, tal como la dejó recepción en el formulario.
+   *
+   * Llega ya rellena con la oficial: normalmente se manda igual que vino y
+   * no cambia nada. Sólo importa cuando no coincide con el recibo que
+   * tienen delante, que es quien de verdad sabe a cuánto se cobró.
+   */
+  tasa: z
+    .union([z.string(), z.number(), z.literal('')])
+    .optional()
+    .transform((v) => (v === '' || v == null ? null : Number(v)))
+    .refine((v) => v === null || (Number.isFinite(v) && v > 0), {
+      message: 'La tasa debe ser mayor que cero',
+    }),
 });
 
 /**
@@ -127,6 +147,38 @@ export async function createBackdatedInvoiceAction(input: unknown): Promise<Acti
       return { ok: false, error: 'La fecha no puede ser futura.', field: 'fecha' };
     }
     issuedAt = clinicWallClockToInstant(d.fecha, 12 * 60);
+
+    /*
+     * La tasa del día de la venta queda escrita AHORA, al abrir la factura.
+     *
+     * Si no, el cobro se registraba después y volvía a preguntar —o peor,
+     * caía en la de hoy—: fechar una venta el 3 de septiembre y cobrarla a
+     * la tasa de tres semanas más tarde escribe en la factura unos bolívares
+     * que nunca entraron en la gaveta. Dejándola aquí, `getRateAsOf` la
+     * encuentra en su primer paso cuando se registre el cobro.
+     *
+     * Si falla, la factura se abre igual: el cobro volverá a pedir la tasa,
+     * que es molesto pero recuperable. Perder la venta entera no lo es.
+     */
+    if (d.tasa !== null) {
+      const settings = await repository.getClinicSettings();
+      try {
+        await guardarTasaDeEseDia(
+          resolveRateSource(settings.preferredRateSource),
+          d.fecha,
+          d.tasa,
+        );
+      } catch (error) {
+        console.warn(
+          JSON.stringify({
+            level: 'warn',
+            event: 'venta_atrasada.tasa_no_guardada',
+            fecha: d.fecha,
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
+    }
   }
 
   const result = await repository.createDirectInvoice({

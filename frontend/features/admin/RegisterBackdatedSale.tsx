@@ -1,11 +1,13 @@
 'use client';
 
-import { useRef, useState, useTransition } from 'react';
+import { useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   searchPatientsForInvoiceAction,
   createBackdatedInvoiceAction,
+  consultarTasaDelDiaAction,
 } from '@/app/actions/invoice.actions';
+import type { TasaDelDiaConsulta } from '@/app/actions/invoice.actions';
 import { Modal } from '@/frontend/components/motion';
 import { Notice } from '@/frontend/components/ui/primitives';
 import { IconPlus } from '@/frontend/components/ui/icons';
@@ -40,6 +42,45 @@ export function RegisterBackdatedSale({
   const [searching, setSearching] = useState(false);
   const [chosen, setChosen] = useState<{ id: string; fullName: string } | null>(null);
 
+  /*
+   * La tasa del día que se está fechando.
+   *
+   * Aparece en cuanto se elige la fecha y se puede corregir: el sistema sabe
+   * la tasa oficial de ese día, pero el recibo que recepción tiene en la
+   * mano es la última palabra sobre a cuánto se cobró de verdad. Lo que
+   * quede aquí es lo que usará el cobro después.
+   */
+  const [fecha, setFecha] = useState('');
+  const [tasaDelDia, setTasaDelDia] = useState<TasaDelDiaConsulta | null>(null);
+  const [tasaEscrita, setTasaEscrita] = useState('');
+  const [consultandoTasa, setConsultandoTasa] = useState(false);
+
+  useEffect(() => {
+    if (fecha === '' || fecha === todayKey) {
+      setTasaDelDia(null);
+      setTasaEscrita('');
+      return;
+    }
+    // `cancelado`: si se cambia de fecha dos veces seguidas, la primera
+    // consulta puede volver la última y dejar en pantalla una tasa que no es.
+    let cancelado = false;
+    setConsultandoTasa(true);
+    consultarTasaDelDiaAction(fecha)
+      .then((r) => {
+        if (cancelado) return;
+        setTasaDelDia(r);
+        // Se precarga la oficial, o la más cercana si no hay: así lo normal
+        // es no tocar nada, y corregir es la excepción.
+        setTasaEscrita(String(r?.rate ?? r?.aproximada?.rate ?? ''));
+      })
+      .finally(() => {
+        if (!cancelado) setConsultandoTasa(false);
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [fecha, todayKey]);
+
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   function onQueryChange(value: string) {
     setQuery(value);
@@ -63,6 +104,11 @@ export function RegisterBackdatedSale({
     setQuery('');
     setResults([]);
     setChosen(null);
+    // También la fecha y la tasa: si no, al abrir el modal para la siguiente
+    // venta seguiría puesta la del día anterior y se fecharía ahí sin querer.
+    setFecha('');
+    setTasaDelDia(null);
+    setTasaEscrita('');
   }
 
   return (
@@ -109,6 +155,7 @@ export function RegisterBackdatedSale({
                 patientId: chosen.id,
                 dentistId: fd.get('dentistId'),
                 fecha: fd.get('fecha'),
+                tasa: fd.get('tasa'),
               });
               if (!result.ok) {
                 setError(result.error ?? 'No se pudo abrir la factura');
@@ -178,9 +225,53 @@ export function RegisterBackdatedSale({
             <label className="field__label" htmlFor="fecha">
               Fecha de la venta
             </label>
-            <input id="fecha" name="fecha" type="date" className="input" max={todayKey} />
+            <input
+              id="fecha"
+              name="fecha"
+              type="date"
+              className="input"
+              max={todayKey}
+              value={fecha}
+              onChange={(e) => setFecha(e.target.value)}
+            />
             <span className="field__hint">Vacío = hoy.</span>
           </div>
+
+          {/*
+            La tasa de ESE día, no la de hoy.
+
+            Fechar una venta el 3 de septiembre y cobrarla a la tasa de tres
+            semanas después escribe en la factura unos bolívares que nunca
+            entraron en la gaveta. Se enseña al elegir la fecha y queda
+            guardada para cuando se registre el cobro.
+          */}
+          {fecha !== '' && fecha !== todayKey && (
+            <div className="field form-grid--full">
+              <label className="field__label" htmlFor="tasa">
+                Tasa {tasaDelDia?.source ?? 'del día'} (Bs por dólar)
+              </label>
+              <input
+                id="tasa"
+                name="tasa"
+                type="number"
+                min={0.01}
+                step={0.0001}
+                className="input"
+                value={tasaEscrita}
+                onChange={(e) => setTasaEscrita(e.target.value)}
+                placeholder={consultandoTasa ? 'Buscando…' : 'Ej: 926,5530'}
+              />
+              <span className="field__hint">
+                {consultandoTasa
+                  ? 'Buscando la tasa de ese día…'
+                  : tasaDelDia?.rate != null
+                    ? `Es la oficial del ${tasaDelDia.fechaLabel}. Cámbiala sólo si no coincide con el recibo.`
+                    : tasaDelDia?.aproximada
+                      ? `No tengo la oficial de ese día; ésta es la de ${tasaDelDia.aproximada.fechaLabel}. Corrígela con la del recibo.`
+                      : 'No tengo la tasa de ese día: escribe la que aparece en el recibo.'}
+              </span>
+            </div>
+          )}
         </form>
       </Modal>
     </>
