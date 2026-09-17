@@ -4684,13 +4684,23 @@ export const prismaRepository: DataRepository = {
       // pintarlos. Traerlos aquí cargaría cada foto enviada en cada apertura
       // del hilo.
       include: { attachment: { select: { id: true } } },
-      orderBy: { sentAt: 'asc' },
+      /*
+       * Se ordena de NUEVO a VIEJO y luego se le da la vuelta.
+       *
+       * Con `asc` el `take` se quedaba con los 200 mensajes MÁS ANTIGUOS: en
+       * un chat largo recepción abría el hilo y veía la conversación del mes
+       * pasado, sin rastro de lo que el paciente acababa de escribir. El
+       * techo tiene que recortar por arriba, no por abajo.
+       */
+      orderBy: { sentAt: 'desc' },
       // Techo defensivo: un hilo de un año no debe tumbar el navegador.
       // La paginación hacia atrás es la evolución natural.
       take: 200,
     });
 
-    return filas.map((m) => ({ ...m, attachmentId: m.attachment?.id ?? null }));
+    return filas
+      .reverse()
+      .map((m) => ({ ...m, attachmentId: m.attachment?.id ?? null }));
   },
 
   async createOutboundMessage({ conversationId, body, userId }) {

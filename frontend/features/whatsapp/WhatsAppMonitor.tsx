@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState, useTransition, useOptimistic } from 'react';
+import { Fragment, useEffect, useRef, useState, useTransition, useOptimistic } from 'react';
 import type {
   ConversationListItem,
   MessageTemplate,
@@ -104,6 +104,63 @@ function formatVuelta(date: Date): string {
     : `el ${formatDay(date)} a las ${formatTime(date)}`;
 }
 
+/**
+ * "2026-09-17" EN CARACAS, no en la hora del servidor ni del navegador.
+ *
+ * Sirve para agrupar mensajes por día. Se usa `en-CA` porque es el único
+ * locale que `Intl` formatea ya como ISO (año-mes-día), que es lo que hace
+ * que dos claves se puedan comparar con `===`.
+ */
+function claveDelDia(date: Date): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'America/Caracas',
+  }).format(date);
+}
+
+/**
+ * El rótulo que separa un día de otro dentro del hilo: «Hoy», «Ayer» o
+ * «martes, 15 de septiembre de 2026».
+ *
+ * Sin esto, un chat abierto tres días después enseñaba una columna de horas
+ * sueltas —«9:14 a. m.», «10:02 a. m.»— sin decir de qué día era ninguna, y
+ * recepción no podía saber si el paciente escribió hoy o la semana pasada.
+ */
+function formatSeparadorDeDia(date: Date): string {
+  const hoy = claveDelDia(new Date());
+  const clave = claveDelDia(date);
+  if (clave === hoy) return 'Hoy';
+
+  const ayer = new Date();
+  ayer.setDate(ayer.getDate() - 1);
+  if (clave === claveDelDia(ayer)) return 'Ayer';
+
+  /*
+   * `es-VE` devuelve «domingo, 13 de septiembre de 2026» en minúscula. Se
+   * sube SÓLO la primera letra a mano: con `text-transform: capitalize` el
+   * navegador tocaba también las preposiciones y salía «13 De Septiembre De».
+   */
+  const texto = new Intl.DateTimeFormat('es-VE', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'America/Caracas',
+  }).format(date);
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
+/** Fecha y hora completas, para el `title` de cada mensaje. */
+function formatFechaHoraCompleta(date: Date): string {
+  return new Intl.DateTimeFormat('es-VE', {
+    dateStyle: 'full',
+    timeStyle: 'short',
+    timeZone: 'America/Caracas',
+  }).format(date);
+}
+
 function formatDay(date: Date): string {
   return new Intl.DateTimeFormat('es-VE', {
     day: 'numeric',
@@ -139,6 +196,23 @@ export function WhatsAppMonitor({
   const [isSending, setIsSending] = useState(false);
   const [adjunto, setAdjunto] = useState<File | null>(null);
   const adjuntoRef = useRef<HTMLInputElement>(null);
+
+  /*
+   * El hilo se abre SIEMPRE por el final, como WhatsApp.
+   *
+   * Sin esto el panel arrancaba arriba del todo: al entrar en un chat de hace
+   * unos días se veía la conversación vieja y lo que el paciente acababa de
+   * escribir quedaba debajo del scroll, invisible salvo que a alguien se le
+   * ocurriera bajar. Recepción daba el chat por no contestado.
+   *
+   * La dependencia es `messages`, no `selectedId`: así también baja al enviar
+   * una respuesta, que es cuando el mensaje nuevo aparece al final.
+   */
+  const hiloRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const hilo = hiloRef.current;
+    if (hilo) hilo.scrollTop = hilo.scrollHeight;
+  }, [messages]);
   const [sendWarning, setSendWarning] = useState<string | null>(null);
 
   /** Panel de plantillas abierto sobre el compositor. */
@@ -416,7 +490,16 @@ export function WhatsAppMonitor({
                     <span className="conversation-item__name">
                       {conversation.patientName ?? conversation.phoneE164}
                     </span>
-                    <span className="conversation-item__time">
+                    {/* «hace 3 d» de un vistazo; la fecha y la hora exactas
+                        del último mensaje, al posar el ratón. */}
+                    <span
+                      className="conversation-item__time"
+                      title={
+                        conversation.lastMessageAt
+                          ? formatFechaHoraCompleta(conversation.lastMessageAt)
+                          : undefined
+                      }
+                    >
                       {formatRelativeTime(conversation.lastMessageAt)}
                     </span>
                   </div>
@@ -573,13 +656,28 @@ export function WhatsAppMonitor({
             </div>
 
             {/* Historial de mensajes */}
-            <div className="chat__messages">
+            <div className="chat__messages" ref={hiloRef}>
               {messages.length === 0 ? (
                 <EmptyState>Sin mensajes en esta conversación.</EmptyState>
               ) : (
-                messages.map((message) => (
+                messages.map((message, indice) => {
+                  /*
+                   * ¿Este mensaje estrena día? Se compara con el ANTERIOR de
+                   * la lista, que ya viene ordenada de viejo a nuevo. El
+                   * primero siempre lleva separador.
+                   */
+                  const anterior = messages[indice - 1];
+                  const estrenaDia =
+                    !anterior || claveDelDia(anterior.sentAt) !== claveDelDia(message.sentAt);
+
+                  return (
+                  <Fragment key={message.id}>
+                  {estrenaDia && (
+                    <div className="chat__day-divider">
+                      <span>{formatSeparadorDeDia(message.sentAt)}</span>
+                    </div>
+                  )}
                   <div
-                    key={message.id}
                     className={`message message--${message.direction.toLowerCase()} ${
                       message.author === 'SYSTEM' ? 'message--system' : ''
                     }`}
@@ -603,7 +701,12 @@ export function WhatsAppMonitor({
                     <div className="message__meta">
                       <span>{AUTHOR_LABEL[message.author] ?? message.author}</span>
                       <span>·</span>
-                      <span>{formatTime(message.sentAt)}</span>
+                      {/* La hora es la referencia rápida; la fecha completa
+                          está en el `title` para quien necesite el dato
+                          exacto sin buscar el separador de día. */}
+                      <span title={formatFechaHoraCompleta(message.sentAt)}>
+                        {formatTime(message.sentAt)}
+                      </span>
 
                       {/* Estado de entrega, sólo en los salientes. Un mensaje
                           que no salió DEBE verse: si no, el agente cree que
@@ -626,7 +729,9 @@ export function WhatsAppMonitor({
                         )}
                     </div>
                   </div>
-                ))
+                  </Fragment>
+                  );
+                })
               )}
             </div>
 
