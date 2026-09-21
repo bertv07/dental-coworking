@@ -129,7 +129,8 @@ export async function POST(request: NextRequest) {
     const validation = checkAvailabilitySchema.safeParse(parsedBody);
     if (!validation.success) return failValidation(validation.error, requestId);
 
-    const { slots, motivo } = await buscarDisponibilidad(validation.data);
+    const { slots, motivo, preferido, preferenciaNoAplicable } =
+      await buscarDisponibilidad(validation.data);
 
     /*
      * Cuando no hay huecos se dice POR QUÉ y con qué palabras contarlo.
@@ -153,6 +154,15 @@ export async function POST(request: NextRequest) {
       TRATAMIENTO_DESCONOCIDO:
         'Ese treatmentCode no existe o está desactivado. NO ofrezcas otra fecha: ' +
         'vuelve a consultar POST /api/automation/catalog y usa uno de los códigos de ahí.',
+      /*
+       * Distinto de LLENO a propósito: el resto de la clínica puede estar
+       * libre. Si se le dice al bot «está lleno», ofrece otra fecha y nunca
+       * menciona la alternativa que el paciente querría oír.
+       */
+      PREFERIDO_SIN_HUECOS:
+        'Su odontólogo de preferencia no tiene hueco ese día. Pregúntale si quiere ' +
+        'otro día CON ESA MISMA persona, o el primer hueco con quien sea; si dice ' +
+        'que le da igual, repite esta consulta con "ignorarPreferencia": true.',
     };
 
     return ok({
@@ -162,6 +172,27 @@ export async function POST(request: NextRequest) {
       today: hoyEnLaClinica(),
       ...(slots.length === 0 && motivo
         ? { reason: motivo, message: explicacion[motivo] }
+        : {}),
+
+      /*
+       * La preferencia, si se aplicó. El bot la nombra al ofrecer los huecos
+       * («te los busqué con la Dra. Gabriela») para que el paciente sepa que
+       * se le respetó lo que pidió.
+       */
+      ...(preferido ? { preferredDentist: preferido } : {}),
+
+      /*
+       * La preferencia existía y se IGNORÓ porque esa persona no hace este
+       * tratamiento. Hay que decírselo: si no, el paciente cree que va con
+       * su odontóloga de siempre y se encuentra con otra en el sillón.
+       */
+      ...(preferenciaNoAplicable
+        ? {
+            preferenceOverridden: preferenciaNoAplicable,
+            preferenceMessage:
+              `AVISA al paciente: ${preferenciaNoAplicable.nombre} ` +
+              `${preferenciaNoAplicable.motivo}, así que estos huecos son con otro odontólogo.`,
+          }
         : {}),
       slots: slots.map((slot) => ({
         startsAt: slot.startsAt.toISOString(),

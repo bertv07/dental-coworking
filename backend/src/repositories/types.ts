@@ -477,6 +477,37 @@ export interface DataRepository {
 
   // --- Pacientes -----------------------------------------------------------
   findPatientByPhone(phoneE164: string): Promise<Patient | null>;
+
+  /**
+   * Deja constancia de que ya se le preguntó por su odontólogo de
+   * preferencia, aunque la respuesta aún no haya llegado.
+   *
+   * Sin esto, cada cita atendida generaría otra pregunta idéntica: dos
+   * WhatsApp seguidos diciendo lo mismo molestan más que no preguntar.
+   */
+  marcarPreguntaDePreferencia(params: { patientId: string }): Promise<void>;
+
+  /**
+   * La última cita ATENDIDA de un paciente.
+   *
+   * Sirve para deducir con quién quiere seguir cuando contesta «sí» a secas:
+   * es la cita que provocó la pregunta. Pedirle al bot que recuerde un id de
+   * odontólogo entre dos mensajes es justo lo que no hace de forma fiable.
+   */
+  findLastCompletedAppointment(patientId: string): Promise<Appointment | null>;
+
+  /**
+   * Fija —o quita— el odontólogo de preferencia de un paciente.
+   *
+   * `dentistId: null` es «me da igual quién me atienda», que es una
+   * respuesta legítima y distinta de no haber contestado: la marca de
+   * preguntado se conserva.
+   */
+  fijarOdontologoDePreferencia(params: {
+    patientId: string;
+    dentistId: string | null;
+    userId?: string | null;
+  }): Promise<WriteResult<{ patientId: string; dentistId: string | null }>>;
   /**
    * Crea el paciente si no existe; si ya existe, lo devuelve.
    *

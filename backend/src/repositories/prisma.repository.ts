@@ -822,6 +822,58 @@ export const prismaRepository: DataRepository = {
     return prisma.patient.findFirst({ where: { phoneE164, deletedAt: null } });
   },
 
+  async findLastCompletedAppointment(patientId) {
+    return prisma.appointment.findFirst({
+      where: { patientId, status: 'COMPLETED', deletedAt: null },
+      orderBy: { startsAt: 'desc' },
+    });
+  },
+
+  async marcarPreguntaDePreferencia({ patientId }) {
+    await prisma.patient.update({
+      where: { id: patientId },
+      data: { preferredDentistAskedAt: new Date() },
+    });
+  },
+
+  async fijarOdontologoDePreferencia({ patientId, dentistId, userId }) {
+    try {
+      const antes = await prisma.patient.findUnique({
+        where: { id: patientId },
+        select: { preferredDentistId: true },
+      });
+      if (!antes) return { ok: false, reason: 'NOT_FOUND' };
+
+      await prisma.patient.update({
+        where: { id: patientId },
+        data: {
+          preferredDentistId: dentistId,
+          /*
+           * También se marca la fecha: responder «me da igual» ES una
+           * respuesta. Sin esto, quien dice que no volvería a recibir la
+           * pregunta en su siguiente cita.
+           */
+          preferredDentistAskedAt: new Date(),
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          userId: userId ?? null,
+          action: dentistId ? 'patient.preferred_dentist_set' : 'patient.preferred_dentist_cleared',
+          entityType: 'Patient',
+          entityId: patientId,
+          before: { preferredDentistId: antes.preferredDentistId },
+          after: { preferredDentistId: dentistId },
+        },
+      });
+
+      return { ok: true, data: { patientId, dentistId } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
   async upsertPatientByPhone({ phoneE164, fullName }) {
     // `upsert` se traduce a una sola sentencia atómica. Con `findFirst` +
     // `create` habría una condición de carrera entre ambas: dos mensajes

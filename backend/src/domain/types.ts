@@ -113,6 +113,16 @@ export interface Patient {
   birthDate: Date | null;
   notes: string | null;
   marketingConsent: boolean;
+  /**
+   * Con quién quiere seguir atendiéndose. `null` = le da igual.
+   *
+   * Se le pregunta al terminar una cita. Mientras esté puesto, el bot sólo
+   * le ofrece huecos de esa persona —salvo que el tratamiento sea de otra
+   * especialidad, que ahí manda la especialidad—.
+   */
+  preferredDentistId: string | null;
+  /** Cuándo se le preguntó. `null` = nunca; distinto de «dijo que no». */
+  preferredDentistAskedAt: Date | null;
   createdAt: Date;
   deletedAt: Date | null;
 }

@@ -37,6 +37,7 @@ import {
 import { IconEdit, IconPlus, IconCurrency, IconTooth } from '@/frontend/components/ui/icons';
 import { PaymentModal } from '@/frontend/features/admin/PaymentModal';
 import { AddonsModal } from '@/frontend/features/admin/AddonsModal';
+import { describirEspecialidades } from '@/backend/domain/especialidades';
 
 /**
  * ===========================================================================
@@ -625,9 +626,19 @@ export function AgendaManager({
             name="dentistId"
             required
             defaultValue={editing?.dentistId}
+            /*
+             * Con la especialidad al lado. Recepción agenda mirando esta
+             * lista y no tiene por qué saberse de memoria quién hace
+             * endodoncias: el bot ya filtra por especialidad, y el mostrador
+             * se quedaba sin el dato que el bot sí usa.
+             *
+             * Se enseña, no se filtra: recepción puede tener un motivo para
+             * poner a otra persona, y un desplegable que esconde opciones
+             * obliga a llamar al administrador para algo que es suyo.
+             */
             options={dentists.map((dentist) => ({
               value: dentist.id,
-              label: dentist.fullName,
+              label: `${dentist.fullName} · ${describirEspecialidades(dentist.specialties)}`,
             }))}
             error={errorFor('dentistId')}
           />

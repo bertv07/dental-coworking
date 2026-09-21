@@ -371,6 +371,9 @@ const PATIENT_NAMES = [
 export const MOCK_PATIENTS: Patient[] = PATIENT_NAMES.map((name, index) => ({
   id: mockId('pat', index + 1),
   fullName: name,
+  // Nadie con preferencia de origen: es algo que se responde tras una cita.
+  preferredDentistId: null,
+  preferredDentistAskedAt: null,
   // Teléfonos únicos y válidos en E.164 colombiano.
   phoneE164: `+584${String(141_000_000 + index * 1_234_567).slice(0, 9)}`,
   email: index % 3 === 0 ? `${name.split(' ')[0]!.toLowerCase()}${index}@correo.com` : null,

@@ -37,6 +37,7 @@ import {
 import { clinicDayKey, clinicWallClockToInstant } from '@/backend/domain/clinic-calendar';
 import { scheduleAppointment } from '@/backend/services/scheduling.service';
 import { notifyAppointmentScheduled } from '@/backend/services/appointment-notification.service';
+import { preguntarPorOdontologoDePreferencia } from '@/backend/services/preferencia-odontologo.service';
 import { resolveRateSource } from '@/backend/services/exchange-rate.service';
 
 /**
@@ -949,7 +950,7 @@ export async function updateAppointmentAction(
  * enviar paciente, sala y tratamiento.
  */
 export async function setAppointmentStatusAction(input: unknown): Promise<ActionResult> {
-  return runAction({
+  const resultado = await runAction({
     minimumRole: 'ASSISTANT',
     schema: appointmentStatusSchema,
     input,
@@ -962,6 +963,25 @@ export async function setAppointmentStatusAction(input: unknown): Promise<Action
         cancellationReason: data.cancellationReason,
       }),
   });
+
+  /*
+   * Cita atendida → se le pregunta al paciente si quiere seguir con ese
+   * odontólogo.
+   *
+   * Va DESPUÉS de que el cambio de estado haya salido bien, y sin `await`
+   * bloqueante sobre el resultado: quien acaba de pulsar «Completar» está
+   * mirando la pantalla, y un WhatsApp lento no puede dejarle el botón
+   * girando. El servicio no lanza nunca y se encarga él de no repetir la
+   * pregunta ni preguntarla cuando no toca.
+   */
+  if (resultado.ok) {
+    const parsed = appointmentStatusSchema.safeParse(input);
+    if (parsed.success && parsed.data.status === 'COMPLETED') {
+      await preguntarPorOdontologoDePreferencia({ appointmentId: parsed.data.id });
+    }
+  }
+
+  return resultado;
 }
 
 /**

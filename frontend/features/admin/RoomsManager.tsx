@@ -16,6 +16,7 @@ import {
   FormFooter,
 } from '@/frontend/components/ui/form';
 import { Badge, EmptyState, Notice } from '@/frontend/components/ui/primitives';
+import { describirEspecialidades } from '@/backend/domain/especialidades';
 
 /**
  * Gestión de consultorios.
@@ -28,7 +29,7 @@ import { Badge, EmptyState, Notice } from '@/frontend/components/ui/primitives';
 interface RoomsManagerProps {
   rooms: Room[];
   /** Para elegir el dueño fijo del consultorio. */
-  dentists: Array<{ id: string; fullName: string }>;
+  dentists: Array<{ id: string; fullName: string; specialties: string[] }>;
   /** Citas programadas por sala en los próximos 7 días. */
   upcomingByRoom: Record<string, number>;
 }
@@ -192,7 +193,18 @@ export function RoomsManager({ rooms, dentists, upcomingByRoom }: RoomsManagerPr
             hint="Vacío = consultorio rotativo, se reparte por especialidad"
             options={[
               { value: '', label: '— rotativo —' },
-              ...dentists.map((d) => ({ value: d.id, label: d.fullName })),
+              /*
+               * Con la especialidad al lado del nombre.
+               *
+               * Un consultorio se asigna POR EL TRABAJO que se hace en él
+               * —el de cirugía no es el de ortodoncia—, y quien elige aquí
+               * no tiene por qué saberse de memoria a qué se dedica cada
+               * quien. Sin el dato, la asignación se hace a ojo.
+               */
+              ...dentists.map((d) => ({
+                value: d.id,
+                label: `${d.fullName} · ${describirEspecialidades(d.specialties)}`,
+              })),
             ]}
             error={errorFor('assignedDentistId')}
           />

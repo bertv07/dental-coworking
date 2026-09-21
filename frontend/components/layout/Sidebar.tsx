@@ -132,7 +132,9 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // primera en enterarse de que un precio cambió.
       { href: '/tratamientos', label: 'Precios', Icon: IconTag, minimumRole: 'ASSISTANT' },
       { href: '/tasa-cambio', label: 'Tasa de cambio', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
-      { href: '/consultorios', label: 'Consultorios', Icon: IconRoom, minimumRole: 'SUPER_ADMIN' },
+      // Recepción conoce la rotación real por especialidades; el guard de la
+      // página usa el mismo umbral.
+      { href: '/consultorios', label: 'Consultorios', Icon: IconRoom, minimumRole: 'ASSISTANT' },
       { href: '/configuracion', label: 'Configuración', Icon: IconSettings, minimumRole: 'SUPER_ADMIN' },
     ],
   },

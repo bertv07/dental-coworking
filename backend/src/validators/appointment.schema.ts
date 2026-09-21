@@ -116,6 +116,19 @@ export const checkAvailabilitySchema = z.object({
 
   /** Máximo de huecos a devolver. Acotado: el bot sólo puede ofrecer unos pocos. */
   maxSlots: z.number().int().min(1).max(20).default(6),
+
+  /**
+   * Teléfono del paciente, para respetar su odontólogo de preferencia.
+   *
+   * El bot lo tiene siempre —es de quien está recibiendo el mensaje—, así
+   * que mandarlo sale gratis y evita ofrecerle huecos con alguien que ya
+   * dijo que no quería. Opcional: recepción buscando un hueco cualquiera no
+   * tiene por qué pasarlo.
+   */
+  patientPhone: phoneE164Schema.optional(),
+
+  /** `true` = «hoy me da igual quién me atienda»: salta la preferencia. */
+  ignorarPreferencia: z.boolean().optional(),
 });
 
 export type CheckAvailabilityInput = z.infer<typeof checkAvailabilitySchema>;

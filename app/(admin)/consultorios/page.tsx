@@ -1,4 +1,4 @@
-import { requireSuperAdmin } from '@/backend/auth/guards';
+import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { RoomsManager } from '@/frontend/features/admin/RoomsManager';
@@ -8,7 +8,12 @@ import { FadeIn } from '@/frontend/components/motion';
  * ===========================================================================
  *  /consultorios — Espacios físicos
  * ===========================================================================
- *  ACCESO: sólo Super Admin.
+ *  ACCESO: recepción o superior.
+ *
+ *  Era sólo Super Admin, en contra de lo que dice el propio esquema del
+ *  formulario: quien conoce la rotación real por especialidades es el
+ *  mostrador, no quien mira los números a fin de mes. Con el guard anterior,
+ *  cambiar de sala a alguien obligaba a llamar al administrador.
  *
  *  El consultorio es un RECURSO ESCASO: dos citas no pueden solaparse en la
  *  misma sala. Esa regla la impone el constraint `EXCLUDE USING gist` de la
@@ -24,7 +29,7 @@ export const metadata = { title: 'Consultorios' };
 export const dynamic = 'force-dynamic';
 
 export default async function RoomsPage() {
-  await requireSuperAdmin();
+  await requireRole('ASSISTANT');
 
   const from = new Date();
   const to = new Date(from.getTime() + 7 * 24 * 60 * 60 * 1000);

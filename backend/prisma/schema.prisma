@@ -396,6 +396,9 @@ model Dentist {
   payouts      DentistPayout[]
   treatments   DentistTreatment[]
 
+  /** Pacientes que pidieron seguir con él. Ver `Patient.preferredDentistId`. */
+  pacientesQuePrefieren Patient[] @relation("PacientesConPreferencia")
+
   createdAt         DateTime                  @default(now()) @db.Timestamptz(3)
   updatedAt         DateTime                  @updatedAt @db.Timestamptz(3)
   deletedAt         DateTime?                 @db.Timestamptz(3)
@@ -523,6 +526,29 @@ model Patient {
   /// queda a favor) y se gasta como método de pago `CREDIT` en una factura
   /// futura. Nunca se edita a mano fuera de esos dos movimientos.
   creditBalanceCents Int @default(0)
+
+  /**
+   * El odontólogo con el que este paciente quiere seguir atendiéndose.
+   *
+   * Se le pregunta al terminar una cita («¿quieres que las próximas sean con
+   * la Dra. X?»). Mientras esté puesto, el bot y el panel SÓLO le ofrecen
+   * huecos de esa persona: un tratamiento largo con cuatro odontólogos
+   * distintos no es continuidad, es una ruleta.
+   *
+   * `null` = sin preferencia, se le ofrece a quien tenga hueco. Es también
+   * lo que queda al responder que no, y por eso hace falta
+   * `preferredDentistAskedAt`: sin él, «no tengo preferencia» y «todavía no
+   * me han preguntado» serían el mismo estado y se le preguntaría en cada
+   * visita.
+   *
+   * `SetNull` y no `Cascade`: que se dé de baja a un odontólogo no puede
+   * borrar al paciente. Se queda sin preferencia, que es la verdad.
+   */
+  preferredDentistId String?
+  preferredDentist   Dentist? @relation("PacientesConPreferencia", fields: [preferredDentistId], references: [id], onDelete: SetNull)
+
+  /** Cuándo se le preguntó por última vez. `null` = nunca. */
+  preferredDentistAskedAt DateTime? @db.Timestamptz(3)
 
   /// Expediente clínico. Uno por paciente, creado al imprimirlo.
   invoices  Invoice[]

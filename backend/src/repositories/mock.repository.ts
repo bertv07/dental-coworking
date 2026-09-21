@@ -382,6 +382,27 @@ export const mockRepository: DataRepository = {
     return patients.find((patient) => patient.phoneE164 === phoneE164) ?? null;
   },
 
+  async findLastCompletedAppointment(patientId) {
+    return (
+      appointments
+        .filter((a) => a.patientId === patientId && a.status === 'COMPLETED')
+        .sort((a, b) => b.startsAt.getTime() - a.startsAt.getTime())[0] ?? null
+    );
+  },
+
+  async marcarPreguntaDePreferencia({ patientId }) {
+    const p = patients.find((x) => x.id === patientId);
+    if (p) p.preferredDentistAskedAt = new Date();
+  },
+
+  async fijarOdontologoDePreferencia({ patientId, dentistId }) {
+    const p = patients.find((x) => x.id === patientId);
+    if (!p) return { ok: false, reason: 'NOT_FOUND' };
+    p.preferredDentistId = dentistId;
+    p.preferredDentistAskedAt = new Date();
+    return { ok: true, data: { patientId, dentistId } };
+  },
+
   async upsertPatientByPhone({ phoneE164, fullName }) {
     const existing = patients.find((patient) => patient.phoneE164 === phoneE164);
     if (existing) return existing;
@@ -390,6 +411,8 @@ export const mockRepository: DataRepository = {
       id: `cpat${Date.now().toString(36)}${'x'.repeat(10)}`.slice(0, 25),
       fullName,
       phoneE164,
+      preferredDentistId: null,
+      preferredDentistAskedAt: null,
       email: null,
       documentId: null,
       birthDate: null,
@@ -444,6 +467,8 @@ export const mockRepository: DataRepository = {
     const created: Patient = {
       id: newId('pat'),
       ...data,
+      preferredDentistId: null,
+      preferredDentistAskedAt: null,
       createdAt: new Date(),
       deletedAt: null,
     };

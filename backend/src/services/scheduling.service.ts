@@ -2,6 +2,7 @@ import 'server-only';
 import { repository } from '@/backend/repositories';
 import type { CreateAppointmentInput } from '@/backend/validators/appointment.schema';
 import type { Appointment, Dentist, Room, Treatment } from '@/backend/domain/types';
+import { filtrarPorEspecialidad } from '@/backend/domain/especialidades';
 import { env } from '@/backend/config/env';
 
 /**
@@ -449,12 +450,33 @@ export type MotivoSinHuecos =
   | 'PASADO'
   | 'CERRADO'
   | 'LLENO'
-  | 'TRATAMIENTO_DESCONOCIDO';
+  | 'TRATAMIENTO_DESCONOCIDO'
+  /**
+   * El paciente pidió seguir con un odontólogo concreto y ESE no tiene hueco
+   * ese día, aunque otros sí.
+   *
+   * Merece motivo propio porque la respuesta correcta es distinta: no es
+   * «estamos llenos» sino «tu odontóloga no atiende ese día, ¿te busco con
+   * ella otro día o prefieres a quien haya?». Con «LLENO» a secas, el bot
+   * ofrecía otra fecha sin decir que el resto de la clínica estaba libre.
+   */
+  | 'PREFERIDO_SIN_HUECOS';
 
 export interface Disponibilidad {
   slots: AvailableSlot[];
   /** Sólo cuando `slots` viene vacío. */
   motivo?: MotivoSinHuecos;
+  /**
+   * El odontólogo de preferencia que se aplicó, si se aplicó. Le sirve al
+   * bot para nombrarlo («te los busco con la Dra. Gabriela»).
+   */
+  preferido?: { id: string; nombre: string };
+  /**
+   * La preferencia existía pero se ha IGNORADO porque esa persona no hace
+   * este tratamiento. Hay que decírselo al paciente, no callarlo: creerá que
+   * va con su odontóloga de siempre y se encontrará con otra.
+   */
+  preferenciaNoAplicable?: { nombre: string; motivo: string };
 }
 
 export async function findAvailableSlots(params: {
@@ -471,6 +493,15 @@ export async function buscarDisponibilidad(params: {
   date: Date;
   dentistId?: string;
   maxSlots: number;
+  /**
+   * Teléfono del paciente, para respetar su odontólogo de preferencia.
+   *
+   * Opcional a propósito: recepción buscando un hueco en general no tiene
+   * por qué pasarlo, y el bot sí lo tiene siempre a mano.
+   */
+  patientPhone?: string;
+  /** `true` = «hoy me da igual quién me atienda». Salta la preferencia. */
+  ignorarPreferencia?: boolean;
 }): Promise<Disponibilidad> {
   /*
    * Código que no existe (o que se desactivó al cargar la lista de precios
@@ -490,9 +521,56 @@ export async function buscarDisponibilidad(params: {
     repository.listRooms(),
   ]);
 
-  const candidateDentists = params.dentistId
+  /* ---------------------------------------------------------------------
+   *  Quién puede atender esta cita: tres recortes, en este orden
+   * ------------------------------------------------------------------- */
+
+  // 1. Si el llamador pide a alguien concreto, manda él y no se discute.
+  let candidateDentists = params.dentistId
     ? dentists.filter((dentist) => dentist.id === params.dentistId)
     : dentists;
+
+  /*
+   * 2. LA ESPECIALIDAD. Va ANTES que la preferencia a propósito: la
+   *    endodoncia la hace quien sabe hacerla, aunque el paciente le haya
+   *    cogido cariño a la ortodoncista. `filtrarPorEspecialidad` no vacía
+   *    nunca la lista —si nadie tiene esa especialidad es trabajo general—,
+   *    así que esto no puede dejar al bot sin candidatos.
+   */
+  if (!params.dentistId) {
+    candidateDentists = filtrarPorEspecialidad(candidateDentists, treatment.category);
+  }
+
+  /*
+   * 3. LA PREFERENCIA del paciente, si la tiene y si esa persona ha
+   *    sobrevivido al filtro de especialidad.
+   *
+   *    Si no ha sobrevivido, se ignora y se DICE: callarlo haría que el
+   *    paciente creyera que va con su odontóloga de siempre y se encontrara
+   *    con otra en el sillón.
+   */
+  let preferido: { id: string; nombre: string } | undefined;
+  let preferenciaNoAplicable: { nombre: string; motivo: string } | undefined;
+
+  if (!params.dentistId && !params.ignorarPreferencia && params.patientPhone) {
+    const paciente = await repository.findPatientByPhone(params.patientPhone);
+    const elegido = paciente?.preferredDentistId
+      ? dentists.find((d) => d.id === paciente.preferredDentistId)
+      : undefined;
+
+    if (elegido) {
+      const puedeHacerlo = candidateDentists.some((d) => d.id === elegido.id);
+      if (puedeHacerlo) {
+        candidateDentists = candidateDentists.filter((d) => d.id === elegido.id);
+        preferido = { id: elegido.id, nombre: elegido.fullName };
+      } else {
+        preferenciaNoAplicable = {
+          nombre: elegido.fullName,
+          motivo: `no atiende ${treatment.category?.toLowerCase() ?? 'este tratamiento'}`,
+        };
+      }
+    }
+  }
 
   const zona = env.CLINIC_TIMEZONE;
   const dia = diaEnLaClinica(params.date, zona);
@@ -627,7 +705,7 @@ export async function buscarDisponibilidad(params: {
     }
   }
 
-  if (slots.length > 0) return { slots };
+  if (slots.length > 0) return { slots, preferido, preferenciaNoAplicable };
 
   /*
    * No hay huecos. Ahora hay que decir POR QUÉ, que es lo único que le
@@ -637,14 +715,26 @@ export async function buscarDisponibilidad(params: {
   const pedido = dia.anio * 10000 + dia.mes * 100 + dia.dia;
   const actual = hoy.anio * 10000 + hoy.mes * 100 + hoy.dia;
 
-  if (pedido < actual) return { slots: [], motivo: 'PASADO' };
+  if (pedido < actual) return { slots: [], motivo: 'PASADO', preferenciaNoAplicable };
+
+  /*
+   * Se buscó SÓLO con el odontólogo de preferencia y no había hueco.
+   *
+   * No es lo mismo que estar llenos, y el bot tiene que poder decirlo: puede
+   * que ese día no venga, o que su agenda esté completa mientras el resto de
+   * la clínica está libre. «LLENO» a secas hacía que el bot ofreciera otra
+   * fecha sin mencionar la alternativa evidente.
+   */
+  if (preferido) {
+    return { slots: [], motivo: 'PREFERIDO_SIN_HUECOS', preferido };
+  }
 
   // Nadie con horario ese día de la semana: la clínica no abre, o no abre
   // para ese tratamiento con esa odontóloga.
   const alguienTrabaja = [...horarios.values()].some((b) => b.length > 0);
-  if (!alguienTrabaja) return { slots: [], motivo: 'CERRADO' };
+  if (!alguienTrabaja) return { slots: [], motivo: 'CERRADO', preferenciaNoAplicable };
 
-  return { slots: [], motivo: 'LLENO' };
+  return { slots: [], motivo: 'LLENO', preferenciaNoAplicable };
 }
 
 /**
