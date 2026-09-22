@@ -1000,12 +1000,40 @@ export const prismaRepository: DataRepository = {
 
   async softDeletePatient(id) {
     try {
-      return {
-        ok: true,
+      const data = await prisma.$transaction(async (tx) => {
         // Borrado LÓGICO: citas y pagos del paciente siguen existiendo, así
         // que la contabilidad histórica no se altera.
-        data: await prisma.patient.update({ where: { id }, data: { deletedAt: new Date() } }),
-      };
+        const paciente = await tx.patient.update({
+          where: { id },
+          data: { deletedAt: new Date() },
+        });
+
+        /*
+         * Sus citas PENDIENTES se cancelan. Las atendidas y las cobradas se
+         * quedan tal cual: son historia y dinero.
+         *
+         * Sin esto el paciente desaparecía de Pacientes pero seguía en la
+         * agenda de la semana que viene como si nada, con un hueco
+         * reservado para alguien que ya no existe y un nombre que al
+         * pulsarlo no llevaba a ningún sitio.
+         */
+        await tx.appointment.updateMany({
+          where: {
+            patientId: id,
+            deletedAt: null,
+            status: { in: ['PENDING', 'CONFIRMED'] },
+            startsAt: { gte: new Date() },
+          },
+          data: {
+            status: 'CANCELLED',
+            cancellationReason: 'Paciente eliminado del panel',
+          },
+        });
+
+        return paciente;
+      });
+
+      return { ok: true, data };
     } catch (error) {
       return toWriteFailure(error);
     }

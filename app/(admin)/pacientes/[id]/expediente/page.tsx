@@ -53,9 +53,18 @@ export default async function ExpedientePage({
 
   const { id } = await params;
 
+  /*
+   * SIN `deletedAt: null` a propósito.
+   *
+   * Un paciente borrado del panel sigue teniendo citas en la agenda —el
+   * borrado es lógico y la contabilidad histórica no se toca— y su
+   * expediente se conserva entero: es la regla de esta pantalla. Con el
+   * filtro, pulsar su nombre desde una cita daba un 404 seco que parecía
+   * una página rota. Se abre y se dice arriba que está borrado.
+   */
   const patient = await prisma.patient.findFirst({
-    where: { id, deletedAt: null },
-    select: { id: true, fullName: true, phoneE164: true, documentId: true },
+    where: { id },
+    select: { id: true, fullName: true, phoneE164: true, documentId: true, deletedAt: true },
   });
 
   if (!patient) notFound();
@@ -70,6 +79,22 @@ export default async function ExpedientePage({
           subtitle={`Expediente · ${patient.documentId ?? patient.phoneE164}`}
         />
       </FadeIn>
+
+      {patient.deletedAt && (
+        <FadeIn delay={0.04}>
+          <Notice tone="warning">
+            Este paciente fue <strong>eliminado del panel</strong> el{' '}
+            {new Intl.DateTimeFormat('es-VE', {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+              timeZone: 'America/Caracas',
+            }).format(patient.deletedAt)}
+            . Sus documentos se conservan, pero no aparece en Pacientes ni se le pueden
+            agendar citas nuevas.
+          </Notice>
+        </FadeIn>
+      )}
 
       <FadeIn delay={0.06}>
         <Notice tone="info">
