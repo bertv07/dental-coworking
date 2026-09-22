@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import type {
@@ -310,7 +311,19 @@ export function AgendaManager({
                           {timeFormatter.format(appointment.startsAt)}
                         </td>
                         <td data-label="Paciente">
-                          <div className="table__strong">{appointment.patient.fullName}</div>
+                          {/*
+                            El nombre lleva al expediente. Es lo que recepción
+                            quiere abrir cuando mira una cita: la historia
+                            clínica y los documentos de ESA persona, no la
+                            lista de pacientes para volver a buscarla.
+                          */}
+                          <Link
+                            href={`/pacientes/${appointment.patient.id}/expediente`}
+                            className="table__strong"
+                            title="Abrir expediente e historia clínica"
+                          >
+                            {appointment.patient.fullName}
+                          </Link>
                           <div className="text-xs subtle mono">
                             {appointment.patient.phoneE164}
                           </div>

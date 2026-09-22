@@ -68,6 +68,17 @@ export async function preguntarPorOdontologoDePreferencia(params: {
     const cita = await repository.findAppointmentById(params.appointmentId);
     if (!cita) return { estado: 'OMITIDA', motivo: 'La cita ya no existe' };
 
+    /*
+     * Sólo si la cita está ATENDIDA de verdad. Se comprueba aquí y no en
+     * quien llama porque la cita se cierra por tres caminos —«Completar» en
+     * la agenda, un cobro directo, un cobro por factura— y los tres pueden
+     * llamar sin pensar: si el cobro fue un abono parcial y la cita sigue
+     * abierta, esto se calla.
+     */
+    if (cita.status !== 'COMPLETED') {
+      return { estado: 'OMITIDA', motivo: `La cita está ${cita.status}, no atendida` };
+    }
+
     // Por teléfono y no por id: es la consulta que ya existe, y el teléfono
     // es justo lo que hace falta después para escribirle.
     const paciente = await repository.findPatientByPhone(cita.patient.phoneE164);

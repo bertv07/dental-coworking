@@ -1714,6 +1714,14 @@ export async function registerPaymentAction(input: unknown): Promise<ActionResul
     revalidatePath('/dashboard');
     revalidatePath('/odontologos');
 
+    /*
+     * Cobrar cierra la cita como atendida sin pasar por «Completar»: si la
+     * pregunta del odontólogo de preferencia sólo colgara del botón, el
+     * paciente que paga y se va no la recibiría nunca. El servicio comprueba
+     * él mismo que la cita quedó COMPLETED y que no se ha preguntado ya.
+     */
+    await preguntarPorOdontologoDePreferencia({ appointmentId: data.appointmentId });
+
     return { ok: true };
   } catch (error) {
     console.error(

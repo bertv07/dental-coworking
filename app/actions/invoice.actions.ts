@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { preguntarPorOdontologoDePreferencia } from '@/backend/services/preferencia-odontologo.service';
 import { z } from 'zod';
 import { checkApiRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
@@ -513,6 +514,10 @@ export async function registerInvoicePaymentAction(input: unknown): Promise<Acti
   revalidatePath('/caja');
   revalidatePath('/agenda');
 
+  // Un cobro que salda la factura cierra la cita: misma pregunta que
+  // «Completar» en la agenda. El servicio se calla si sólo fue un abono.
+  await preguntarSiCerroLaCita(d.invoiceId);
+
   // Pagó de más: el vuelto quedó de bonificación. Se avisa para que quien
   // cobró sepa que no hay que devolverlo en efectivo — ya quedó guardado.
   if (result.data.creditAddedCents > 0) {
@@ -561,6 +566,7 @@ export async function applyPatientCreditAction(invoiceId: string): Promise<Actio
 
   revalidatePath(`/facturas/${parsed.data}`);
   revalidatePath('/caja');
+  await preguntarSiCerroLaCita(parsed.data);
   return { ok: true };
 }
 
@@ -774,4 +780,16 @@ export async function consultarTasaDelDiaAction(
       ? { rate: delDia.aproximada.rate, fechaLabel: etiqueta(delDia.aproximada.publishedAt) }
       : null,
   };
+}
+
+/**
+ * Si la factura venía de una cita y el cobro la dejó atendida, se le
+ * pregunta al paciente por su odontólogo de preferencia. Una venta directa
+ * sin cita no tiene con quién seguir, así que no hay nada que preguntar.
+ */
+async function preguntarSiCerroLaCita(invoiceId: string): Promise<void> {
+  const factura = await repository.getInvoice(invoiceId);
+  if (factura?.appointmentId) {
+    await preguntarPorOdontologoDePreferencia({ appointmentId: factura.appointmentId });
+  }
 }
