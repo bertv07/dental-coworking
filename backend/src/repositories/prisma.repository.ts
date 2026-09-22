@@ -2458,6 +2458,55 @@ export const prismaRepository: DataRepository = {
     return rows.map(toInvoice);
   },
 
+  async setInvoiceSplit({ invoiceId, clinicPercent, userId }) {
+    try {
+      const resultado = await prisma.$transaction(async (tx) => {
+        const factura = await tx.invoice.findUnique({
+          where: { id: invoiceId },
+          select: {
+            status: true,
+            clinicShareCents: true,
+            totalCents: true,
+            _count: { select: { payments: true } },
+          },
+        });
+        if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        if (factura.status === 'VOID') {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
+        }
+        // Con dinero ya repartido no se toca: ver el contrato en types.ts.
+        if (factura._count.payments > 0) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'payments' };
+        }
+
+        await tx.invoiceLine.updateMany({
+          where: { invoiceId },
+          data: { commissionPercent: clinicPercent },
+        });
+        await recalcularFactura(tx, invoiceId);
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'invoice.split_changed',
+            entityType: 'Invoice',
+            entityId: invoiceId,
+            before: {
+              clinicShareCents: factura.clinicShareCents,
+              totalCents: factura.totalCents,
+            },
+            after: { clinicPercent },
+          },
+        });
+
+        return { ok: true as const, data: { invoiceId, clinicPercent } };
+      });
+      return resultado;
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
   async getInvoice(id) {
     const row = await prisma.invoice.findUnique({ where: { id }, include: INVOICE_RELATIONS });
     return row ? toInvoice(row) : null;

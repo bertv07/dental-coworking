@@ -331,6 +331,53 @@ export async function updateInvoiceLineAction(input: unknown): Promise<ActionRes
   return { ok: true };
 }
 
+const repartoSchema = z.object({
+  invoiceId: cuidSchema,
+  /** Porcentaje de la CLÍNICA. 60 = el 60/40 habitual; 50 = 50/50; 40 = 40/60. */
+  clinicPercent: z.coerce.number().int('Sin decimales').min(0, 'Mínimo 0').max(100, 'Máximo 100'),
+});
+
+/**
+ * Cambia el reparto clínica/odontólogo de una factura entera.
+ *
+ * Es la decisión que recepción toma con el caso delante —«con esta doctora
+ * esta vez va 50/50»— y por eso se acepta del formulario, a diferencia del
+ * reparto calculado, que jamás. Queda en auditoría con quién lo hizo.
+ */
+export async function setInvoiceSplitAction(input: unknown): Promise<ActionResult> {
+  const auth = await autorizar();
+  if (!auth.ok) return auth.result;
+
+  const validation = repartoSchema.safeParse(input);
+  if (!validation.success) {
+    const issue = validation.error.issues[0];
+    return { ok: false, error: issue?.message ?? 'Datos inválidos', field: issue?.path.join('.') };
+  }
+  const d = validation.data;
+
+  const result = await repository.setInvoiceSplit({
+    invoiceId: d.invoiceId,
+    clinicPercent: d.clinicPercent,
+    userId: auth.userId,
+  });
+
+  if (!result.ok) {
+    if (result.reason === 'DUPLICATE') {
+      return {
+        ok: false,
+        error:
+          result.field === 'payments'
+            ? 'Esta factura ya tiene cobros: el reparto se fija antes de cobrar. Reversa el cobro si hace falta cambiarlo.'
+            : 'Esa factura está anulada.',
+      };
+    }
+    return { ok: false, error: 'Esa factura ya no existe.' };
+  }
+
+  revalidatePath(`/facturas/${d.invoiceId}`);
+  return { ok: true };
+}
+
 export async function removeInvoiceLineAction(
   id: string,
   invoiceId: string,

@@ -1025,6 +1025,11 @@ export const mockRepository: DataRepository = {
     return [];
   },
 
+  async setInvoiceSplit({ invoiceId, clinicPercent }) {
+    // El mock no reparte: sólo confirma la forma del contrato.
+    return { ok: true, data: { invoiceId, clinicPercent } };
+  },
+
   async getInvoice() {
     return null;
   },

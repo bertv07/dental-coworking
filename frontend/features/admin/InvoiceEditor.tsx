@@ -16,6 +16,7 @@ import {
   applyPromotionAction,
   applyPatientCreditAction,
   consultarTasaDelDiaAction,
+  setInvoiceSplitAction,
 } from '@/app/actions/invoice.actions';
 import type { TasaDelDiaConsulta } from '@/app/actions/invoice.actions';
 import { Modal } from '@/frontend/components/motion';
@@ -150,6 +151,24 @@ export function InvoiceEditor({
 
   const anulada = invoice.status === 'VOID';
   const saldada = invoice.balanceCents <= 0;
+
+  /*
+   * Reparto actual de la factura, en % de la clínica. Sale de los cents ya
+   * repartidos, que es lo que de verdad manda; las líneas pueden tener
+   * porcentajes distintos entre sí y aquí se ve el resultado.
+   */
+  const repartoActual =
+    invoice.totalCents > 0
+      ? Math.round((invoice.clinicShareCents / invoice.totalCents) * 100)
+      : null;
+  // Sólo antes del primer cobro, con odontólogo y con algo que repartir.
+  const puedeCambiarReparto =
+    !anulada && invoice.payments.length === 0 && invoice.dentistId !== null && invoice.totalCents > 0;
+  const [repartoLibre, setRepartoLibre] = useState('');
+
+  function fijarReparto(clinicPercent: number) {
+    run(() => setInvoiceSplitAction({ invoiceId: invoice.id, clinicPercent }));
+  }
   const activos = treatments.filter((t) => t.isActive);
 
   function run(
@@ -327,6 +346,93 @@ export function InvoiceEditor({
             )}
           </span>
         </div>
+
+        {/*
+          REPARTO CLÍNICA / ODONTÓLOGO de esta factura.
+
+          El habitual es 60/40, pero con cada odontóloga se pacta lo suyo y a
+          veces para un caso concreto: «esta vez 50/50». Se fija AQUÍ, en la
+          factura, y no en la ficha del odontólogo: cambiarle la comisión
+          general movería todas sus citas pasadas y futuras.
+
+          Los números son siempre CLÍNICA / ODONTÓLOGO, en ese orden, y se
+          escribe así al lado para que nadie tenga que acordarse.
+        */}
+        {invoice.dentistId !== null && repartoActual !== null && (
+          <div
+            style={{
+              borderTop: '1px solid var(--color-border)',
+              paddingTop: '0.75rem',
+              marginTop: '0.75rem',
+            }}
+          >
+            <div className="row row--between text-sm">
+              <span className="muted">Reparto</span>
+              <span>
+                Clínica <strong>{repartoActual}%</strong> · Odontólogo{' '}
+                <strong>{100 - repartoActual}%</strong>
+              </span>
+            </div>
+            <div className="row row--between text-xs subtle" style={{ marginTop: '0.15rem' }}>
+              <span>{formatCents(invoice.clinicShareCents)} clínica</span>
+              <span>{formatCents(invoice.dentistShareCents)} odontólogo</span>
+            </div>
+
+            {puedeCambiarReparto && (
+              <div className="row row--wrap" style={{ gap: '0.4rem', marginTop: '0.6rem', alignItems: 'center' }}>
+                {[60, 50, 40].map((clinica) => (
+                  <button
+                    key={clinica}
+                    type="button"
+                    className={`btn btn--sm ${repartoActual === clinica ? 'btn--primary' : 'btn--ghost'}`}
+                    onClick={() => fijarReparto(clinica)}
+                    disabled={isPending || repartoActual === clinica}
+                    title={`Clínica ${clinica}% · Odontólogo ${100 - clinica}%`}
+                  >
+                    {clinica}/{100 - clinica}
+                  </button>
+                ))}
+                <form
+                  className="row"
+                  style={{ gap: '0.3rem', alignItems: 'center' }}
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const n = Number(repartoLibre);
+                    if (Number.isInteger(n) && n >= 0 && n <= 100) {
+                      fijarReparto(n);
+                      setRepartoLibre('');
+                    }
+                  }}
+                >
+                  <input
+                    type="number"
+                    className="input"
+                    style={{ width: '5.5rem' }}
+                    min={0}
+                    max={100}
+                    step={1}
+                    placeholder="% clínica"
+                    value={repartoLibre}
+                    onChange={(e) => setRepartoLibre(e.target.value)}
+                    aria-label="Porcentaje de la clínica"
+                  />
+                  <button
+                    type="submit"
+                    className="btn btn--ghost btn--sm"
+                    disabled={isPending || repartoLibre === ''}
+                  >
+                    Aplicar
+                  </button>
+                </form>
+              </div>
+            )}
+            {!puedeCambiarReparto && invoice.payments.length > 0 && !anulada && (
+              <div className="text-xs subtle" style={{ marginTop: '0.4rem' }}>
+                Con cobros registrados el reparto ya no se cambia.
+              </div>
+            )}
+          </div>
+        )}
 
         {invoice.paidCents > 0 && (
           <>

@@ -800,6 +800,21 @@ export interface DataRepository {
 
   getInvoice(id: string): Promise<Invoice | null>;
 
+  /**
+   * Fija el reparto de TODA la factura: qué porcentaje se queda la clínica
+   * (el resto es del odontólogo). 60/40, 50/50, 40/60 o lo que se pacte.
+   *
+   * Reescribe el reparto de cada línea y recalcula. Sólo mientras no haya
+   * ningún cobro: un pago ya repartió su dinero entre los dos y cambiar el
+   * porcentaje después dejaría la caja diciendo una cosa y la factura otra.
+   * `DUPLICATE` en `payments` = ya hay cobros; en `status` = está anulada.
+   */
+  setInvoiceSplit(params: {
+    invoiceId: string;
+    clinicPercent: number;
+    userId: string;
+  }): Promise<WriteResult<{ invoiceId: string; clinicPercent: number }>>;
+
   /** Añade una línea. El precio y la comisión los decide el SERVIDOR. */
   addInvoiceLine(params: {
     invoiceId: string;
