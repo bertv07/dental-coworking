@@ -89,8 +89,11 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
        * decidió no atender chats desde el panel: los atiende el bot y, cuando
        * hace falta una persona, se escribe desde el teléfono de recepción.
        * Un enlace a una pantalla que nadie va a usar sólo confunde.
+       *
+       * Plantillas se fue con él: eran las respuestas prehechas del compositor
+       * del monitor y no se usan en ningún otro sitio. Ruta /plantillas por
+       * URL, por si acaso.
        */
-      { href: '/plantillas', label: 'Plantillas', Icon: IconPrescription, minimumRole: 'ASSISTANT' },
 
       /*
        * Tarifas NO está en el menú. La clínica cobra el precio de lista
