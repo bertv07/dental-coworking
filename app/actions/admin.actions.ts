@@ -1249,6 +1249,22 @@ export async function createOwnAppointmentAction(input: unknown): Promise<Action
       case 'DENTIST_NOT_FOUND':
         return { ok: false, error: 'Tu ficha de odontólogo no está activa.' };
 
+      /*
+       * No trabaja entonces (sin horario configurado, o un descanso). NO es
+       * lo mismo que "ya tienes una cita ahí": antes compartían el mismo
+       * mensaje y una odontóloga SIN horario definido veía "ya tienes una
+       * cita a esa hora" para CUALQUIER hora que probara — parecía que
+       * agendar estaba roto, cuando lo que faltaba era fijar el horario.
+       */
+      case 'DENTIST_NOT_WORKING':
+        return {
+          ok: false,
+          field: 'startsAt',
+          error:
+            `No trabajas ese día o a esa hora según tu horario. Revisa «Mi horario» o ` +
+            `pide un cambio para esa semana.${formatSuggestions(result.suggestedSlots)}`,
+        };
+
       case 'DENTIST_UNAVAILABLE':
         return {
           ok: false,

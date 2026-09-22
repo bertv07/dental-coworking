@@ -238,6 +238,10 @@ export async function POST(request: NextRequest) {
           requestId,
         });
 
+      // No trabaja entonces, ya tiene otra cita, o no queda sala: el bot ya
+      // sabe seguir la conversación con `suggestedSlots` sin necesitar el
+      // motivo exacto — la diferencia sólo importa para el panel humano.
+      case 'DENTIST_NOT_WORKING':
       case 'DENTIST_UNAVAILABLE':
       case 'NO_ROOM_AVAILABLE': {
         // 409 con alternativas: el bot puede seguir la conversación en vez de

@@ -26,6 +26,17 @@ export type SchedulingResult =
   | { outcome: 'ALREADY_EXISTS'; appointment: Appointment }
   | { outcome: 'TREATMENT_NOT_FOUND' }
   | { outcome: 'DENTIST_NOT_FOUND' }
+  /**
+   * No es que esté ocupada: no tiene horario configurado ese día/hora.
+   *
+   * Antes esto compartía outcome con `DENTIST_UNAVAILABLE` ("ya tienes una
+   * cita a esa hora"), que es FALSO cuando el motivo real es que no trabaja
+   * entonces. Alguien sin ningún bloque de horario recibía ese mensaje para
+   * CUALQUIER hora que probara — la pantalla parecía rota, cuando lo único
+   * que faltaba era configurar el horario.
+   */
+  | { outcome: 'DENTIST_NOT_WORKING'; suggestedSlots: Date[] }
+  /** Sí tiene horario ahí, pero esa hora ya la ocupa otra cita suya. */
   | { outcome: 'DENTIST_UNAVAILABLE'; suggestedSlots: Date[] }
   | { outcome: 'NO_ROOM_AVAILABLE'; suggestedSlots: Date[] };
 
@@ -204,10 +215,12 @@ export async function scheduleAppointment(
     if (!dentist) return { outcome: 'DENTIST_NOT_FOUND' };
 
     // ¿Trabaja ese día a esa hora? Antes de mirar si tiene otra cita: no
-    // tiene sentido comprobar choques en una franja en la que ni viene.
+    // tiene sentido comprobar choques en una franja en la que ni viene. Y es
+    // un motivo DISTINTO del choque real: no se puede decir "ya tienes una
+    // cita ahí" cuando la verdad es "no trabajas ahí".
     if (!(await trabajaEnEseMomento(dentist.id, startsAt, endsAt))) {
       return {
-        outcome: 'DENTIST_UNAVAILABLE',
+        outcome: 'DENTIST_NOT_WORKING',
         suggestedSlots: await suggestAlternativeSlots(startsAt, treatment, dentist.id),
       };
     }
