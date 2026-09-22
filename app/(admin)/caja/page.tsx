@@ -10,6 +10,9 @@ import { IconDownload, IconChevronLeft, IconChevronRight } from '@/frontend/comp
 import { CashClosePanel } from '@/frontend/features/admin/CashClosePanel';
 import { PendingCharges } from '@/frontend/features/admin/PendingCharges';
 import { DailySettlements } from '@/frontend/features/admin/DailySettlements';
+import { CashFilters, urlCaja, type CashFilterState, type Periodo } from '@/frontend/features/admin/CashFilters';
+import { CashReport } from '@/frontend/features/admin/CashReport';
+import { clinicDayRange, clinicWallClockToInstant, parseDayKey, startOfWeek } from '@/backend/domain/clinic-calendar';
 
 /**
  * ===========================================================================
@@ -39,20 +42,113 @@ const METHOD_LABEL: Record<string, string> = {
   INSURANCE: 'Seguro',
 };
 
+/** Rango de instantes de un periodo, en hora de la clínica. `to` es exclusivo. */
+function rangoDelPeriodo(periodo: Periodo, fecha: string, desde: string, hasta: string) {
+  const dia = (k: string) => clinicWallClockToInstant(k, 0);
+  switch (periodo) {
+    case 'semana': {
+      const lunes = startOfWeek(fecha);
+      return { from: dia(lunes), to: dia(addDays(lunes, 7)), titulo: `Semana del ${lunes}` };
+    }
+    case 'mes': {
+      const y = Number(fecha.slice(0, 4));
+      const m = Number(fecha.slice(5, 7));
+      const inicio = `${y}-${String(m).padStart(2, '0')}-01`;
+      const fin = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+      const nombre = new Intl.DateTimeFormat('es-VE', { month: 'long', year: 'numeric', timeZone: 'America/Caracas' })
+        .format(dia(inicio));
+      return { from: dia(inicio), to: dia(fin), titulo: nombre.charAt(0).toUpperCase() + nombre.slice(1) };
+    }
+    case 'anio': {
+      const y = Number(fecha.slice(0, 4));
+      return { from: dia(`${y}-01-01`), to: dia(`${y + 1}-01-01`), titulo: `Año ${y}` };
+    }
+    case 'todo':
+      // Desde antes de que existiera la clínica hasta mañana: todo lo que hay.
+      return { from: dia('2000-01-01'), to: dia(addDays(clinicDayKey(new Date()), 1)), titulo: 'Todo el historial' };
+    case 'rango':
+      return { from: dia(desde), to: dia(addDays(hasta, 1)), titulo: `Del ${desde} al ${hasta}` };
+    default:
+      return { ...clinicDayRange(dia(fecha)), titulo: '' };
+  }
+}
+
 export default async function CashPage({
   searchParams,
 }: {
-  searchParams: Promise<{ fecha?: string }>;
+  searchParams: Promise<{
+    fecha?: string;
+    periodo?: string;
+    desde?: string;
+    hasta?: string;
+    odontologo?: string;
+    metodo?: string;
+  }>;
 }) {
   const user = await requireRole('ASSISTANT');
   const params = await searchParams;
 
-  // Permite revisar el cierre de días anteriores. Se valida el formato: un
-  // `new Date("cualquier cosa")` daría `Invalid Date` y rompería la consulta.
-  const requested = params.fecha?.match(/^\d{4}-\d{2}-\d{2}$/)
-    ? new Date(`${params.fecha}T12:00:00`)
-    : new Date();
+  /*
+   * Todo lo que viene de la URL se valida antes de usarse: un `new Date()`
+   * con cualquier cosa da `Invalid Date` y rompe la consulta. Un rango con
+   * las dos fechas gana sobre el periodo; un rango a medias se ignora.
+   */
+  const hoyKey = clinicDayKey(new Date());
+  const desde = parseDayKey(params.desde) ?? '';
+  const hasta = parseDayKey(params.hasta) ?? '';
+  const periodoPedido = (['dia', 'semana', 'mes', 'anio', 'todo'] as const).find((p) => p === params.periodo) ?? 'dia';
+  const periodo: Periodo = desde && hasta && desde <= hasta ? 'rango' : periodoPedido;
+  const fecha = parseDayKey(params.fecha) ?? hoyKey;
+  const metodos = ['CASH', 'CARD', 'TRANSFER', 'INSURANCE', 'CREDIT'] as const;
+  const metodo = metodos.find((m) => m === params.metodo);
+  const odontologo = /^[a-z0-9]{20,30}$/i.test(params.odontologo ?? '') ? params.odontologo! : '';
 
+  const filtros: CashFilterState = { periodo, fecha, desde, hasta, odontologo, metodo: metodo ?? '' };
+
+  // Con filtros de odontólogo o medio, hasta el día se ve como informe: el
+  // arqueo cuadra la caja ENTERA y no tiene sentido con una parte.
+  const esInforme = periodo !== 'dia' || Boolean(metodo) || Boolean(odontologo);
+  const rango = rangoDelPeriodo(periodo, fecha, desde, hasta);
+
+  const dentistsParaFiltro = (await repository.listDentists({ includeInactive: true })).map((d) => ({
+    id: d.id,
+    fullName: d.fullName,
+  }));
+
+  if (esInforme) {
+    const report = await repository.getCashReport({
+      from: rango.from,
+      to: rango.to,
+      method: metodo,
+      dentistId: odontologo || undefined,
+    });
+    const diasAtras = Math.max(1, Math.ceil((Date.now() - rango.from.getTime()) / 86_400_000));
+    const titulo = periodo === 'dia' ? `Día ${fecha}` : rango.titulo;
+
+    return (
+      <div className="page-body">
+        <FadeIn>
+          <PageHead
+            title="Caja"
+            subtitle={titulo}
+            actions={
+              <a href={`/api/export/finanzas?dias=${diasAtras}`} className="btn btn--ghost" download>
+                <IconDownload size={16} /> Exportar
+              </a>
+            }
+          />
+        </FadeIn>
+        <div className="caja-layout">
+          <div className="stack" style={{ gap: 'var(--space-5)' }}>
+            <CashReport report={report} tituloPeriodo={titulo} />
+          </div>
+          <CashFilters state={filtros} todayKey={hoyKey} dentists={dentistsParaFiltro} />
+        </div>
+      </div>
+    );
+  }
+
+  const requested = clinicWallClockToInstant(fecha, 12 * 60);
   const cash = await repository.getDailyCash(requested);
 
   // Día de calendario en hora de la clínica. Es la clave del arqueo y la que
@@ -107,12 +203,12 @@ export default async function CashPage({
           actions={
             <>
               {/* Navegación por días con enlaces: sin JavaScript y compartible. */}
-              <a href={`/caja?fecha=${addDays(businessDate, -1)}`} className="btn btn--ghost">
+              <a href={urlCaja(filtros, { fecha: addDays(businessDate, -1) })} className="btn btn--ghost">
                 <IconChevronLeft size={15} /> Anterior
               </a>
               {/* Sin salto al futuro: no hay caja que revisar por delante. */}
               {businessDate < todayKey && (
-                <a href={`/caja?fecha=${addDays(businessDate, 1)}`} className="btn btn--ghost">
+                <a href={urlCaja(filtros, { fecha: addDays(businessDate, 1) })} className="btn btn--ghost">
                   Siguiente <IconChevronRight size={15} />
                 </a>
               )}
@@ -124,6 +220,8 @@ export default async function CashPage({
         />
       </FadeIn>
 
+      <div className="caja-layout">
+      <div className="stack" style={{ gap: 'var(--space-5)' }}>
       <Stagger className="stat-grid">
         <StaggerItem>
           <HoverCard>
@@ -306,6 +404,9 @@ export default async function CashPage({
             )}
           </Card>
         </FadeIn>
+      </div>
+      </div>
+      <CashFilters state={filtros} todayKey={hoyKey} dentists={dentistsParaFiltro} />
       </div>
     </div>
   );

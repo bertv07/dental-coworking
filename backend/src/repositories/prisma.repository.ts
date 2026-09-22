@@ -19,7 +19,7 @@ import {
   repartirPago,
   totalLinea,
 } from '@/backend/repositories/invoice-helpers';
-import { MINUTES_PER_DAY, clinicWallClockToInstant, clinicDayRange } from '@/backend/domain/clinic-calendar';
+import { MINUTES_PER_DAY, clinicWallClockToInstant, clinicDayRange, clinicDayKey } from '@/backend/domain/clinic-calendar';
 
 /**
  * Traduce un error de escritura de Prisma al resultado tipado del contrato.
@@ -1372,30 +1372,49 @@ export const prismaRepository: DataRepository = {
   },
 
   async getDailyCash(date) {
-    // Día completo en la zona de la clínica, no en la del servidor: un
-    // `setHours(0,0,0,0)` opera en la hora local del PROCESO, y un
-    // contenedor sin `TZ` corre en UTC — ahí un cobro de las 9pm en Caracas
-    // caía en la caja de "mañana".
-    const { from: dayStart, to: dayEnd } = clinicDayRange(date);
+    // La caja del día es el informe de un rango de un día. Una sola consulta
+    // que mantener: lo que arregle una vista lo hereda la otra.
+    return this.getCashReport(clinicDayRange(date));
+  },
 
+  async getCashReport({ from, to, method, dentistId }) {
     const payments = await prisma.payment.findMany({
-      where: { status: 'PAID', paidAt: { gte: dayStart, lt: dayEnd } },
+      where: {
+        status: 'PAID',
+        paidAt: { gte: from, lt: to },
+        ...(method ? { method } : {}),
+        /*
+         * El odontólogo puede venir por la cita o por la factura: una venta
+         * directa sin cita lo lleva en la factura. Se miran los dos sitios.
+         */
+        ...(dentistId
+          ? { OR: [{ appointment: { dentistId } }, { invoice: { dentistId } }] }
+          : {}),
+      },
       include: {
         appointment: {
           include: {
             patient: { select: { fullName: true } },
-            dentist: { select: { fullName: true } },
+            dentist: { select: { id: true, fullName: true } },
             treatment: { select: { name: true } },
+          },
+        },
+        invoice: {
+          select: {
+            patient: { select: { fullName: true } },
+            dentist: { select: { id: true, fullName: true } },
           },
         },
       },
       orderBy: { paidAt: 'desc' },
     });
 
-    // Se agrega en memoria y no con `groupBy`: son los cobros de UN día
-    // (decenas, no miles), y así se calculan los totales y el desglose por
-    // método en una sola pasada en vez de tres consultas.
     const byMethod = new Map<string, { cents: number; bs: number; count: number }>();
+    const byDentist = new Map<
+      string,
+      { dentistId: string | null; dentistName: string; cents: number; dentistShareCents: number; count: number }
+    >();
+    const byDay = new Map<string, { cents: number; count: number }>();
     let totalCents = 0;
     let totalBs = 0;
     let clinicShareCents = 0;
@@ -1407,28 +1426,53 @@ export const prismaRepository: DataRepository = {
       clinicShareCents += payment.clinicShareCents;
       dentistShareCents += payment.dentistShareCents;
 
-      const current = byMethod.get(payment.method) ?? { cents: 0, bs: 0, count: 0 };
-      current.cents += payment.amountCents;
-      current.bs += Number(payment.amountBs);
-      current.count += 1;
-      byMethod.set(payment.method, current);
+      const m = byMethod.get(payment.method) ?? { cents: 0, bs: 0, count: 0 };
+      m.cents += payment.amountCents;
+      m.bs += Number(payment.amountBs);
+      m.count += 1;
+      byMethod.set(payment.method, m);
+
+      const dentist = payment.appointment?.dentist ?? payment.invoice?.dentist ?? null;
+      const clave = dentist?.id ?? '—';
+      const d = byDentist.get(clave) ?? {
+        dentistId: dentist?.id ?? null,
+        dentistName: dentist?.fullName ?? 'Sin odontólogo',
+        cents: 0,
+        dentistShareCents: 0,
+        count: 0,
+      };
+      d.cents += payment.amountCents;
+      d.dentistShareCents += payment.dentistShareCents;
+      d.count += 1;
+      byDentist.set(clave, d);
+
+      const dia = clinicDayKey(payment.paidAt!);
+      const x = byDay.get(dia) ?? { cents: 0, count: 0 };
+      x.cents += payment.amountCents;
+      x.count += 1;
+      byDay.set(dia, x);
     }
 
     return {
-      date: dayStart,
+      date: from,
+      from,
+      to,
       totalCents,
       totalBs: Math.round(totalBs * 100) / 100,
       clinicShareCents,
       dentistShareCents,
       paymentCount: payments.length,
       byMethod: [...byMethod.entries()].map(([method, value]) => ({ method, ...value })),
+      byDentist: [...byDentist.values()].sort((a, b) => b.cents - a.cents),
+      byDay: [...byDay.entries()]
+        .map(([day, value]) => ({ day, ...value }))
+        .sort((a, b) => (a.day < b.day ? -1 : 1)),
       payments: payments.map((payment) => ({
         id: payment.id,
-        // La cita es opcional: puede haber venta de mostrador sin cita. Se
-        // pone un guion en vez de romper el cierre de caja por un cobro
-        // suelto, que es justo cuando más falta hace que la pantalla abra.
-        patientName: payment.appointment?.patient.fullName ?? '—',
-        dentistName: payment.appointment?.dentist.fullName ?? '—',
+        patientName:
+          payment.appointment?.patient.fullName ?? payment.invoice?.patient.fullName ?? '—',
+        dentistName:
+          payment.appointment?.dentist.fullName ?? payment.invoice?.dentist?.fullName ?? '—',
         treatmentName: payment.appointment?.treatment.name ?? 'Venta directa',
         amountCents: payment.amountCents,
         amountBs: Number(payment.amountBs),

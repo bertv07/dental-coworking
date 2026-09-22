@@ -174,6 +174,30 @@ export interface PaymentInput {
   externalReference: string | null;
 }
 
+/** Filtros del informe de caja. `from`/`to` en instantes, ya resueltos. */
+export interface CashReportFilters {
+  from: Date;
+  to: Date;
+  method?: 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE' | 'CREDIT';
+  dentistId?: string;
+}
+
+/** La caja de un rango: los mismos totales del día, más los desgloses. */
+export interface CashReport extends DailyCash {
+  from: Date;
+  to: Date;
+  /** Cuánto entró por cada odontólogo, y qué parte es suya. */
+  byDentist: Array<{
+    dentistId: string | null;
+    dentistName: string;
+    cents: number;
+    dentistShareCents: number;
+    count: number;
+  }>;
+  /** Cuánto entró cada día del rango, 'YYYY-MM-DD' en hora de la clínica. */
+  byDay: Array<{ day: string; cents: number; count: number }>;
+}
+
 /** Resumen de caja de un día. */
 export interface DailyCash {
   date: Date;
@@ -1488,6 +1512,16 @@ export interface DataRepository {
 
   /** Caja del día: lo que recepción cobró en una fecha concreta. */
   getDailyCash(date: Date): Promise<DailyCash>;
+
+  /**
+   * Lo mismo que la caja del día, pero para CUALQUIER rango y con filtros:
+   * la semana, el mes, el año, entre dos fechas; sólo un odontólogo; sólo
+   * un medio de pago. Es lo que alimenta la vista de reportes de Caja.
+   *
+   * Sin filtro de cajero: el cobro no guarda quién lo registró. El día que
+   * lo guarde, se añade aquí y en la pantalla.
+   */
+  getCashReport(params: CashReportFilters): Promise<CashReport>;
 
   // --- Cierre de caja ------------------------------------------------------
   /** Arqueo de un día, o `null` si aún no se ha cerrado. */

@@ -3836,3 +3836,60 @@ a {
     opacity: 1;
   }
 }
+
+/* ===========================================================================
+   Caja: filtros laterales e informe por periodo
+   =========================================================================== */
+.caja-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: var(--space-5);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .caja-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.caja-filtros {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  position: sticky;
+  top: var(--space-4);
+}
+.caja-filtros__grupo { display: flex; flex-direction: column; gap: var(--space-2); }
+.caja-filtros__titulo {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.caja-filtros__pills { display: flex; flex-direction: column; gap: var(--space-2); }
+.caja-filtros__pills .pill-btn { justify-content: flex-start; padding: var(--space-2) var(--space-3); }
+.caja-filtros__form { display: flex; flex-direction: column; gap: var(--space-4); }
+.pill-btn--activo,
+.pill-btn--activo:hover {
+  background: var(--color-text);
+  border-color: var(--color-text);
+  color: var(--color-surface, #fff);
+}
+
+/* Barras de una sola tinta: la pregunta es «cuánto», el nombre ya está al lado. */
+.barras { display: flex; flex-direction: column; gap: var(--space-3); }
+.barra__cab { display: flex; justify-content: space-between; gap: var(--space-3); font-size: var(--text-sm); }
+.barra__label { font-weight: 600; color: var(--color-text); }
+.barra__valor { color: var(--color-text); }
+.barra__pista {
+  height: 8px;
+  margin-top: 4px;
+  background: var(--color-surface-soft, #eef1f5);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.barra__relleno {
+  height: 100%;
+  min-width: 4px;
+  background: var(--color-primary);
+  border-radius: 4px;
+}
+.barra__detalle { margin-top: 2px; }

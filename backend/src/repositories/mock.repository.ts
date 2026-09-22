@@ -699,6 +699,13 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async getCashReport({ from, to }) {
+    return {
+      date: from, from, to, totalCents: 0, totalBs: 0, clinicShareCents: 0, dentistShareCents: 0,
+      paymentCount: 0, byMethod: [], byDentist: [], byDay: [], payments: [],
+    };
+  },
+
   async getDailyCash(date) {
     return {
       date,
