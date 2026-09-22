@@ -92,11 +92,12 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
        */
       { href: '/plantillas', label: 'Plantillas', Icon: IconPrescription, minimumRole: 'ASSISTANT' },
 
-      // Consulta, no trabajo diario: van después.
-      //
-      // Tres vistas: el odontólogo propone las suyas, recepción consulta los
-      // precios para cotizar, el administrador aprueba.
-      { href: '/tarifas', label: 'Tarifas', Icon: IconTag, minimumRole: 'DENTIST' },
+      /*
+       * Tarifas NO está en el menú. La clínica cobra el precio de lista
+       * (Precios, en Administración) y no usa precios pactados por
+       * odontólogo. La ruta /tarifas y la aprobación siguen existiendo por
+       * URL, y los acuerdos ya aprobados se siguen aplicando al cobrar.
+       */
       // Quién trabaja cuándo SÍ es cosa de recepción, al revés que las
       // tarifas: por eso este no esconde nada.
       { href: '/horarios', label: 'Horarios', Icon: IconClock, minimumRole: 'DENTIST' },
@@ -153,12 +154,9 @@ const ROLE_LEVEL: Record<UserRole, number> = {
 
 export function Sidebar({
   userRole,
-  pendingTariffs = 0,
   rateLabel,
 }: {
   userRole: UserRole;
-  /** Tarifas propuestas por odontólogos que nadie ha revisado todavía. */
-  pendingTariffs?: number;
   /** "BCV (dólar oficial)", "Euro oficial (BCV)"… — la tasa real de la clínica. */
   rateLabel: string;
 }) {
@@ -200,7 +198,7 @@ export function Sidebar({
 
               {visibleLinks.map(({ href, label, Icon, badge }) => {
                 const isActive = pathname === href || pathname.startsWith(`${href}/`);
-                const badgeCount = href === '/tarifas' ? pendingTariffs : badge;
+                const badgeCount = badge;
 
                 return (
                   <Link
