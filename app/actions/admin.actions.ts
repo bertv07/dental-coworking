@@ -742,12 +742,19 @@ export async function deleteTreatmentAction(id: string): Promise<ActionResult> {
 }
 
 // ===========================================================================
-//  CONSULTORIOS  (sólo Super Admin)
+//  CONSULTORIOS  (recepción o superior)
 // ===========================================================================
+//  La página ya dejaba entrar a recepción, pero estas acciones seguían
+//  exigiendo administrador: se abría el formulario, se elegía el odontólogo
+//  y al guardar salía «no tienes permiso». El guard de la página y el de la
+//  acción tienen que decir lo mismo, si no la pantalla miente.
+//
+//  Quien conoce la rotación real de las salas es el mostrador. Y son tres
+//  consultorios: no hay un inventario que proteger del personal.
 
 export async function createRoomAction(input: unknown): Promise<ActionResult> {
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: roomFormSchema,
     input,
     revalidate: '/consultorios',
@@ -761,7 +768,7 @@ export async function updateRoomAction(id: string, input: unknown): Promise<Acti
   if (!parsedId.success) return { ok: false, error: 'Identificador inválido' };
 
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: roomFormSchema,
     input,
     revalidate: '/consultorios',
@@ -772,7 +779,7 @@ export async function updateRoomAction(id: string, input: unknown): Promise<Acti
 
 export async function deleteRoomAction(id: string): Promise<ActionResult> {
   return runAction({
-    minimumRole: 'SUPER_ADMIN',
+    minimumRole: 'ASSISTANT',
     schema: cuidSchema,
     input: id,
     revalidate: '/consultorios',
