@@ -175,7 +175,18 @@ function minutoEnLaClinica(instante: Date, zona: string): number {
  * Quien llama debe capturar la violación (ver `isOverlapViolation`).
  */
 export async function scheduleAppointment(
-  input: CreateAppointmentInput,
+  input: CreateAppointmentInput & {
+    /**
+     * `true` = no comprobar el horario del odontólogo, sólo los choques.
+     *
+     * Es para cuando la odontóloga se agenda A SÍ MISMA: el horario lo fija
+     * administración para que el bot no ofrezca huecos en los que no está,
+     * pero ella manda sobre su propio tiempo. Si acepta un paciente un
+     * sábado que no tiene puesto, es su decisión y la cita tiene que entrar.
+     * El bot NUNCA pasa esto: para él el horario sigue siendo la ley.
+     */
+    saltarHorario?: boolean;
+  },
 ): Promise<SchedulingResult> {
   // --- 1. Idempotencia ----------------------------------------------------
   const existing = await repository.findAppointmentByIdempotencyKey(input.idempotencyKey);
@@ -218,7 +229,7 @@ export async function scheduleAppointment(
     // tiene sentido comprobar choques en una franja en la que ni viene. Y es
     // un motivo DISTINTO del choque real: no se puede decir "ya tienes una
     // cita ahí" cuando la verdad es "no trabajas ahí".
-    if (!(await trabajaEnEseMomento(dentist.id, startsAt, endsAt))) {
+    if (!input.saltarHorario && !(await trabajaEnEseMomento(dentist.id, startsAt, endsAt))) {
       return {
         outcome: 'DENTIST_NOT_WORKING',
         suggestedSlots: await suggestAlternativeSlots(startsAt, treatment, dentist.id),

@@ -1228,6 +1228,8 @@ export async function createOwnAppointmentAction(input: unknown): Promise<Action
       treatmentCode: data.treatmentCode,
       startsAt: data.startsAt,
       notes: data.notes,
+      // Se agenda a sí misma: su horario no la limita, sólo sus otras citas.
+      saltarHorario: true,
       /*
        * Llave de idempotencia derivada de lo que identifica la cita, no
        * aleatoria: si se hace doble clic en «Agendar», el segundo envío trae
