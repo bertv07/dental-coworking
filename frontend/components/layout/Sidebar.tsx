@@ -81,8 +81,11 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       // El resto del recorrido del mostrador: cobrar y cerrar el día.
       { href: '/facturas', label: 'Facturas', Icon: IconTag, minimumRole: 'ASSISTANT' },
       { href: '/caja', label: 'Caja', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
-      // Junto a facturas y caja: es lo que recepción negocia al cobrar.
-      { href: '/descuentos', label: 'Descuentos', Icon: IconTag, minimumRole: 'ASSISTANT' },
+      /*
+       * Descuentos NO está en el menú: la clínica no gestiona promociones
+       * desde el panel. Ruta /descuentos por URL. Las promociones que ya
+       * estén activas se siguen ofreciendo en el bot y en la factura.
+       */
       /*
        * WhatsApp NO está en el menú. El monitor sigue existiendo en /whatsapp
        * —n8n guarda ahí cada mensaje y la API no cambia—, pero la clínica
