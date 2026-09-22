@@ -26,13 +26,32 @@ const ESTADO = {
   VOID: { label: 'Anulada', tone: 'danger' as const },
 };
 
-export default async function InvoicesPage() {
+export default async function InvoicesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; todas?: string }>;
+}) {
   await requireRole('ASSISTANT');
 
-  const [invoices, dentists] = await Promise.all([
-    repository.listInvoices({ limit: 100 }),
+  const { q, todas } = await searchParams;
+  const busqueda = (q ?? '').trim().toLowerCase();
+  /*
+   * Por defecto las últimas 100: es lo que cabe en una pantalla y lo que se
+   * consulta a diario. «Ver todas» quita el techo para buscar una factura
+   * vieja de un paciente concreto, que es la otra pregunta que se hace aquí.
+   */
+  const verTodas = todas === '1';
+
+  const [emitidas, dentists] = await Promise.all([
+    repository.listInvoices({ limit: verTodas ? 10_000 : 100 }),
     repository.listDentists(),
   ]);
+
+  // El filtro va sobre lo traído: son cien filas, o todas si se pidió, y el
+  // nombre del paciente ya viene en cada una. No hace falta otra consulta.
+  const invoices = busqueda
+    ? emitidas.filter((i) => i.patientName.toLowerCase().includes(busqueda))
+    : emitidas;
   const pendientes = invoices.filter((i) => i.status === 'OPEN');
   const porCobrar = pendientes.reduce((suma, i) => suma + i.balanceCents, 0);
 
@@ -48,9 +67,11 @@ export default async function InvoicesPage() {
         <PageHead
           title="Facturas"
           subtitle={
-            porCobrar > 0
-              ? `${pendientes.length} pendientes · ${formatCents(porCobrar)} por cobrar`
-              : `${invoices.length} emitidas · nada pendiente`
+            busqueda
+              ? `${invoices.length} de ${emitidas.length} coinciden con «${q}»`
+              : porCobrar > 0
+                ? `${pendientes.length} pendientes · ${formatCents(porCobrar)} por cobrar${verTodas ? ` · ${emitidas.length} en total` : ''}`
+                : `${invoices.length} emitidas · nada pendiente`
           }
           actions={
             <RegisterBackdatedSale
@@ -61,11 +82,53 @@ export default async function InvoicesPage() {
         />
       </FadeIn>
 
+      <FadeIn delay={0.05}>
+        {/*
+          Buscar por paciente y ver todas. Formulario GET a propósito: la
+          búsqueda queda en la URL, se puede recargar y compartir, y no hace
+          falta JavaScript para que funcione.
+        */}
+        <Card>
+          <form method="get" className="row row--wrap" style={{ gap: '0.5rem', alignItems: 'center' }}>
+            <input
+              type="search"
+              name="q"
+              className="input"
+              placeholder="Buscar facturas por paciente…"
+              defaultValue={q ?? ''}
+              style={{ flex: '1 1 240px' }}
+              aria-label="Buscar facturas por paciente"
+            />
+            {verTodas && <input type="hidden" name="todas" value="1" />}
+            <button type="submit" className="btn btn--primary">
+              Buscar
+            </button>
+            {busqueda && (
+              <Link href={verTodas ? '/facturas?todas=1' : '/facturas'} className="btn btn--ghost">
+                Limpiar
+              </Link>
+            )}
+            <Link
+              href={
+                verTodas
+                  ? `/facturas${q ? `?q=${encodeURIComponent(q)}` : ''}`
+                  : `/facturas?todas=1${q ? `&q=${encodeURIComponent(q)}` : ''}`
+              }
+              className="btn btn--ghost"
+            >
+              {verTodas ? 'Ver sólo las últimas 100' : 'Ver todas'}
+            </Link>
+          </form>
+        </Card>
+      </FadeIn>
+
       <FadeIn delay={0.08}>
         {invoices.length === 0 ? (
           <Card>
             <EmptyState>
-              Todavía no hay facturas.
+              {busqueda
+                ? `Ninguna factura de «${q}»${verTodas ? '' : ' entre las últimas 100. Prueba «Ver todas».'}`
+                : 'Todavía no hay facturas.'}
               <br />
               Se emiten desde la agenda al cobrar una cita, o con «Registrar venta atrasada» si
               se te olvidó un día.

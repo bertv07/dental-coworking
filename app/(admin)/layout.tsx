@@ -5,7 +5,7 @@ import { repository } from '@/backend/repositories';
 import { Sidebar } from '@/frontend/components/layout/Sidebar';
 import { Topbar } from '@/frontend/components/layout/Topbar';
 import { AppShell, NavToggle } from '@/frontend/components/layout/AppShell';
-import { getNotifications, getMessageAlerts } from '@/backend/services/notifications.service';
+import { getNotifications } from '@/backend/services/notifications.service';
 import { RATE_SOURCE_LABEL, resolveRateSource } from '@/backend/services/exchange-rate.service';
 
 /**
@@ -70,19 +70,13 @@ export default async function AdminLayout({ children }: { children: ReactNode })
    */
   const isDentist = user.role === 'DENTIST';
 
-  // Todo en paralelo: son consultas independientes y su latencia se solapa.
-  const [conversations, notifications, messages] = isDentist
-    ? [[], undefined, undefined]
-    : await Promise.all([
-        repository.listConversations({ limit: 50 }),
-        getNotifications(),
-        getMessageAlerts(),
-      ]);
-
-  // Badge de WhatsApp en el sidebar. Sólo cuenta para quien ve esa sección.
-  const pendingChats = conversations.filter(
-    (conversation) => conversation.needsHumanAttention,
-  ).length;
+  /*
+   * Sólo los avisos de agenda. Los de WhatsApp (chats escalados, badge del
+   * menú, icono de mensajes) se quitaron con el monitor: la clínica no
+   * atiende chats desde el panel, y consultar 50 conversaciones en cada
+   * carga para pintar un número que nadie mira era puro coste.
+   */
+  const notifications = isDentist ? undefined : await getNotifications();
 
   /*
    * Badge de tarifas esperando aprobación.
@@ -108,7 +102,6 @@ export default async function AdminLayout({ children }: { children: ReactNode })
     <AppShell
       sidebar={<Sidebar
           userRole={user.role}
-          pendingChats={pendingChats}
           pendingTariffs={pendingTariffs}
           rateLabel={rateLabel}
         />}
@@ -118,7 +111,6 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         userRole={user.role}
         userEmail={user.email}
         notifications={notifications}
-        messages={messages}
         canSearchPatients={!isDentist}
         navToggle={<NavToggle />}
       />

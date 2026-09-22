@@ -2,12 +2,7 @@ import type { ReactNode } from 'react';
 import type { UserRole } from '@/backend/domain/types';
 import { UserMenu } from '@/frontend/components/layout/UserMenu';
 import { GlobalSearch } from '@/frontend/components/layout/GlobalSearch';
-import { MetaRulesButton } from '@/frontend/components/layout/MetaRulesButton';
-import {
-  NotificationsMenu,
-  MessagesMenu,
-  type NotificationItem,
-} from '@/frontend/components/layout/TopbarMenus';
+import { NotificationsMenu, type NotificationItem } from '@/frontend/components/layout/TopbarMenus';
 
 /**
  * Barra superior: buscador, avisos e identidad del usuario.
@@ -33,7 +28,6 @@ export function Topbar({
   userRole,
   userEmail,
   notifications,
-  messages,
   canSearchPatients = true,
   navToggle,
 }: {
@@ -44,7 +38,6 @@ export function Topbar({
   navToggle?: ReactNode;
   /** Sin datos → sin campana. Lo decide el layout, que es quien consulta. */
   notifications?: NotificationItem[];
-  messages?: NotificationItem[];
   /**
    * El buscador lleva a `/pacientes`. A quien no tenga esa sección le
    * devolvería un «sin permiso»: una caja de búsqueda que castiga por usarla
@@ -62,10 +55,8 @@ export function Topbar({
       {canSearchPatients ? <GlobalSearch /> : <div />}
 
       <div className="topbar__actions">
-        {/* WhatsApp y las reglas de Meta: el atajo está donde se necesita
-            saberlas, que es justo antes de escribirle a alguien. */}
-        <MetaRulesButton />
-        {messages && <MessagesMenu items={messages} />}
+        {/* Sin el icono de chats ni el de reglas de Meta: se fueron con el
+            monitor de WhatsApp, que la clínica no usa desde el panel. */}
         {notifications && <NotificationsMenu items={notifications} />}
         <UserMenu userName={userName} subtitle={userEmail ?? ROLE_LABEL[userRole]} />
       </div>

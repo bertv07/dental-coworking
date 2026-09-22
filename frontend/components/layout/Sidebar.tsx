@@ -8,7 +8,6 @@ import type { UserRole } from '@/backend/domain/types';
 import {
   IconDashboard,
   IconCalendar,
-  IconChat,
   IconUsers,
   IconStethoscope,
   IconTag,
@@ -84,8 +83,13 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       { href: '/caja', label: 'Caja', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
       // Junto a facturas y caja: es lo que recepción negocia al cobrar.
       { href: '/descuentos', label: 'Descuentos', Icon: IconTag, minimumRole: 'ASSISTANT' },
-      { href: '/whatsapp', label: 'WhatsApp', Icon: IconChat, minimumRole: 'ASSISTANT' },
-      // Junto a WhatsApp: es donde se usan.
+      /*
+       * WhatsApp NO está en el menú. El monitor sigue existiendo en /whatsapp
+       * —n8n guarda ahí cada mensaje y la API no cambia—, pero la clínica
+       * decidió no atender chats desde el panel: los atiende el bot y, cuando
+       * hace falta una persona, se escribe desde el teléfono de recepción.
+       * Un enlace a una pantalla que nadie va a usar sólo confunde.
+       */
       { href: '/plantillas', label: 'Plantillas', Icon: IconPrescription, minimumRole: 'ASSISTANT' },
 
       // Consulta, no trabajo diario: van después.
@@ -149,12 +153,10 @@ const ROLE_LEVEL: Record<UserRole, number> = {
 
 export function Sidebar({
   userRole,
-  pendingChats = 0,
   pendingTariffs = 0,
   rateLabel,
 }: {
   userRole: UserRole;
-  pendingChats?: number;
   /** Tarifas propuestas por odontólogos que nadie ha revisado todavía. */
   pendingTariffs?: number;
   /** "BCV (dólar oficial)", "Euro oficial (BCV)"… — la tasa real de la clínica. */
@@ -198,12 +200,7 @@ export function Sidebar({
 
               {visibleLinks.map(({ href, label, Icon, badge }) => {
                 const isActive = pathname === href || pathname.startsWith(`${href}/`);
-                const badgeCount =
-                  href === '/whatsapp'
-                    ? pendingChats
-                    : href === '/tarifas'
-                      ? pendingTariffs
-                      : badge;
+                const badgeCount = href === '/tarifas' ? pendingTariffs : badge;
 
                 return (
                   <Link

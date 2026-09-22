@@ -17,7 +17,7 @@ import {
   SourceBadge,
 } from '@/frontend/components/ui/primitives';
 import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/motion';
-import { IconPlus, IconCurrency, IconChat } from '@/frontend/components/ui/icons';
+import { IconPlus, IconCurrency } from '@/frontend/components/ui/icons';
 
 /**
  * ===========================================================================
@@ -49,10 +49,9 @@ export default async function AssistantHomePage() {
   // puede ser un mes distinto.
   const clinicMonth = Number(clinicDayKey(now).slice(5, 7));
 
-  const [todayAppointments, cash, conversations, settings, birthdays] = await Promise.all([
+  const [todayAppointments, cash, settings, birthdays] = await Promise.all([
     repository.listAppointments({ range: { from: dayStart, to: dayEnd }, limit: 100 }),
     repository.getDailyCash(now),
-    repository.listConversations({ limit: 50 }),
     repository.getClinicSettings(),
     repository.listStaffBirthdays(clinicMonth),
   ]);
@@ -74,8 +73,6 @@ export default async function AssistantHomePage() {
     await repository.getPaidAppointmentIds(todayAppointments.map((a) => a.id)),
   );
   const uncollected = completed.filter((a) => !paidIds.has(a.id));
-
-  const needsHuman = conversations.filter((c) => c.needsHumanAttention);
 
   const timeFormatter = new Intl.DateTimeFormat('es-VE', {
     hour: '2-digit',
@@ -172,15 +169,6 @@ export default async function AssistantHomePage() {
             />
           </HoverCard>
         </StaggerItem>
-        <StaggerItem>
-          <HoverCard>
-            <Stat
-              label="Chats por atender"
-              value={String(needsHuman.length)}
-              meta="la IA pidió ayuda humana"
-            />
-          </HoverCard>
-        </StaggerItem>
       </Stagger>
 
       <div className="grid-2">
@@ -245,44 +233,6 @@ export default async function AssistantHomePage() {
           </Card>
         </FadeIn>
 
-        {/* --- Conversaciones que necesitan a una persona --- */}
-        <FadeIn delay={0.2}>
-          <Card
-            title="Requieren tu atención"
-            subtitle="La IA escaló estas conversaciones"
-            actions={
-              <Link href="/whatsapp" className="pill-btn">
-                <IconChat size={12} /> Abrir
-              </Link>
-            }
-          >
-            {needsHuman.length === 0 ? (
-              <EmptyState>Ningún chat necesita intervención humana.</EmptyState>
-            ) : (
-              <div className="stack">
-                {needsHuman.slice(0, 5).map((conversation) => (
-                  <Link
-                    key={conversation.id}
-                    href="/whatsapp"
-                    className="row"
-                    style={{ alignItems: 'flex-start' }}
-                  >
-                    <Avatar name={conversation.patientName ?? conversation.phoneE164} small />
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <div className="text-sm" style={{ fontWeight: 600 }}>
-                        {conversation.patientName ?? conversation.phoneE164}
-                      </div>
-                      <div className="text-xs subtle conversation-item__preview">
-                        {conversation.lastMessagePreview ?? 'Sin mensajes'}
-                      </div>
-                    </div>
-                    {!conversation.aiEnabled && <Badge tone="danger">IA apagada</Badge>}
-                  </Link>
-                ))}
-              </div>
-            )}
-          </Card>
-        </FadeIn>
       </div>
 
       {/* --- Cumpleaños del mes --------------------------------------- */}
