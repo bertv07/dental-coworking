@@ -399,6 +399,9 @@ model Dentist {
   /** Pacientes que pidieron seguir con él. Ver `Patient.preferredDentistId`. */
   pacientesQuePrefieren Patient[] @relation("PacientesConPreferencia")
 
+  /** Lo que ella compra para trabajar. Ver `Expense`. */
+  expenses Expense[]
+
   createdAt         DateTime                  @default(now()) @db.Timestamptz(3)
   updatedAt         DateTime                  @updatedAt @db.Timestamptz(3)
   deletedAt         DateTime?                 @db.Timestamptz(3)
@@ -1743,4 +1746,62 @@ model Medication {
 
   @@index([isActive, category, sortOrder])
   @@map("medications")
+}
+
+/// Un gasto único o uno que se repite cada mes.
+enum ExpenseRecurrence {
+  ONE_TIME
+  MONTHLY
+}
+
+/// De quién es el gasto: de la clínica o de un odontólogo concreto.
+enum ExpenseScope {
+  CLINIC
+  DENTIST
+}
+
+/// ===========================================================================
+///  Gastos: lo que la clínica —o cada odontóloga— paga para trabajar
+/// ===========================================================================
+///  La caja dice cuánto ENTRA; esto dice cuánto SALE. Sin lo segundo, «lo que
+///  le queda a la clínica» era el 60 % bruto, y nadie sabía si después de la
+///  luz, el condominio y la publicidad quedaba algo. Lo mismo para cada
+///  odontóloga con lo que compra: su 40 % no es lo que gana si de ahí salen
+///  los materiales.
+///
+///  Un gasto MONTHLY cuenta una vez en cada mes desde `startsOn` hasta
+///  `endsOn` (o sin fin). Uno ONE_TIME cuenta sólo en el mes de `startsOn`.
+///  Se guarda el importe en centavos de dólar, como todo lo demás.
+model Expense {
+  id String @id @default(cuid())
+
+  scope ExpenseScope
+  /// Sólo cuando `scope = DENTIST`. `SetNull`: borrar la ficha no borra la
+  /// historia de lo que gastó.
+  dentistId String?
+  dentist   Dentist? @relation(fields: [dentistId], references: [id], onDelete: SetNull)
+
+  /// «Luz», «Publicidad», «Condominio», «Materiales»… Texto libre con
+  /// sugerencias, no enum: mañana aparece uno nuevo.
+  category    String
+  description String
+  amountCents Int
+
+  recurrence ExpenseRecurrence @default(ONE_TIME)
+  /// Fecha del pago (único) o primer mes (mensual).
+  startsOn DateTime  @db.Date
+  /// Último mes en que se paga. `null` = sigue vigente.
+  endsOn   DateTime? @db.Date
+
+  notes String?
+
+  createdByUserId String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([scope, dentistId, deletedAt])
+  @@index([startsOn])
+  @@map("expenses")
 }

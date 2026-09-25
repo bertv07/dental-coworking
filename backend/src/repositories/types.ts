@@ -6,6 +6,9 @@ import type {
   ConversationListItem,
   Dentist,
   DentistAgendaItem,
+  Expense,
+  ExpenseRecurrence,
+  ExpenseScope,
   DentistEarnings,
   DentistInstrument,
   DentistTreatmentAgreement,
@@ -134,6 +137,19 @@ export interface PaymentMethodInput {
   currency: 'VES' | 'USD';
   sortOrder: number;
   isActive: boolean;
+}
+
+/** Alta o edición de un gasto. Fechas en 'YYYY-MM-DD'. */
+export interface ExpenseInput {
+  scope: ExpenseScope;
+  dentistId: string | null;
+  category: string;
+  description: string;
+  amountCents: number;
+  recurrence: ExpenseRecurrence;
+  startsOn: string;
+  endsOn: string | null;
+  notes: string | null;
 }
 
 /** Alta o edición de un medicamento del vademécum. */
@@ -1522,6 +1538,23 @@ export interface DataRepository {
    * lo guarde, se añade aquí y en la pantalla.
    */
   getCashReport(params: CashReportFilters): Promise<CashReport>;
+
+  // --- Gastos --------------------------------------------------------------
+  /**
+   * Los gastos de la clínica (`scope: 'CLINIC'`) o de una odontóloga
+   * (`scope: 'DENTIST'` + `dentistId`). Sin filtro de fecha: son pocos y el
+   * cálculo por periodo —con los mensuales repetidos— lo hace el dominio.
+   */
+  listExpenses(params: { scope: ExpenseScope; dentistId?: string }): Promise<Expense[]>;
+
+  saveExpense(params: {
+    id: string | null;
+    data: ExpenseInput;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  /** Borrado lógico: un gasto de hace meses ya está en un informe. */
+  deleteExpense(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
 
   // --- Cierre de caja ------------------------------------------------------
   /** Arqueo de un día, o `null` si aún no se ha cerrado. */

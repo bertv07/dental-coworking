@@ -11,6 +11,7 @@ import type {
   DentistEarnings,
   FinancialSummary,
   ScheduleBlock,
+  Expense,
 } from '@/backend/domain/types';
 import { percentChange, splitCents } from '@/backend/domain/money';
 import { calcularComision, calcularPrecio, distribuirDescuento, repartirCobro } from '@/backend/domain/pricing';
@@ -1375,6 +1376,66 @@ export const prismaRepository: DataRepository = {
     // La caja del día es el informe de un rango de un día. Una sola consulta
     // que mantener: lo que arregle una vista lo hereda la otra.
     return this.getCashReport(clinicDayRange(date));
+  },
+
+  // --- Gastos --------------------------------------------------------------
+
+  async listExpenses({ scope, dentistId }) {
+    const filas = await prisma.expense.findMany({
+      where: { scope, deletedAt: null, ...(dentistId ? { dentistId } : {}) },
+      orderBy: [{ startsOn: 'desc' }, { createdAt: 'desc' }],
+    });
+    return filas.map(aExpense);
+  },
+
+  async saveExpense({ id, data, userId }) {
+    try {
+      // `@db.Date` guarda sólo el día: se manda a mediodía UTC para que
+      // ningún desfase de zona lo empuje al día anterior.
+      const aFecha = (k: string) => new Date(`${k}T12:00:00Z`);
+      const payload = {
+        scope: data.scope,
+        dentistId: data.dentistId,
+        category: data.category,
+        description: data.description,
+        amountCents: data.amountCents,
+        recurrence: data.recurrence,
+        startsOn: aFecha(data.startsOn),
+        endsOn: data.endsOn ? aFecha(data.endsOn) : null,
+        notes: data.notes,
+      };
+      const guardado = id
+        ? await prisma.expense.update({ where: { id }, data: payload, select: { id: true } })
+        : await prisma.expense.create({
+            data: { ...payload, createdByUserId: userId },
+            select: { id: true },
+          });
+
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: id ? 'expense.updated' : 'expense.created',
+          entityType: 'Expense',
+          entityId: guardado.id,
+          after: { scope: data.scope, dentistId: data.dentistId, category: data.category, amountCents: data.amountCents, recurrence: data.recurrence },
+        },
+      });
+      return { ok: true, data: guardado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deleteExpense({ id, userId }) {
+    try {
+      await prisma.expense.update({ where: { id }, data: { deletedAt: new Date() } });
+      await prisma.auditLog.create({
+        data: { userId, action: 'expense.deleted', entityType: 'Expense', entityId: id },
+      });
+      return { ok: true, data: { id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
   },
 
   async getCashReport({ from, to, method, dentistId }) {
@@ -5448,3 +5509,32 @@ export const prismaRepository: DataRepository = {
     return { conversationId: updated.id, aiEnabled: updated.aiEnabled };
   },
 };
+
+/** Fila de Prisma → `Expense` del dominio: las fechas `@db.Date` a 'YYYY-MM-DD'. */
+function aExpense(row: {
+  id: string;
+  scope: 'CLINIC' | 'DENTIST';
+  dentistId: string | null;
+  category: string;
+  description: string;
+  amountCents: number;
+  recurrence: 'ONE_TIME' | 'MONTHLY';
+  startsOn: Date;
+  endsOn: Date | null;
+  notes: string | null;
+  createdAt: Date;
+}): Expense {
+  return {
+    id: row.id,
+    scope: row.scope,
+    dentistId: row.dentistId,
+    category: row.category,
+    description: row.description,
+    amountCents: row.amountCents,
+    recurrence: row.recurrence,
+    startsOn: row.startsOn.toISOString().slice(0, 10),
+    endsOn: row.endsOn ? row.endsOn.toISOString().slice(0, 10) : null,
+    notes: row.notes,
+    createdAt: row.createdAt,
+  };
+}

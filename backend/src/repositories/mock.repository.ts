@@ -699,6 +699,16 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async listExpenses() {
+    return [];
+  },
+  async saveExpense({ id }) {
+    return { ok: true, data: { id: id ?? newId('exp') } };
+  },
+  async deleteExpense({ id }) {
+    return { ok: true, data: { id } };
+  },
+
   async getCashReport({ from, to }) {
     return {
       date: from, from, to, totalCents: 0, totalBs: 0, clinicShareCents: 0, dentistShareCents: 0,

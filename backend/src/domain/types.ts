@@ -662,3 +662,25 @@ export interface Medication {
    */
   hasImage: boolean;
 }
+
+// --- Gastos -----------------------------------------------------------------
+
+export type ExpenseRecurrence = 'ONE_TIME' | 'MONTHLY';
+export type ExpenseScope = 'CLINIC' | 'DENTIST';
+
+/** Un gasto de la clínica o de una odontóloga. Importe en centavos de USD. */
+export interface Expense {
+  id: string;
+  scope: ExpenseScope;
+  dentistId: string | null;
+  category: string;
+  description: string;
+  amountCents: number;
+  recurrence: ExpenseRecurrence;
+  /** 'YYYY-MM-DD'. Fecha del pago (único) o primer mes (mensual). */
+  startsOn: string;
+  /** 'YYYY-MM-DD' o `null` = sigue vigente. Sólo tiene sentido en MONTHLY. */
+  endsOn: string | null;
+  notes: string | null;
+  createdAt: Date;
+}
