@@ -155,7 +155,19 @@ export function RegisterBackdatedSale({
                 patientId: chosen.id,
                 dentistId: fd.get('dentistId'),
                 fecha: fd.get('fecha'),
-                tasa: fd.get('tasa'),
+                /*
+                 * `?? undefined`, NO el `null` que da `fd.get()`.
+                 *
+                 * El campo de tasa sólo se pinta cuando la fecha es distinta
+                 * de hoy (arriba, `fecha !== todayKey`); con la fecha de hoy
+                 * —o en blanco, que también es hoy— el input no existe en el
+                 * DOM y `fd.get('tasa')` devuelve `null`. El esquema acepta
+                 * `undefined` (campo opcional) pero NO `null`, así que CUALQUIER
+                 * venta fechada hoy fallaba con un "Invalid input" que no
+                 * decía nada de tasas: parecía que registrar la venta con la
+                 * fecha de hoy simplemente no funcionaba.
+                 */
+                tasa: fd.get('tasa') ?? undefined,
               });
               if (!result.ok) {
                 setError(result.error ?? 'No se pudo abrir la factura');
