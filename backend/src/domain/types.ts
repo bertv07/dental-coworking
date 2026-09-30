@@ -699,6 +699,8 @@ export interface AdminLedgerEntry {
   incomeCents: number;
   expenseCents: number;
   notes: string | null;
+  /** De qué cobro nació. `null` = fila escrita a mano. */
+  sourcePaymentId: string | null;
   createdAt: Date;
 }
 
@@ -716,5 +718,7 @@ export interface DentistLedgerEntry {
   dentistShareCents: number;
   clinicShareCents: number;
   notes: string | null;
+  /** De qué cobro nació. `null` = fila escrita a mano. */
+  sourcePaymentId: string | null;
   createdAt: Date;
 }

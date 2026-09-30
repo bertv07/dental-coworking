@@ -78,7 +78,10 @@ export function DentistLedgerManager({
   }
 
   function borrar(f: DentistLedgerEntry) {
-    if (!window.confirm(`¿Quitar la fila de «${f.patientName}»?`)) return;
+    const aviso = f.sourcePaymentId
+      ? `Esta fila nació de un cobro real. Quitarla NO deshace el cobro ni afecta Caja — sólo borra la anotación de este libro. ¿Seguir?`
+      : `¿Quitar la fila de «${f.patientName}»?`;
+    if (!window.confirm(aviso)) return;
     startTransition(async () => {
       const r = await deleteDentistLedgerEntryAction(f.id);
       if (!r.ok) setError(r.error ?? 'No se pudo quitar');
@@ -125,7 +128,14 @@ export function DentistLedgerManager({
                   return (
                     <tr key={f.id}>
                       <td className="mono text-xs" data-label="Fecha">{fechaCorta(f.date)}</td>
-                      <td data-label="Paciente" className="table__strong">{f.patientName}</td>
+                      <td data-label="Paciente">
+                        <span className="table__strong">{f.patientName}</span>
+                        {f.sourcePaymentId && (
+                          <span title="Nació de un cobro real; se borra sola si el cobro se reversa.">
+                            <Badge tone="neutral">Auto</Badge>
+                          </span>
+                        )}
+                      </td>
                       <td className="table__num mono" data-label="Presupuesto">{cortesia ? <Badge tone="neutral">Cortesía</Badge> : formatCents(f.budgetCents)}</td>
                       <td className="table__num mono" data-label="Abono">{f.depositCents > 0 ? formatCents(f.depositCents) : '—'}</td>
                       <td className="table__num mono text-xs" data-label="% Doctora">{cortesia ? '—' : `${f.dentistPercent}%`}</td>

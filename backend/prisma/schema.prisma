@@ -1846,6 +1846,17 @@ model AdminLedgerEntry {
   expenseCents Int @default(0)
   notes        String?
 
+  /**
+   * De qué cobro real nació esta fila, si nació de uno. `null` = fila
+   * escrita a mano (un gasto de bolsillo, la luz, algo de antes de que
+   * existiera el panel).
+   *
+   * NO es `@unique`: un solo cobro genera DOS filas aquí —el ingreso
+   * "Coworking" y el egreso "Pago Dra."—, igual que en la hoja de Excel
+   * original.
+   */
+  sourcePaymentId String?
+
   createdByUserId String?
 
   createdAt DateTime  @default(now()) @db.Timestamptz(3)
@@ -1853,6 +1864,7 @@ model AdminLedgerEntry {
   deletedAt DateTime? @db.Timestamptz(3)
 
   @@index([book, deletedAt, date])
+  @@index([sourcePaymentId])
   @@map("admin_ledger_entries")
 }
 
@@ -1887,6 +1899,16 @@ model DentistLedgerEntry {
   clinicShareCents  Int @default(0)
 
   notes String?
+
+  /**
+   * De qué cobro real nació esta fila. `null` = fila escrita a mano.
+   *
+   * SÍ es `@unique`: un cobro concreto genera UNA sola fila en el libro de
+   * la odontóloga —a diferencia del libro general, que le pone dos—, así
+   * que reintentar la sincronización de un mismo pago actualiza la misma
+   * fila en vez de duplicarla.
+   */
+  sourcePaymentId String? @unique
 
   createdByUserId String?
 

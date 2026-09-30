@@ -8,11 +8,7 @@
  *
  *  Transcribe fila a fila lo que había en "CONTROL ADMINISTRATIVO DENTAL
  *  COWORKING.xlsx": la hoja general (Gastos Administrados), la caja chica,
- *  y las hojas de Dra. Palma y Dra. Martini. Las de Dra. Cartagena y
- *  Dra. Guedez no llegaron en foto, pero SUS consultas SÍ aparecen en la
- *  hoja general (como "Coworking" / "Pago Dra" de cada una), así que se
- *  reconstruyen desde ahí: el % de la doctora sale de dividir lo pagado
- *  entre el total facturado.
+ *  y las cuatro hojas de odontóloga (Palma, Martini, Cartagena, Guedez).
  *
  *  Busca a cada odontóloga POR APELLIDO (no por id, que cambia entre
  *  entornos) y AVISA — sin fallar — si alguna no existe en esta base.
@@ -214,25 +210,23 @@ const DRA_MARTINI = [
 ];
 
 // ---------------------------------------------------------------------------
-//  DRA. CARTAGENA (Yvette Cartagena) — reconstruida desde Gastos Administrados
+//  DRA. CARTAGENA (Yvette Cartagena) — de su propia pestaña
 // ---------------------------------------------------------------------------
 const DRA_CARTAGENA = [
-  { date: '2026-09-15', patientName: 'Sanchez', budget: 500, dentistPercent: 40,
-    notes: 'Reconstruida desde Gastos Administrados: Coworking 500 / Pago Dra 200' },
-  { date: '2026-09-17', patientName: 'Brion', budget: 30, dentistPercent: 40,
-    notes: 'Reconstruida desde Gastos Administrados' },
-  { date: '2026-09-17', patientName: 'Virguez', budget: 30, dentistPercent: 40,
-    notes: 'Reconstruida desde Gastos Administrados' },
-  { date: '2026-09-24', patientName: 'Magallanes', budget: 80, dentistPercent: 40,
-    notes: 'Reconstruida desde Gastos Administrados' },
+  { date: '2026-09-15', patientName: 'Yancy Sanchez', budget: 500, dentistPercent: 40 },
+  { date: '2026-09-17', patientName: 'Victor Brion', budget: 30, dentistPercent: 40 },
+  { date: '2026-09-17', patientName: 'Rachell Virguez', budget: 30, dentistPercent: 40 },
+  { date: '2026-09-17', patientName: 'Samantha Martini', budget: 0,
+    notes: 'Paciente de Cortesia Dra. Samantha' },
+  { date: '2026-09-24', patientName: 'Yeymy Magallanes', budget: 80, dentistPercent: 40 },
 ];
 
 // ---------------------------------------------------------------------------
-//  DRA. GUEDEZ (Genesis Guedez) — reconstruida desde Gastos Administrados
+//  DRA. GUEDEZ (Genesis Guedez) — de su propia pestaña
 // ---------------------------------------------------------------------------
 const DRA_GUEDEZ = [
-  { date: '2026-09-18', patientName: 'Martinez', budget: 100, dentistPercent: 40,
-    notes: 'Reconstruida desde Gastos Administrados' },
+  { date: '2026-09-18', patientName: 'Miguel Martinez', budget: 100, deposit: 100, dentistPercent: 40,
+    notes: 'Queda pendiente por abonar 100,00$ al tratamiento' },
 ];
 
 async function main() {

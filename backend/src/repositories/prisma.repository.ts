@@ -22,6 +22,7 @@ import {
   repartirPago,
   totalLinea,
 } from '@/backend/repositories/invoice-helpers';
+import { sincronizarLibroDePago, borrarLibroDePagos } from '@/backend/repositories/ledger-sync';
 import { MINUTES_PER_DAY, clinicWallClockToInstant, clinicDayRange, clinicDayKey } from '@/backend/domain/clinic-calendar';
 
 /**
@@ -1364,6 +1365,11 @@ export const prismaRepository: DataRepository = {
             },
           },
         });
+
+        // El libro de Administración se escribe SOLO — sin esto, la
+        // clínica seguiría anotando cada consulta a mano en Excel además de
+        // cobrarla aquí, que es justo lo que se pidió dejar de hacer.
+        await sincronizarLibroDePago(tx, payment.id);
 
         return { ok: true as const, data: { id: payment.id } };
       });
@@ -3007,6 +3013,8 @@ export const prismaRepository: DataRepository = {
 
         await recalcularFactura(tx, invoiceId);
 
+        await sincronizarLibroDePago(tx, pago.id);
+
         // Cobrada del todo implica cita atendida.
         const nuevoSaldo = saldo - aplicadoCents;
         if (nuevoSaldo === 0 && factura.appointmentId) {
@@ -3251,6 +3259,10 @@ export const prismaRepository: DataRepository = {
         where: { id: { in: idsARevertir } },
         data: { status: 'REFUNDED', payoutId: null },
       });
+
+      // Ese dinero ya no cuenta como cobrado: las filas del libro que
+      // nacieron de él tampoco pueden seguir ahí.
+      await borrarLibroDePagos(tx, idsARevertir);
 
       await tx.invoice.update({
         where: { id },
@@ -4220,6 +4232,7 @@ export const prismaRepository: DataRepository = {
       // Los cobros no tienen `onDelete: Cascade` desde la factura a
       // propósito (es la misma protección que impide anular una factura
       // cobrada sin querer) — aquí hay que borrarlos primero a mano.
+      await borrarLibroDePagos(tx, idsAPagos);
       await tx.payment.deleteMany({ where: { invoiceId: id } });
       // Las líneas sí cascadean solas.
       await tx.invoice.delete({ where: { id } });
@@ -4283,6 +4296,7 @@ export const prismaRepository: DataRepository = {
       }
 
       if (cobros.length > 0) {
+        await borrarLibroDePagos(tx, cobros.map((c) => c.id));
         await tx.payment.deleteMany({ where: { id: { in: cobros.map((c) => c.id) } } });
       }
       // Las líneas de factura cascadean solas; las citas primero porque una
@@ -5658,6 +5672,7 @@ function aAdminLedgerEntry(row: {
   incomeCents: number;
   expenseCents: number;
   notes: string | null;
+  sourcePaymentId: string | null;
   createdAt: Date;
 }): AdminLedgerEntry {
   return {
@@ -5668,6 +5683,7 @@ function aAdminLedgerEntry(row: {
     incomeCents: row.incomeCents,
     expenseCents: row.expenseCents,
     notes: row.notes,
+    sourcePaymentId: row.sourcePaymentId,
     createdAt: row.createdAt,
   };
 }
@@ -5684,6 +5700,7 @@ function aDentistLedgerEntry(row: {
   dentistShareCents: number;
   clinicShareCents: number;
   notes: string | null;
+  sourcePaymentId: string | null;
   createdAt: Date;
 }): DentistLedgerEntry {
   return {
@@ -5697,6 +5714,7 @@ function aDentistLedgerEntry(row: {
     dentistShareCents: row.dentistShareCents,
     clinicShareCents: row.clinicShareCents,
     notes: row.notes,
+    sourcePaymentId: row.sourcePaymentId,
     createdAt: row.createdAt,
   };
 }

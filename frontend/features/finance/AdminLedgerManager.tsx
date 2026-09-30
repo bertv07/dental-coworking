@@ -7,7 +7,7 @@ import { formatCents } from '@/backend/domain/money';
 import { saveAdminLedgerEntryAction, deleteAdminLedgerEntryAction } from '@/app/actions/admin-ledger.actions';
 import { Modal } from '@/frontend/components/motion';
 import { TextField, TextAreaField, FormFooter } from '@/frontend/components/ui/form';
-import { Card, EmptyState, Notice } from '@/frontend/components/ui/primitives';
+import { Badge, Card, EmptyState, Notice } from '@/frontend/components/ui/primitives';
 import { IconPlus, IconEdit, IconTrash } from '@/frontend/components/ui/icons';
 
 /**
@@ -67,7 +67,10 @@ export function AdminLedgerManager({
   }
 
   function borrar(f: AdminLedgerEntry) {
-    if (!window.confirm(`¿Quitar «${f.description}»?`)) return;
+    const aviso = f.sourcePaymentId
+      ? `Esta fila nació de un cobro real. Quitarla NO deshace el cobro ni afecta Caja — sólo borra la anotación de este libro. ¿Seguir?`
+      : `¿Quitar «${f.description}»?`;
+    if (!window.confirm(aviso)) return;
     startTransition(async () => {
       const r = await deleteAdminLedgerEntryAction(f.id);
       if (!r.ok) setError(r.error ?? 'No se pudo quitar');
@@ -107,7 +110,14 @@ export function AdminLedgerManager({
                 {filas.map((f) => (
                   <tr key={f.id}>
                     <td className="mono text-xs" data-label="Fecha">{fechaCorta(f.date)}</td>
-                    <td data-label="Descripción" className="table__strong">{f.description}</td>
+                    <td data-label="Descripción">
+                      <span className="table__strong">{f.description}</span>
+                      {f.sourcePaymentId && (
+                        <span title="Nació de un cobro real; se borra sola si el cobro se reversa.">
+                          <Badge tone="neutral">Auto</Badge>
+                        </span>
+                      )}
+                    </td>
                     <td className="table__num mono" data-label="Ingreso" style={{ color: f.incomeCents > 0 ? 'var(--color-success)' : undefined }}>
                       {f.incomeCents > 0 ? formatCents(f.incomeCents) : '—'}
                     </td>
