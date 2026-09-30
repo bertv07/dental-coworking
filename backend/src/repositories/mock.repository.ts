@@ -699,6 +699,13 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async listAdminLedgerEntries() { return []; },
+  async saveAdminLedgerEntry({ id }) { return { ok: true, data: { id: id ?? newId('adl') } }; },
+  async deleteAdminLedgerEntry({ id }) { return { ok: true, data: { id } }; },
+  async listDentistLedgerEntries() { return []; },
+  async saveDentistLedgerEntry({ id }) { return { ok: true, data: { id: id ?? newId('dle') } }; },
+  async deleteDentistLedgerEntry({ id }) { return { ok: true, data: { id } }; },
+
   async listExpenses() {
     return [];
   },

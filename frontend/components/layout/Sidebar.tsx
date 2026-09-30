@@ -151,6 +151,12 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
        * acceso a todo lo demás; quien entre ahí puede ascenderse a sí mismo.
        */
       { href: '/usuarios', label: 'Cuentas', Icon: IconUsers, minimumRole: 'SUPER_ADMIN' },
+      /*
+       * El libro que Deimara llevaba en Excel: gastos administrativos, caja
+       * chica y una pestaña por cada odontóloga. Sólo Super Admin: es dinero
+       * de cada quien por separado.
+       */
+      { href: '/administracion', label: 'Administración', Icon: IconCurrency, minimumRole: 'SUPER_ADMIN' },
       // Recepción también los edita: es quien cotiza y factura, así que es la
       // primera en enterarse de que un precio cambió.
       { href: '/tratamientos', label: 'Precios', Icon: IconTag, minimumRole: 'ASSISTANT' },

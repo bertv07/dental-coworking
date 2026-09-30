@@ -402,6 +402,9 @@ model Dentist {
   /** Lo que ella compra para trabajar. Ver `Expense`. */
   expenses Expense[]
 
+  /** Su libro de consultas: presupuesto, abono y reparto. Ver `DentistLedgerEntry`. */
+  ledgerEntries DentistLedgerEntry[]
+
   createdAt         DateTime                  @default(now()) @db.Timestamptz(3)
   updatedAt         DateTime                  @updatedAt @db.Timestamptz(3)
   deletedAt         DateTime?                 @db.Timestamptz(3)
@@ -1804,4 +1807,93 @@ model Expense {
   @@index([scope, dentistId, deletedAt])
   @@index([startsOn])
   @@map("expenses")
+}
+
+/// A qué libro pertenece una fila de `AdminLedgerEntry`.
+enum AdminLedgerBook {
+  GASTOS_ADMIN
+  CAJA_CHICA
+}
+
+/// ===========================================================================
+///  Administración: el libro que Deimara llevaba en Excel, ahora en el panel
+/// ===========================================================================
+///  Dos pestañas con la MISMA forma —una fila, una fecha, un ingreso o un
+///  egreso, una nota— y por eso un solo modelo con un `book` que las separa:
+///
+///   · GASTOS_ADMIN — el libro general de la clínica: publicidad, sueldos,
+///     reparaciones, y también cada consulta anotada dos veces (lo que
+///     entró como "Coworking" y lo que salió como "Pago Dra."). Así se
+///     llevaba en la hoja de cálculo, fila por fila, y se mantiene igual:
+///     es un libro MANUAL, no un espejo automático de facturas y cobros.
+///   · CAJA_CHICA — el efectivo de bolsillo de la oficina, con su saldo
+///     inicial y lo que entra y sale de ahí.
+///
+///  Es intencional que esto NO se derive de `Invoice`/`Payment`: la clínica
+///  ya llevaba esta contabilidad a mano antes de que existiera el panel, y
+///  quiere seguir llevándola así —con un techo real de gasto administrativo—,
+///  no que el sistema se la invente a partir de las facturas.
+model AdminLedgerEntry {
+  id String @id @default(cuid())
+
+  book AdminLedgerBook
+
+  date        DateTime @db.Date
+  description String
+  /// Sólo uno de los dos trae algo en cada fila, como en la hoja: una
+  /// columna verde y una roja, nunca las dos a la vez.
+  incomeCents  Int @default(0)
+  expenseCents Int @default(0)
+  notes        String?
+
+  createdByUserId String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([book, deletedAt, date])
+  @@map("admin_ledger_entries")
+}
+
+/// ===========================================================================
+///  El libro de cada odontóloga: presupuesto, abono y reparto por consulta
+/// ===========================================================================
+///  Una fila por paciente atendido. El reparto varía por consulta —a veces
+///  40/60, a veces 50/50, según lo que se haya pactado ese día— así que se
+///  guarda el porcentaje de CADA fila, no uno fijo por odontóloga.
+///
+///  Un paciente de cortesía (familiar, sin cobro) es una fila con todo en
+///  cero: se deja constancia de que vino, sin mentir sobre el dinero.
+model DentistLedgerEntry {
+  id String @id @default(cuid())
+
+  dentistId String
+  dentist   Dentist @relation(fields: [dentistId], references: [id])
+
+  date        DateTime @db.Date
+  patientName String
+
+  /// Lo que se presupuestó/cobró en total. `0` = paciente de cortesía.
+  budgetCents Int
+  /// Abono parcial, cuando el paciente no pagó todo de una vez.
+  depositCents Int @default(0)
+
+  /// Porcentaje que se quedó la odontóloga EN ESTA fila (el resto, la
+  /// clínica). No es el `clinicCommissionPercent` de su ficha: ese es el
+  /// habitual, y aquí se registra el que de verdad se aplicó ese día.
+  dentistPercent    Int @default(0)
+  dentistShareCents Int @default(0)
+  clinicShareCents  Int @default(0)
+
+  notes String?
+
+  createdByUserId String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  @@index([dentistId, deletedAt, date])
+  @@map("dentist_ledger_entries")
 }

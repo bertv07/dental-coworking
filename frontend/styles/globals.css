@@ -3893,3 +3893,32 @@ a {
   border-radius: 4px;
 }
 .barra__detalle { margin-top: 2px; }
+
+/* ===========================================================================
+   Administración: pestañas al estilo de una hoja de cálculo
+   =========================================================================== */
+.admin-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  border-bottom: 2px solid var(--color-border-strong);
+  margin-bottom: var(--space-4);
+}
+.admin-tabs__item {
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--color-text-muted);
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius-md, 8px) var(--radius-md, 8px) 0 0;
+  background: var(--color-surface-soft, #eef1f5);
+}
+.admin-tabs__item:hover { color: var(--color-text); }
+.admin-tabs__item--activa {
+  background: var(--color-surface, #fff);
+  color: var(--color-primary);
+  border-color: var(--color-border-strong);
+  border-bottom: 2px solid var(--color-surface, #fff);
+  margin-bottom: -2px;
+}

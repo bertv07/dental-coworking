@@ -4,8 +4,11 @@ import type {
   AppointmentWithRelations,
   ApprovalStatus,
   ConversationListItem,
+  AdminLedgerBook,
+  AdminLedgerEntry,
   Dentist,
   DentistAgendaItem,
+  DentistLedgerEntry,
   Expense,
   ExpenseRecurrence,
   ExpenseScope,
@@ -137,6 +140,29 @@ export interface PaymentMethodInput {
   currency: 'VES' | 'USD';
   sortOrder: number;
   isActive: boolean;
+}
+
+/** Alta o edición de una fila de Gastos Administrativos o Caja Chica. */
+export interface AdminLedgerEntryInput {
+  book: AdminLedgerBook;
+  date: string;
+  description: string;
+  incomeCents: number;
+  expenseCents: number;
+  notes: string | null;
+}
+
+/** Alta o edición de una fila del libro de una odontóloga. */
+export interface DentistLedgerEntryInput {
+  dentistId: string;
+  date: string;
+  patientName: string;
+  budgetCents: number;
+  depositCents: number;
+  dentistPercent: number;
+  dentistShareCents: number;
+  clinicShareCents: number;
+  notes: string | null;
 }
 
 /** Alta o edición de un gasto. Fechas en 'YYYY-MM-DD'. */
@@ -1555,6 +1581,29 @@ export interface DataRepository {
 
   /** Borrado lógico: un gasto de hace meses ya está en un informe. */
   deleteExpense(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
+
+  // --- Administración: el libro de Deimara ----------------------------------
+
+  listAdminLedgerEntries(params: { book: AdminLedgerBook }): Promise<AdminLedgerEntry[]>;
+
+  saveAdminLedgerEntry(params: {
+    id: string | null;
+    data: AdminLedgerEntryInput;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  deleteAdminLedgerEntry(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
+
+  /** Sólo las suyas: cada odontóloga tiene su propio libro. */
+  listDentistLedgerEntries(params: { dentistId: string }): Promise<DentistLedgerEntry[]>;
+
+  saveDentistLedgerEntry(params: {
+    id: string | null;
+    data: DentistLedgerEntryInput;
+    userId: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  deleteDentistLedgerEntry(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
 
   // --- Cierre de caja ------------------------------------------------------
   /** Arqueo de un día, o `null` si aún no se ha cerrado. */

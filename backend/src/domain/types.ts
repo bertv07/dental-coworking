@@ -684,3 +684,37 @@ export interface Expense {
   notes: string | null;
   createdAt: Date;
 }
+
+// --- Administración: el libro de Deimara ------------------------------------
+
+export type AdminLedgerBook = 'GASTOS_ADMIN' | 'CAJA_CHICA';
+
+/** Una fila de Gastos Administrativos o de Caja Chica. En centavos de USD. */
+export interface AdminLedgerEntry {
+  id: string;
+  book: AdminLedgerBook;
+  /** 'YYYY-MM-DD'. */
+  date: string;
+  description: string;
+  incomeCents: number;
+  expenseCents: number;
+  notes: string | null;
+  createdAt: Date;
+}
+
+/** Una consulta en el libro de una odontóloga: presupuesto, abono y reparto. */
+export interface DentistLedgerEntry {
+  id: string;
+  dentistId: string;
+  /** 'YYYY-MM-DD'. */
+  date: string;
+  patientName: string;
+  budgetCents: number;
+  depositCents: number;
+  /** Lo que se quedó ELLA en esta fila. `0` = cortesía. */
+  dentistPercent: number;
+  dentistShareCents: number;
+  clinicShareCents: number;
+  notes: string | null;
+  createdAt: Date;
+}

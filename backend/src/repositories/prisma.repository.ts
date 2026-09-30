@@ -12,6 +12,8 @@ import type {
   FinancialSummary,
   ScheduleBlock,
   Expense,
+  AdminLedgerEntry,
+  DentistLedgerEntry,
 } from '@/backend/domain/types';
 import { percentChange, splitCents } from '@/backend/domain/money';
 import { calcularComision, calcularPrecio, distribuirDescuento, repartirCobro } from '@/backend/domain/pricing';
@@ -1376,6 +1378,114 @@ export const prismaRepository: DataRepository = {
     // La caja del día es el informe de un rango de un día. Una sola consulta
     // que mantener: lo que arregle una vista lo hereda la otra.
     return this.getCashReport(clinicDayRange(date));
+  },
+
+  // --- Administración: el libro de Deimara ----------------------------------
+
+  async listAdminLedgerEntries({ book }) {
+    const filas = await prisma.adminLedgerEntry.findMany({
+      where: { book, deletedAt: null },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+    });
+    return filas.map(aAdminLedgerEntry);
+  },
+
+  async saveAdminLedgerEntry({ id, data, userId }) {
+    try {
+      const aFecha = (k: string) => new Date(`${k}T12:00:00Z`);
+      const payload = {
+        book: data.book,
+        date: aFecha(data.date),
+        description: data.description,
+        incomeCents: data.incomeCents,
+        expenseCents: data.expenseCents,
+        notes: data.notes,
+      };
+      const guardado = id
+        ? await prisma.adminLedgerEntry.update({ where: { id }, data: payload, select: { id: true } })
+        : await prisma.adminLedgerEntry.create({
+            data: { ...payload, createdByUserId: userId },
+            select: { id: true },
+          });
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: id ? 'admin_ledger.updated' : 'admin_ledger.created',
+          entityType: 'AdminLedgerEntry',
+          entityId: guardado.id,
+          after: { book: data.book, incomeCents: data.incomeCents, expenseCents: data.expenseCents },
+        },
+      });
+      return { ok: true, data: guardado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deleteAdminLedgerEntry({ id, userId }) {
+    try {
+      await prisma.adminLedgerEntry.update({ where: { id }, data: { deletedAt: new Date() } });
+      await prisma.auditLog.create({
+        data: { userId, action: 'admin_ledger.deleted', entityType: 'AdminLedgerEntry', entityId: id },
+      });
+      return { ok: true, data: { id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async listDentistLedgerEntries({ dentistId }) {
+    const filas = await prisma.dentistLedgerEntry.findMany({
+      where: { dentistId, deletedAt: null },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+    });
+    return filas.map(aDentistLedgerEntry);
+  },
+
+  async saveDentistLedgerEntry({ id, data, userId }) {
+    try {
+      const payload = {
+        dentistId: data.dentistId,
+        date: new Date(`${data.date}T12:00:00Z`),
+        patientName: data.patientName,
+        budgetCents: data.budgetCents,
+        depositCents: data.depositCents,
+        dentistPercent: data.dentistPercent,
+        dentistShareCents: data.dentistShareCents,
+        clinicShareCents: data.clinicShareCents,
+        notes: data.notes,
+      };
+      const guardado = id
+        ? await prisma.dentistLedgerEntry.update({ where: { id }, data: payload, select: { id: true } })
+        : await prisma.dentistLedgerEntry.create({
+            data: { ...payload, createdByUserId: userId },
+            select: { id: true },
+          });
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: id ? 'dentist_ledger.updated' : 'dentist_ledger.created',
+          entityType: 'DentistLedgerEntry',
+          entityId: guardado.id,
+          after: { dentistId: data.dentistId, patientName: data.patientName, budgetCents: data.budgetCents },
+        },
+      });
+      return { ok: true, data: guardado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deleteDentistLedgerEntry({ id, userId }) {
+    try {
+      await prisma.dentistLedgerEntry.update({ where: { id }, data: { deletedAt: new Date() } });
+      await prisma.auditLog.create({
+        data: { userId, action: 'dentist_ledger.deleted', entityType: 'DentistLedgerEntry', entityId: id },
+      });
+      return { ok: true, data: { id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
   },
 
   // --- Gastos --------------------------------------------------------------
@@ -5534,6 +5644,58 @@ function aExpense(row: {
     recurrence: row.recurrence,
     startsOn: row.startsOn.toISOString().slice(0, 10),
     endsOn: row.endsOn ? row.endsOn.toISOString().slice(0, 10) : null,
+    notes: row.notes,
+    createdAt: row.createdAt,
+  };
+}
+
+/** Fila de Prisma → `AdminLedgerEntry`: la fecha `@db.Date` a 'YYYY-MM-DD'. */
+function aAdminLedgerEntry(row: {
+  id: string;
+  book: 'GASTOS_ADMIN' | 'CAJA_CHICA';
+  date: Date;
+  description: string;
+  incomeCents: number;
+  expenseCents: number;
+  notes: string | null;
+  createdAt: Date;
+}): AdminLedgerEntry {
+  return {
+    id: row.id,
+    book: row.book,
+    date: row.date.toISOString().slice(0, 10),
+    description: row.description,
+    incomeCents: row.incomeCents,
+    expenseCents: row.expenseCents,
+    notes: row.notes,
+    createdAt: row.createdAt,
+  };
+}
+
+/** Fila de Prisma → `DentistLedgerEntry`. */
+function aDentistLedgerEntry(row: {
+  id: string;
+  dentistId: string;
+  date: Date;
+  patientName: string;
+  budgetCents: number;
+  depositCents: number;
+  dentistPercent: number;
+  dentistShareCents: number;
+  clinicShareCents: number;
+  notes: string | null;
+  createdAt: Date;
+}): DentistLedgerEntry {
+  return {
+    id: row.id,
+    dentistId: row.dentistId,
+    date: row.date.toISOString().slice(0, 10),
+    patientName: row.patientName,
+    budgetCents: row.budgetCents,
+    depositCents: row.depositCents,
+    dentistPercent: row.dentistPercent,
+    dentistShareCents: row.dentistShareCents,
+    clinicShareCents: row.clinicShareCents,
     notes: row.notes,
     createdAt: row.createdAt,
   };
