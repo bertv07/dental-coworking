@@ -1440,6 +1440,40 @@ export const prismaRepository: DataRepository = {
     }
   },
 
+  async importAdminLedgerEntries({ filas, userId }) {
+    try {
+      const creadas = await prisma.$transaction(async (tx) => {
+        const { count } = await tx.adminLedgerEntry.createMany({
+          data: filas.map((f) => ({
+            book: f.book,
+            date: new Date(`${f.date}T12:00:00Z`),
+            description: f.description,
+            incomeCents: f.incomeCents,
+            expenseCents: f.expenseCents,
+            notes: f.notes,
+            createdByUserId: userId,
+          })),
+        });
+        // Un solo asiento para toda la carga: ochenta «created» seguidos
+        // enterrarían el resto del historial.
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'admin_ledger.imported',
+            entityType: 'AdminLedgerEntry',
+            // No hay UNA fila que señalar: el asiento apunta al libro.
+            entityId: filas[0]?.book ?? 'GASTOS_ADMIN',
+            after: { filas: count },
+          },
+        });
+        return count;
+      });
+      return { ok: true, data: { creadas } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
   async listDentistLedgerEntries({ dentistId }) {
     const filas = await prisma.dentistLedgerEntry.findMany({
       where: { dentistId, deletedAt: null },
@@ -1489,6 +1523,40 @@ export const prismaRepository: DataRepository = {
         data: { userId, action: 'dentist_ledger.deleted', entityType: 'DentistLedgerEntry', entityId: id },
       });
       return { ok: true, data: { id } };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async importDentistLedgerEntries({ filas, userId }) {
+    try {
+      const creadas = await prisma.$transaction(async (tx) => {
+        const { count } = await tx.dentistLedgerEntry.createMany({
+          data: filas.map((f) => ({
+            dentistId: f.dentistId,
+            date: new Date(`${f.date}T12:00:00Z`),
+            patientName: f.patientName,
+            budgetCents: f.budgetCents,
+            depositCents: f.depositCents,
+            dentistPercent: f.dentistPercent,
+            dentistShareCents: f.dentistShareCents,
+            clinicShareCents: f.clinicShareCents,
+            notes: f.notes,
+            createdByUserId: userId,
+          })),
+        });
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'dentist_ledger.imported',
+            entityType: 'DentistLedgerEntry',
+            entityId: filas[0]?.dentistId ?? 'sin-odontologa',
+            after: { filas: count },
+          },
+        });
+        return count;
+      });
+      return { ok: true, data: { creadas } };
     } catch (error) {
       return toWriteFailure(error);
     }

@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type {
   AppointmentWithRelations,
   DentistEarnings,
@@ -42,6 +43,12 @@ interface FinanceDashboardProps {
   upcomingAppointments: AppointmentWithRelations[];
   /** Tasa BCV vigente. `null` si DolarAPI nunca respondió. */
   exchangeRate: number | null;
+  /**
+   * Lo que va justo debajo de los indicadores: hoy, el resumen del libro de
+   * Administración. Llega ya montado para que este componente siga sin saber
+   * de dónde sale cada dato.
+   */
+  afterIndicators?: ReactNode;
 }
 
 /**
@@ -79,6 +86,7 @@ export function FinanceDashboard({
   dentistEarnings,
   upcomingAppointments,
   exchangeRate,
+  afterIndicators,
 }: FinanceDashboardProps) {
   const totalAppointments =
     summary.completedAppointments + summary.cancelledAppointments + summary.noShowAppointments;
@@ -145,6 +153,8 @@ export function FinanceDashboard({
           </HoverCard>
         </StaggerItem>
       </Stagger>
+
+      {afterIndicators}
 
       {/* --- Reparto y automatización ----------------------------------- */}
       <div className="grid-2">

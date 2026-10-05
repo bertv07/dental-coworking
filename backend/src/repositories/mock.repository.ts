@@ -702,9 +702,11 @@ export const mockRepository: DataRepository = {
   async listAdminLedgerEntries() { return []; },
   async saveAdminLedgerEntry({ id }) { return { ok: true, data: { id: id ?? newId('adl') } }; },
   async deleteAdminLedgerEntry({ id }) { return { ok: true, data: { id } }; },
+  async importAdminLedgerEntries({ filas }) { return { ok: true, data: { creadas: filas.length } }; },
   async listDentistLedgerEntries() { return []; },
   async saveDentistLedgerEntry({ id }) { return { ok: true, data: { id: id ?? newId('dle') } }; },
   async deleteDentistLedgerEntry({ id }) { return { ok: true, data: { id } }; },
+  async importDentistLedgerEntries({ filas }) { return { ok: true, data: { creadas: filas.length } }; },
 
   async listExpenses() {
     return [];

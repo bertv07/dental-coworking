@@ -6,6 +6,8 @@ import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { AdminLedgerManager } from '@/frontend/features/finance/AdminLedgerManager';
 import { DentistLedgerManager } from '@/frontend/features/finance/DentistLedgerManager';
+import { LedgerImport } from '@/frontend/features/finance/LedgerImport';
+import { IconClose, IconDownload } from '@/frontend/components/ui/icons';
 
 /**
  * ===========================================================================
@@ -34,12 +36,14 @@ export const dynamic = 'force-dynamic';
 export default async function AdministracionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; cargar?: string }>;
 }) {
   await requireRole('SUPER_ADMIN');
 
-  const { tab } = await searchParams;
+  const { tab, cargar } = await searchParams;
   const pestañaActual = tab ?? 'gastos';
+  // En la URL, como las pestañas: recargar no cierra la carga a medias.
+  const cargando = cargar === '1';
 
   const dentists = await repository.listDentists();
 
@@ -70,15 +74,37 @@ export default async function AdministracionPage({
   return (
     <div className="page-body">
       <FadeIn>
-        <PageHead title="Administración" subtitle="El libro de la clínica, por pestañas — igual que en la hoja de cálculo" />
+        <PageHead
+          title="Administración"
+          subtitle="El libro de la clínica, por pestañas — igual que en la hoja de cálculo"
+          actions={
+            cargando ? (
+              <Link href={`/administracion?tab=${pestañaActual}`} className="btn btn--ghost">
+                <IconClose size={16} /> Cerrar carga
+              </Link>
+            ) : (
+              <Link href={`/administracion?tab=${pestañaActual}&cargar=1`} className="btn btn--primary">
+                <IconDownload size={16} /> Cargar Excel
+              </Link>
+            )
+          }
+        />
       </FadeIn>
+
+      {/* Fuera de las pestañas: el destino se elige dentro, y sale ya puesto
+          en la pestaña desde la que se abrió. */}
+      {cargando && (
+        <FadeIn>
+          <LedgerImport destinos={PESTAÑAS} destinoInicial={pestañaActual} />
+        </FadeIn>
+      )}
 
       {/* Pestañas por enlace: se puede recargar, compartir y volver atrás. */}
       <div className="admin-tabs" role="tablist" aria-label="Pestañas de administración">
         {PESTAÑAS.map((p) => (
           <Link
             key={p.id}
-            href={`/administracion?tab=${p.id}`}
+            href={`/administracion?tab=${p.id}${cargando ? '&cargar=1' : ''}`}
             role="tab"
             aria-selected={p.id === pestañaActual}
             className={`admin-tabs__item ${p.id === pestañaActual ? 'admin-tabs__item--activa' : ''}`}

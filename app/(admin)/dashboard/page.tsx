@@ -3,7 +3,10 @@ import { requireSuperAdmin } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { PageHead } from '@/frontend/components/layout/Topbar';
+import { clinicDayKey } from '@/backend/domain/clinic-calendar';
+import { resumirLibro } from '@/backend/domain/ledger-summary';
 import { FinanceDashboard } from '@/frontend/features/finance/FinanceDashboard';
+import { AdminLedgerSummary } from '@/frontend/features/finance/AdminLedgerSummary';
 import { FadeIn } from '@/frontend/components/motion';
 import { IconPlus, IconDownload } from '@/frontend/components/ui/icons';
 
@@ -27,7 +30,11 @@ export const metadata = { title: 'Dashboard' };
 /** Datos siempre frescos: un dashboard financiero cacheado engaña. */
 export const dynamic = 'force-dynamic';
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ mes?: string }>;
+}) {
   // AUTORIZACIÓN: sólo Super Admin. Un asistente que escriba /dashboard a
   // mano acaba en /sin-permiso. El guard corre antes de tocar ningún dato.
   await requireSuperAdmin();
@@ -46,7 +53,7 @@ export default async function DashboardPage() {
 
   // Las consultas en paralelo. Secuencialmente sumarían sus latencias;
   // con `Promise.all` el coste es el de la más lenta.
-  const [summary, dentistEarnings, upcomingAppointments, rate] = await Promise.all([
+  const [summary, dentistEarnings, upcomingAppointments, rate, gastos, cajaChica, dentists] = await Promise.all([
     repository.getFinancialSummary(range),
     repository.getDentistEarnings(range),
     repository.listAppointments({
@@ -54,7 +61,28 @@ export default async function DashboardPage() {
       limit: 8,
     }),
     getCurrentRate(rateSource),
+    repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' }),
+    repository.listAdminLedgerEntries({ book: 'CAJA_CHICA' }),
+    repository.listDentists(),
   ]);
+
+  // El libro de Administración: las MISMAS filas de /administracion, sumadas
+  // por mes. Por defecto el mes en curso (en Caracas, no en la zona del
+  // servidor); `?mes=2026-09` enseña otro.
+  const { mes } = await searchParams;
+  const mesDelLibro = mes && /^\d{4}-(0[1-9]|1[0-2])$/.test(mes) ? mes : clinicDayKey(to).slice(0, 7);
+  const resumenDelLibro = resumirLibro({
+    month: mesDelLibro,
+    gastos,
+    cajaChica,
+    libros: await Promise.all(
+      dentists.map(async (d) => ({
+        dentistId: d.id,
+        dentistName: d.fullName,
+        filas: await repository.listDentistLedgerEntries({ dentistId: d.id }),
+      })),
+    ),
+  });
 
   return (
     <div className="page-body">
@@ -105,6 +133,7 @@ export default async function DashboardPage() {
         dentistEarnings={dentistEarnings}
         upcomingAppointments={upcomingAppointments}
         exchangeRate={rate?.rate ?? null}
+        afterIndicators={<AdminLedgerSummary resumen={resumenDelLibro} />}
       />
     </div>
   );

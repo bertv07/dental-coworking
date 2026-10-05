@@ -1594,6 +1594,15 @@ export interface DataRepository {
 
   deleteAdminLedgerEntry(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
 
+  /**
+   * Varias filas de una vez, las que se suben desde Excel. Todas o ninguna:
+   * media hoja guardada obligaría a adivinar por dónde iba.
+   */
+  importAdminLedgerEntries(params: {
+    filas: AdminLedgerEntryInput[];
+    userId: string;
+  }): Promise<WriteResult<{ creadas: number }>>;
+
   /** Sólo las suyas: cada odontóloga tiene su propio libro. */
   listDentistLedgerEntries(params: { dentistId: string }): Promise<DentistLedgerEntry[]>;
 
@@ -1604,6 +1613,11 @@ export interface DataRepository {
   }): Promise<WriteResult<{ id: string }>>;
 
   deleteDentistLedgerEntry(params: { id: string; userId: string }): Promise<WriteResult<{ id: string }>>;
+
+  importDentistLedgerEntries(params: {
+    filas: DentistLedgerEntryInput[];
+    userId: string;
+  }): Promise<WriteResult<{ creadas: number }>>;
 
   // --- Cierre de caja ------------------------------------------------------
   /** Arqueo de un día, o `null` si aún no se ha cerrado. */
