@@ -79,6 +79,8 @@ export async function saveAdminLedgerEntryAction(id: string | null, input: unkno
   if (!r.ok) return { ok: false, error: 'No se pudo guardar la fila.' };
 
   revalidatePath('/administracion');
+  revalidatePath('/gastos');
+  revalidatePath('/dashboard');
   return { ok: true };
 }
 
@@ -91,6 +93,8 @@ export async function deleteAdminLedgerEntryAction(id: string): Promise<ActionRe
   if (!r.ok) return { ok: false, error: 'Esa fila ya no existe.' };
 
   revalidatePath('/administracion');
+  revalidatePath('/gastos');
+  revalidatePath('/dashboard');
   return { ok: true };
 }
 
@@ -142,6 +146,8 @@ export async function saveDentistLedgerEntryAction(id: string | null, input: unk
   if (!r.ok) return { ok: false, error: 'No se pudo guardar la fila.' };
 
   revalidatePath('/administracion');
+  revalidatePath('/gastos');
+  revalidatePath('/dashboard');
   return { ok: true };
 }
 
@@ -154,5 +160,7 @@ export async function deleteDentistLedgerEntryAction(id: string): Promise<Action
   if (!r.ok) return { ok: false, error: 'Esa fila ya no existe.' };
 
   revalidatePath('/administracion');
+  revalidatePath('/gastos');
+  revalidatePath('/dashboard');
   return { ok: true };
 }

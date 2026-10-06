@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import type { AdminLedgerEntry } from '@/backend/domain/types';
 import { formatCents } from '@/backend/domain/money';
@@ -112,6 +113,11 @@ export function AdminLedgerManager({
                     <td className="mono text-xs" data-label="Fecha">{fechaCorta(f.date)}</td>
                     <td data-label="Descripción">
                       <span className="table__strong">{f.description}</span>
+                      {f.sourceExpenseId && (
+                        <span title="Es un gasto cargado en la pantalla Gastos. Se edita allí.">
+                          <Badge tone="info">Gastos</Badge>
+                        </span>
+                      )}
                       {f.sourcePaymentId && (
                         <span title="Nació de un cobro real; se borra sola si el cobro se reversa.">
                           <Badge tone="neutral">Auto</Badge>
@@ -126,14 +132,23 @@ export function AdminLedgerManager({
                     </td>
                     <td className="text-xs subtle" data-label="Información">{f.notes ?? ''}</td>
                     <td>
-                      <div className="row-actions">
-                        <button type="button" className="btn btn--ghost btn--sm" onClick={() => abrir(f)} aria-label="Editar">
-                          <IconEdit size={14} />
-                        </button>
-                        <button type="button" className="btn btn--ghost btn--sm" onClick={() => borrar(f)} disabled={isPending} aria-label="Quitar">
-                          <IconTrash size={14} />
-                        </button>
-                      </div>
+                      {f.sourceExpenseId ? (
+                        // No es una fila de este libro: se cambia donde se cargó.
+                        <div className="row-actions">
+                          <Link href={`/gastos?mes=${f.date.slice(0, 7)}`} className="btn btn--ghost btn--sm">
+                            Ver en Gastos
+                          </Link>
+                        </div>
+                      ) : (
+                        <div className="row-actions">
+                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => abrir(f)} aria-label="Editar">
+                            <IconEdit size={14} />
+                          </button>
+                          <button type="button" className="btn btn--ghost btn--sm" onClick={() => borrar(f)} disabled={isPending} aria-label="Quitar">
+                            <IconTrash size={14} />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}

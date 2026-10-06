@@ -701,6 +701,11 @@ export interface AdminLedgerEntry {
   notes: string | null;
   /** De qué cobro nació. `null` = fila escrita a mano. */
   sourcePaymentId: string | null;
+  /**
+   * Sólo en las filas que NO están en el libro: son un gasto de la pantalla
+   * Gastos enseñado aquí como egreso. Se edita allí, no aquí.
+   */
+  sourceExpenseId?: string | null;
   createdAt: Date;
 }
 

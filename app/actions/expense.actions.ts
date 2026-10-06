@@ -119,6 +119,9 @@ export async function saveExpenseAction(id: string | null, input: unknown): Prom
   if (!r.ok) return { ok: false, error: 'No se pudo guardar el gasto.' };
 
   revalidatePath('/gastos');
+  // Los gastos de la clínica también se ven en el libro y en el dashboard.
+  revalidatePath('/administracion');
+  revalidatePath('/dashboard');
   return { ok: true };
 }
 
@@ -132,5 +135,8 @@ export async function deleteExpenseAction(id: string): Promise<ActionResult> {
   if (!r.ok) return { ok: false, error: 'Ese gasto ya no existe.' };
 
   revalidatePath('/gastos');
+  // Los gastos de la clínica también se ven en el libro y en el dashboard.
+  revalidatePath('/administracion');
+  revalidatePath('/dashboard');
   return { ok: true };
 }

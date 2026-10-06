@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
+import { clinicDayKey } from '@/backend/domain/clinic-calendar';
+import { libroConGastos } from '@/backend/domain/gastos-y-libro';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { AdminLedgerManager } from '@/frontend/features/finance/AdminLedgerManager';
@@ -58,7 +60,13 @@ export default async function AdministracionPage({
   let contenido: React.ReactNode;
 
   if (pestañaActual === 'gastos') {
-    const filas = await repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' });
+    const [delLibro, gastos] = await Promise.all([
+      repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' }),
+      repository.listExpenses({ scope: 'CLINIC' }),
+    ]);
+    // Los gastos de la clínica cargados en /gastos salen aquí como egresos:
+    // sin ellos, el Total General no restaría la luz ni el condominio.
+    const filas = libroConGastos(delLibro, gastos, clinicDayKey(new Date()).slice(0, 7));
     contenido = <AdminLedgerManager book="GASTOS_ADMIN" filas={filas} saldoLabel="Total General" />;
   } else if (pestañaActual === 'caja-chica') {
     const filas = await repository.listAdminLedgerEntries({ book: 'CAJA_CHICA' });

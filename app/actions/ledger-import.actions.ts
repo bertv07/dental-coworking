@@ -310,5 +310,7 @@ export async function applyLedgerImportAction(destinoId: unknown, filas: unknown
   revalidatePath('/administracion');
   // El dashboard resume este mismo libro.
   revalidatePath('/dashboard');
+  // Y los egresos del libro cuentan en Gastos.
+  revalidatePath('/gastos');
   return { ok: true, creadas: resultado.data.creadas, repetidas: recibidas - resultado.data.creadas };
 }

@@ -4,6 +4,7 @@ import { repository } from '@/backend/repositories';
 import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { clinicDayKey } from '@/backend/domain/clinic-calendar';
+import { libroConGastos } from '@/backend/domain/gastos-y-libro';
 import { resumirLibro } from '@/backend/domain/ledger-summary';
 import { FinanceDashboard } from '@/frontend/features/finance/FinanceDashboard';
 import { AdminLedgerSummary } from '@/frontend/features/finance/AdminLedgerSummary';
@@ -53,7 +54,7 @@ export default async function DashboardPage({
 
   // Las consultas en paralelo. Secuencialmente sumarían sus latencias;
   // con `Promise.all` el coste es el de la más lenta.
-  const [summary, dentistEarnings, upcomingAppointments, rate, gastos, cajaChica, dentists] = await Promise.all([
+  const [summary, dentistEarnings, upcomingAppointments, rate, delLibro, cajaChica, dentists, gastosClinica] = await Promise.all([
     repository.getFinancialSummary(range),
     repository.getDentistEarnings(range),
     repository.listAppointments({
@@ -64,13 +65,29 @@ export default async function DashboardPage({
     repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' }),
     repository.listAdminLedgerEntries({ book: 'CAJA_CHICA' }),
     repository.listDentists(),
+    repository.listExpenses({ scope: 'CLINIC' }),
   ]);
 
+  // El libro general CON los gastos de la clínica, igual que en la pestaña
+  // de /administracion: las dos pantallas suman las mismas filas.
+  const gastos = libroConGastos(delLibro, gastosClinica, clinicDayKey(to).slice(0, 7));
+
   // El libro de Administración: las MISMAS filas de /administracion, sumadas
-  // por mes. Por defecto el mes en curso (en Caracas, no en la zona del
-  // servidor); `?mes=2026-09` enseña otro.
+  // por mes; `?mes=2026-09` enseña uno concreto.
+  //
+  // Sin elegir, el mes en curso (en Caracas, no en la zona del servidor) —
+  // SALVO que todavía no tenga ninguna fila: entonces el último que sí. Los
+  // primeros días del mes el libro está vacío, y una sección entera en $0
+  // se lee como «esto no está conectado», no como «octubre acaba de empezar».
   const { mes } = await searchParams;
-  const mesDelLibro = mes && /^\d{4}-(0[1-9]|1[0-2])$/.test(mes) ? mes : clinicDayKey(to).slice(0, 7);
+  const mesActual = clinicDayKey(to).slice(0, 7);
+  const mesesConFilas = gastos.map((f) => f.date.slice(0, 7)).sort();
+  const mesDelLibro =
+    mes && /^\d{4}-(0[1-9]|1[0-2])$/.test(mes)
+      ? mes
+      : mesesConFilas.includes(mesActual)
+        ? mesActual
+        : (mesesConFilas.at(-1) ?? mesActual);
   const resumenDelLibro = resumirLibro({
     month: mesDelLibro,
     gastos,

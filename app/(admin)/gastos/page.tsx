@@ -5,9 +5,10 @@ import { repository } from '@/backend/repositories';
 import { formatCents } from '@/backend/domain/money';
 import { clinicDayKey, clinicWallClockToInstant, addDays } from '@/backend/domain/clinic-calendar';
 import { gastosDelPeriodo } from '@/backend/domain/gastos';
+import { egresosDelLibroComoGastos } from '@/backend/domain/gastos-y-libro';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn, Stagger, StaggerItem, HoverCard } from '@/frontend/components/motion';
-import { Stat, Notice } from '@/frontend/components/ui/primitives';
+import { Card, Stat, Notice } from '@/frontend/components/ui/primitives';
 import { IconChevronLeft, IconChevronRight } from '@/frontend/components/ui/icons';
 import {
   ExpensesManager,
@@ -88,8 +89,10 @@ export default async function GastosPage({
     dentistId = perfil.id;
   }
 
-  const [gastos, caja] = await Promise.all([
+  const [gastos, libro, caja] = await Promise.all([
     repository.listExpenses({ scope, dentistId }),
+    // Sólo la clínica: el libro de Administración es suyo, no de una odontóloga.
+    scope === 'CLINIC' ? repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' }) : Promise.resolve([]),
     repository.getCashReport({
       from: clinicWallClockToInstant(desde, 0),
       to: clinicWallClockToInstant(addDays(hasta, 1), 0),
@@ -97,7 +100,16 @@ export default async function GastosPage({
     }),
   ]);
 
-  const { filas, totalCents: gastosCents } = gastosDelPeriodo(gastos, desde, hasta);
+  const { filas, totalCents: gastosPropiosCents } = gastosDelPeriodo(gastos, desde, hasta);
+  /*
+   * Los egresos del libro de Administración también son gastos de la clínica
+   * —la publicidad, un sueldo, una reparación—, se hayan escrito a mano o
+   * subido por Excel. Se suman aquí para que «le queda de verdad» sea uno
+   * solo. Los «Pago Dra» no: lo que le entra a la clínica ya es sin su parte.
+   */
+  const delLibro = egresosDelLibroComoGastos(libro, desde, hasta);
+  const gastosCents = gastosPropiosCents + delLibro.totalCents;
+  const conceptos = filas.length + delLibro.filas.length;
   // La clínica cuenta su parte de los cobros; la odontóloga, la suya.
   const ingresosCents = scope === 'CLINIC' ? caja.clinicShareCents : caja.dentistShareCents;
   const quedaCents = ingresosCents - gastosCents;
@@ -140,7 +152,7 @@ export default async function GastosPage({
             <Stat
               label="Gastos del mes"
               value={formatCents(gastosCents)}
-              meta={`${filas.length} ${filas.length === 1 ? 'concepto' : 'conceptos'}`}
+              meta={`${conceptos} ${conceptos === 1 ? 'concepto' : 'conceptos'}`}
               compact
             />
           </HoverCard>
@@ -165,6 +177,54 @@ export default async function GastosPage({
           tituloPeriodo={`Lo que cuenta en ${tituloMes.toLowerCase()}`}
         />
       </FadeIn>
+
+      {delLibro.filas.length > 0 && (
+        <FadeIn delay={0.14}>
+          <Card
+            title="Del libro de Administración"
+            subtitle={`Egresos anotados en el libro en ${tituloMes.toLowerCase()} — ya están sumados arriba`}
+            flush
+            actions={
+              <Link href="/administracion?tab=gastos" className="btn btn--ghost btn--sm">
+                Abrir el libro
+              </Link>
+            }
+          >
+            <div className="table-wrap">
+              <table className="table table--cards">
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Concepto</th>
+                    <th className="table__num">Monto</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {delLibro.filas.map((f) => (
+                    <tr key={f.id}>
+                      <td data-label="Fecha" className="text-xs mono">
+                        {new Intl.DateTimeFormat('es-VE', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+                          .format(new Date(`${f.date}T12:00:00Z`))}
+                      </td>
+                      <td data-label="Concepto">
+                        <div className="table__strong">{f.description}</div>
+                        {f.notes && <div className="text-xs subtle">{f.notes}</div>}
+                      </td>
+                      <td data-label="Monto" className="table__num mono">{formatCents(f.expenseCents)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr>
+                    <td colSpan={2} style={{ fontWeight: 700, textAlign: 'right' }}>Total del libro</td>
+                    <td className="table__num mono" style={{ fontWeight: 700 }}>{formatCents(delLibro.totalCents)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </Card>
+        </FadeIn>
+      )}
     </div>
   );
 }
