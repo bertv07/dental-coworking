@@ -6,7 +6,7 @@ import {
   PRISMA_ERROR,
 } from '@/backend/db/client';
 import { Prisma } from '@prisma/client';
-import type { DataRepository, DateRange, WriteResult } from '@/backend/repositories/types';
+import type { DataRepository, DateRange, OutstandingDebt, WriteResult } from '@/backend/repositories/types';
 import type {
   DentistEarnings,
   FinancialSummary,
@@ -2514,6 +2514,170 @@ export const prismaRepository: DataRepository = {
     } catch (error) {
       return toWriteFailure(error);
     }
+  },
+
+  // --- Deudas de cualquier día ---------------------------------------------
+
+  async getOutstandingDebts() {
+    /*
+     * El odontólogo sale de la cita o, si el cobro fue por factura, de la
+     * factura. Con `LEFT JOIN` y sin filtrar borrados a propósito: esto tiene
+     * que sumar lo mismo que la «Deuda pendiente» del dashboard, y un cobro
+     * que se quedara fuera sería una deuda que se ve y no se puede pagar.
+     *
+     * El día es el de la clínica: un cobro de las 9pm en Caracas es de hoy,
+     * aunque en UTC ya sea mañana.
+     */
+    const rows = await prisma.$queryRaw<
+      Array<{
+        dentistId: string | null;
+        dentistName: string | null;
+        businessDate: string;
+        paymentCount: bigint;
+        grossCents: bigint;
+        dentistShareCents: bigint;
+      }>
+    >`
+      SELECT
+        d.id         AS "dentistId",
+        d."fullName" AS "dentistName",
+        to_char(p."paidAt" AT TIME ZONE 'America/Caracas', 'YYYY-MM-DD') AS "businessDate",
+        COUNT(p.id)                AS "paymentCount",
+        SUM(p."amountCents")       AS "grossCents",
+        SUM(p."dentistShareCents") AS "dentistShareCents"
+      FROM payments p
+      LEFT JOIN appointments a ON a.id = p."appointmentId"
+      LEFT JOIN invoices i     ON i.id = p."invoiceId"
+      LEFT JOIN dentists d     ON d.id = COALESCE(a."dentistId", i."dentistId")
+      WHERE p.status = 'PAID'
+        AND p."payoutId" IS NULL
+        AND p."dentistShareCents" > 0
+      GROUP BY d.id, d."fullName", "businessDate"
+      ORDER BY "businessDate" ASC
+    `;
+
+    const porOdontologo = new Map<string, OutstandingDebt>();
+    for (const row of rows) {
+      const clave = row.dentistId ?? '';
+      const deuda = porOdontologo.get(clave) ?? {
+        dentistId: row.dentistId,
+        dentistName: row.dentistName ?? 'Sin odontólogo asignado',
+        paymentCount: 0,
+        totalCents: 0,
+        dias: [],
+      };
+      deuda.paymentCount += Number(row.paymentCount);
+      deuda.totalCents += Number(row.dentistShareCents);
+      deuda.dias.push({
+        businessDate: row.businessDate,
+        paymentCount: Number(row.paymentCount),
+        grossCents: Number(row.grossCents),
+        dentistShareCents: Number(row.dentistShareCents),
+      });
+      porOdontologo.set(clave, deuda);
+    }
+    return [...porOdontologo.values()].sort((a, b) => b.totalCents - a.totalCents);
+  },
+
+  async settleDentistPending({ dentistId, businessDate, userId }) {
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const pendientes = await tx.payment.findMany({
+          where: {
+            status: 'PAID',
+            payoutId: null,
+            ...(businessDate
+              ? {
+                  paidAt: {
+                    gte: clinicWallClockToInstant(businessDate, 0),
+                    lt: clinicWallClockToInstant(businessDate, MINUTES_PER_DAY),
+                  },
+                }
+              : {}),
+            // El mismo criterio que la lista: la cita manda, y si no hay
+            // cita, la factura.
+            OR: [
+              { appointment: { dentistId } },
+              { appointmentId: null, invoice: { dentistId } },
+            ],
+          },
+          select: { id: true, dentistShareCents: true, paidAt: true },
+        });
+
+        const totalCents = pendientes.reduce((suma, pago) => suma + pago.dentistShareCents, 0);
+        if (totalCents === 0) {
+          return { ok: false as const, reason: 'NOT_FOUND' as const };
+        }
+
+        const ahora = new Date();
+        const primero = pendientes.reduce(
+          (min, pago) => (pago.paidAt && pago.paidAt < min ? pago.paidAt : min),
+          ahora,
+        );
+
+        const payout = await tx.dentistPayout.create({
+          data: {
+            dentistId,
+            /*
+             * El periodo va del primer cobro incluido hasta AHORA, no «el
+             * día»: así se puede pagar una deuda vieja hoy, y volver a pagar
+             * mañana lo que entre después, sin chocar con el unique
+             * (dentistId, inicio, fin) de la liquidación diaria.
+             */
+            periodStart: primero,
+            periodEnd: ahora,
+            totalCents,
+            status: 'PAID',
+            paidAt: ahora,
+            notes: businessDate
+              ? `Pago de lo pendiente del ${businessDate}`
+              : `Pago de todo lo pendiente (${pendientes.length} cobros)`,
+          },
+          select: { id: true },
+        });
+
+        await tx.payment.updateMany({
+          where: { id: { in: pendientes.map((pago) => pago.id) } },
+          data: { payoutId: payout.id },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'payout.pending_settled',
+            entityType: 'DentistPayout',
+            entityId: payout.id,
+            after: { dentistId, businessDate, totalCents, paymentCount: pendientes.length },
+          },
+        });
+
+        return { ok: true as const, data: { id: payout.id, totalCents } };
+      });
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async listRecentPayouts(limit) {
+    const filas = await prisma.dentistPayout.findMany({
+      where: { status: 'PAID', paidAt: { not: null } },
+      orderBy: { paidAt: 'desc' },
+      take: limit,
+      select: {
+        id: true,
+        totalCents: true,
+        paidAt: true,
+        notes: true,
+        dentist: { select: { fullName: true } },
+      },
+    });
+    return filas.map((f) => ({
+      id: f.id,
+      dentistName: f.dentist.fullName,
+      totalCents: f.totalCents,
+      paidAt: f.paidAt!,
+      notes: f.notes,
+    }));
   },
 
   async importTreatmentPrices({ filas, userId, desactivarCodigos }) {

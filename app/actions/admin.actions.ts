@@ -1359,6 +1359,47 @@ export async function settleDentistDayAction(input: unknown): Promise<ActionResu
   );
 }
 
+/**
+ * Paga lo que se le debe a un odontólogo, sea del día que sea.
+ *
+ * La liquidación del día sólo alcanza a los cobros de ESE día: si una tarde
+ * no se pagó, esa deuda se quedaba en el dashboard sin ningún sitio donde
+ * saldarla. Aquí se paga en cualquier momento — todo junto, o un día suelto.
+ */
+export async function settleDentistPendingAction(input: unknown): Promise<ActionResult> {
+  const parsed = z
+    .object({
+      dentistId: cuidSchema,
+      businessDate: z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Fecha inválida'), z.null()]),
+    })
+    .safeParse(input);
+
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? 'Datos inválidos' };
+  }
+
+  const result = await runAction({
+    minimumRole: 'SUPER_ADMIN',
+    schema: z.object({}).passthrough(),
+    input: {},
+    revalidate: '/caja',
+    auditAction: 'payout.pending_settled',
+    handler: (_data, userId) =>
+      repository.settleDentistPending({
+        dentistId: parsed.data.dentistId,
+        businessDate: parsed.data.businessDate,
+        userId,
+      }),
+  });
+
+  if (!result.ok) {
+    return { ...result, error: 'Ya no hay nada pendiente de pagarle a ese odontólogo.' };
+  }
+  // La «Deuda pendiente» del dashboard es esta misma deuda.
+  revalidatePath('/dashboard');
+  return result;
+}
+
 // ===========================================================================
 //  INSTRUMENTAL  («cada odontólogo tenga su inventario»)
 // ===========================================================================

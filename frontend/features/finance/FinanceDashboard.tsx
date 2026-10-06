@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import Link from 'next/link';
 import type {
   AppointmentWithRelations,
   DentistEarnings,
@@ -147,7 +148,13 @@ export function FinanceDashboard({
             <Stat
               label="Deuda pendiente"
               value={<CountUp value={summary.outstandingPayoutsCents} format="currency" />}
-              meta="sin liquidar"
+              meta={
+                summary.outstandingPayoutsCents > 0 ? (
+                  <Link href="/caja#deudas">ver a quién y pagar en Caja</Link>
+                ) : (
+                  'todo liquidado'
+                )
+              }
               compact
             />
           </HoverCard>

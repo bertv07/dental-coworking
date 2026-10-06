@@ -359,6 +359,38 @@ export interface DailySettlement {
   settledCents: number;
 }
 
+/**
+ * Todo lo que se le debe a un odontólogo, de CUALQUIER día.
+ *
+ * Es la misma deuda que suma el dashboard («Deuda pendiente»), pero con
+ * nombre y desglosada por día: un total sin dueño no se le puede pagar a
+ * nadie.
+ */
+export interface OutstandingDebt {
+  /** `null` = cobros que no cuelgan de ningún odontólogo. No se pueden pagar. */
+  dentistId: string | null;
+  dentistName: string;
+  paymentCount: number;
+  totalCents: number;
+  /** Del día más antiguo al más reciente. */
+  dias: Array<{
+    /** 'YYYY-MM-DD' en hora de la clínica. */
+    businessDate: string;
+    paymentCount: number;
+    grossCents: number;
+    dentistShareCents: number;
+  }>;
+}
+
+/** Un pago ya entregado a un odontólogo: el registro que queda. */
+export interface PayoutRecord {
+  id: string;
+  dentistName: string;
+  totalCents: number;
+  paidAt: Date;
+  notes: string | null;
+}
+
 /** Campos editables de una pieza de instrumental. */
 export interface InstrumentInput {
   name: string;
@@ -802,6 +834,28 @@ export interface DataRepository {
     businessDate: string;
     userId: string;
   }): Promise<WriteResult<{ id: string; totalCents: number }>>;
+
+  /**
+   * La deuda viva con cada odontólogo, sin importar de qué día sea.
+   *
+   * Cuenta EXACTAMENTE lo mismo que `outstandingPayoutsCents` del dashboard
+   * —todo cobro `PAID` sin `payoutId`—, incluidos los cobros por factura,
+   * que no tienen cita y por eso no salían en la liquidación del día.
+   */
+  getOutstandingDebts(): Promise<OutstandingDebt[]>;
+
+  /**
+   * Paga lo pendiente de un odontólogo en cualquier momento: todo, o sólo
+   * lo de un día (`businessDate`). Deja su `DentistPayout` como registro.
+   */
+  settleDentistPending(params: {
+    dentistId: string;
+    businessDate: string | null;
+    userId: string;
+  }): Promise<WriteResult<{ id: string; totalCents: number }>>;
+
+  /** Los últimos pagos entregados, del más reciente al más antiguo. */
+  listRecentPayouts(limit: number): Promise<PayoutRecord[]>;
 
   /**
    * Aplica una lista de precios importada, en UNA transacción.

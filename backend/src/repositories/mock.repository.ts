@@ -1005,6 +1005,18 @@ export const mockRepository: DataRepository = {
     return { ok: false, reason: 'NOT_FOUND' };
   },
 
+  async getOutstandingDebts() {
+    return [];
+  },
+
+  async settleDentistPending() {
+    return { ok: false, reason: 'NOT_FOUND' };
+  },
+
+  async listRecentPayouts() {
+    return [];
+  },
+
   async importTreatmentPrices({ filas, desactivarCodigos }) {
     let creados = 0;
     for (const fila of filas) {

@@ -48,7 +48,7 @@ interface StatProps {
   label: string;
   /** Valor ya formateado. Para animarlo, usar `AnimatedStat`. */
   value: ReactNode;
-  meta?: string;
+  meta?: ReactNode;
   /** Variación porcentual vs. periodo anterior. `null` = sin base comparable. */
   deltaPercent?: number | null;
   /**

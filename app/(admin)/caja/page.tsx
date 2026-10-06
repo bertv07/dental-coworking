@@ -10,6 +10,7 @@ import { IconDownload, IconChevronLeft, IconChevronRight } from '@/frontend/comp
 import { CashClosePanel } from '@/frontend/features/admin/CashClosePanel';
 import { PendingCharges } from '@/frontend/features/admin/PendingCharges';
 import { DailySettlements } from '@/frontend/features/admin/DailySettlements';
+import { OutstandingDebts } from '@/frontend/features/admin/OutstandingDebts';
 import { CashFilters, urlCaja, type CashFilterState, type Periodo } from '@/frontend/features/admin/CashFilters';
 import { CashReport } from '@/frontend/features/admin/CashReport';
 import { clinicDayRange, clinicWallClockToInstant, parseDayKey, startOfWeek } from '@/backend/domain/clinic-calendar';
@@ -156,13 +157,16 @@ export default async function CashPage({
   const businessDate = clinicDayKey(cash.date);
   const todayKey = clinicDayKey(new Date());
 
-  const [closing, pending, settings, settlements] = await Promise.all([
+  const [closing, pending, settings, settlements, debts, payouts] = await Promise.all([
     repository.getCashClosing(businessDate),
     // Lo que falta por cobrar: sólo tiene sentido en un día no cerrado.
     repository.listUnpaidAppointmentsForDay(businessDate),
     repository.getClinicSettings(),
     // «Se paga al final del día»: lo que le toca a cada odontólogo hoy.
     repository.getDailySettlements(businessDate),
+    // Lo que se debe de CUALQUIER día, y lo último que ya se pagó.
+    repository.getOutstandingDebts(),
+    repository.listRecentPayouts(8),
   ]);
 
   const paymentMethods = await repository.listPaymentMethods();
@@ -306,6 +310,23 @@ export default async function CashPage({
           canSettle={user.role === 'SUPER_ADMIN'}
         />
       </FadeIn>
+
+      {/*
+        Las deudas de otros días viven aquí y no en la caja de «su» día: una
+        deuda vieja se paga hoy, sin tener que ir a buscar en qué fecha nació.
+      */}
+      {(debts.length > 0 || payouts.length > 0) && (
+        <FadeIn delay={0.17}>
+          <div id="deudas">
+            <OutstandingDebts
+              debts={debts}
+              payouts={payouts}
+              exchangeRate={rate?.rate ?? null}
+              canSettle={user.role === 'SUPER_ADMIN'}
+            />
+          </div>
+        </FadeIn>
+      )}
 
       <div className="grid-2">
         <FadeIn delay={0.18}>
