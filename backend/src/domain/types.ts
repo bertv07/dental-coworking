@@ -701,12 +701,20 @@ export interface AdminLedgerEntry {
   notes: string | null;
   /** De qué cobro nació. `null` = fila escrita a mano. */
   sourcePaymentId: string | null;
-  /**
-   * Sólo en las filas que NO están en el libro: son un gasto de la pantalla
-   * Gastos enseñado aquí como egreso. Se edita allí, no aquí.
-   */
-  sourceExpenseId?: string | null;
   createdAt: Date;
+}
+
+/** El cierre guardado de un mes ('YYYY-MM') o de un año ('YYYY'). */
+export interface PeriodClosing {
+  id: string;
+  period: string;
+  incomeCents: number;
+  expenseCents: number;
+  collectedCents: number;
+  pettyCashCents: number;
+  notes: string | null;
+  closedByName: string;
+  closedAt: Date;
 }
 
 /** Una consulta en el libro de una odontóloga: presupuesto, abono y reparto. */

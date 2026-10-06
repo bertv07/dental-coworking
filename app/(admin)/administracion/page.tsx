@@ -3,11 +3,12 @@ import { redirect } from 'next/navigation';
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
 import { clinicDayKey } from '@/backend/domain/clinic-calendar';
-import { libroConGastos } from '@/backend/domain/gastos-y-libro';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { FadeIn } from '@/frontend/components/motion';
 import { AdminLedgerManager } from '@/frontend/features/finance/AdminLedgerManager';
 import { DentistLedgerManager } from '@/frontend/features/finance/DentistLedgerManager';
+import { PeriodClosingReport } from '@/frontend/features/finance/PeriodClosingReport';
+import { esPeriodoValido, obtenerCierre } from '@/backend/services/cierre.service';
 import { LedgerImport } from '@/frontend/features/finance/LedgerImport';
 import { IconClose, IconDownload } from '@/frontend/components/ui/icons';
 
@@ -38,14 +39,16 @@ export const dynamic = 'force-dynamic';
 export default async function AdministracionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; cargar?: string }>;
+  searchParams: Promise<{ tab?: string; cargar?: string; periodo?: string }>;
 }) {
   await requireRole('SUPER_ADMIN');
 
-  const { tab, cargar } = await searchParams;
+  const { tab, cargar, periodo } = await searchParams;
   const pestañaActual = tab ?? 'gastos';
   // En la URL, como las pestañas: recargar no cierra la carga a medias.
-  const cargando = cargar === '1';
+  const esCierre = pestañaActual === 'cierre';
+  // El cierre no es un libro: ahí no hay nada que cargar.
+  const cargando = cargar === '1' && !esCierre;
 
   const dentists = await repository.listDentists();
 
@@ -55,18 +58,28 @@ export default async function AdministracionPage({
     ...dentists.map((d) => ({ id: `dr-${d.id}`, label: d.fullName })),
   ];
 
-  if (!PESTAÑAS.some((p) => p.id === pestañaActual)) redirect('/administracion');
+  if (!esCierre && !PESTAÑAS.some((p) => p.id === pestañaActual)) redirect('/administracion');
 
   let contenido: React.ReactNode;
 
-  if (pestañaActual === 'gastos') {
-    const [delLibro, gastos] = await Promise.all([
-      repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' }),
-      repository.listExpenses({ scope: 'CLINIC' }),
+  if (esCierre) {
+    // Por defecto el mes en curso; `?periodo=2026` es el cierre anual.
+    const mesActual = clinicDayKey(new Date()).slice(0, 7);
+    const period = esPeriodoValido(periodo) ? periodo : mesActual;
+    const [datos, closings] = await Promise.all([
+      obtenerCierre(period),
+      repository.listPeriodClosings(period.slice(0, 4)),
     ]);
-    // Los gastos de la clínica cargados en /gastos salen aquí como egresos:
-    // sin ellos, el Total General no restaría la luz ni el condominio.
-    const filas = libroConGastos(delLibro, gastos, clinicDayKey(new Date()).slice(0, 7));
+    contenido = (
+      <PeriodClosingReport
+        datos={datos}
+        closing={closings.find((c) => c.period === period) ?? null}
+        closings={closings}
+        periodoActual={mesActual}
+      />
+    );
+  } else if (pestañaActual === 'gastos') {
+    const filas = await repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' });
     contenido = <AdminLedgerManager book="GASTOS_ADMIN" filas={filas} saldoLabel="Total General" />;
   } else if (pestañaActual === 'caja-chica') {
     const filas = await repository.listAdminLedgerEntries({ book: 'CAJA_CHICA' });
@@ -86,7 +99,7 @@ export default async function AdministracionPage({
           title="Administración"
           subtitle="El libro de la clínica, por pestañas — igual que en la hoja de cálculo"
           actions={
-            cargando ? (
+            esCierre ? null : cargando ? (
               <Link href={`/administracion?tab=${pestañaActual}`} className="btn btn--ghost">
                 <IconClose size={16} /> Cerrar carga
               </Link>
@@ -109,7 +122,7 @@ export default async function AdministracionPage({
 
       {/* Pestañas por enlace: se puede recargar, compartir y volver atrás. */}
       <div className="admin-tabs" role="tablist" aria-label="Pestañas de administración">
-        {PESTAÑAS.map((p) => (
+        {[...PESTAÑAS, { id: 'cierre', label: 'Cierre mensual y anual' }].map((p) => (
           <Link
             key={p.id}
             href={`/administracion?tab=${p.id}${cargando ? '&cargar=1' : ''}`}

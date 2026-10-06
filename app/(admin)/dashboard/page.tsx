@@ -4,7 +4,6 @@ import { repository } from '@/backend/repositories';
 import { getCurrentRate, resolveRateSource } from '@/backend/services/exchange-rate.service';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { clinicDayKey } from '@/backend/domain/clinic-calendar';
-import { libroConGastos } from '@/backend/domain/gastos-y-libro';
 import { resumirLibro } from '@/backend/domain/ledger-summary';
 import { FinanceDashboard } from '@/frontend/features/finance/FinanceDashboard';
 import { AdminLedgerSummary } from '@/frontend/features/finance/AdminLedgerSummary';
@@ -54,7 +53,7 @@ export default async function DashboardPage({
 
   // Las consultas en paralelo. Secuencialmente sumarían sus latencias;
   // con `Promise.all` el coste es el de la más lenta.
-  const [summary, dentistEarnings, upcomingAppointments, rate, delLibro, cajaChica, dentists, gastosClinica] = await Promise.all([
+  const [summary, dentistEarnings, upcomingAppointments, rate, gastos, cajaChica, dentists] = await Promise.all([
     repository.getFinancialSummary(range),
     repository.getDentistEarnings(range),
     repository.listAppointments({
@@ -65,12 +64,7 @@ export default async function DashboardPage({
     repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' }),
     repository.listAdminLedgerEntries({ book: 'CAJA_CHICA' }),
     repository.listDentists(),
-    repository.listExpenses({ scope: 'CLINIC' }),
   ]);
-
-  // El libro general CON los gastos de la clínica, igual que en la pestaña
-  // de /administracion: las dos pantallas suman las mismas filas.
-  const gastos = libroConGastos(delLibro, gastosClinica, clinicDayKey(to).slice(0, 7));
 
   // El libro de Administración: las MISMAS filas de /administracion, sumadas
   // por mes; `?mes=2026-09` enseña uno concreto.

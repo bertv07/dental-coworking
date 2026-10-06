@@ -82,17 +82,11 @@ const NAV_SECTIONS: Array<{ label: string; links: NavLink[] }> = [
       { href: '/facturas', label: 'Facturas', Icon: IconTag, minimumRole: 'ASSISTANT' },
       { href: '/caja', label: 'Caja', Icon: IconCurrency, minimumRole: 'ASSISTANT' },
       /*
-       * Gastos: lo que sale. Lo llevan administración (los de la clínica) y
-       * cada odontóloga (los suyos). Recepción no: no son gastos suyos, y la
-       * página la rebota.
+       * Gastos ya NO existe como pantalla: los gastos de la clínica se
+       * llevan en un solo sitio, el libro de /administracion (a mano o
+       * subiendo el Excel). Dos pantallas para lo mismo acababan con el
+       * mismo gasto contado dos veces.
        */
-      {
-        href: '/gastos',
-        label: 'Gastos',
-        Icon: IconCurrency,
-        minimumRole: 'DENTIST',
-        hiddenForRoles: ['ASSISTANT'],
-      },
       /*
        * Descuentos NO está en el menú: la clínica no gestiona promociones
        * desde el panel. Ruta /descuentos por URL. Las promociones que ya

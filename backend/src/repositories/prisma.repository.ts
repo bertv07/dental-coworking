@@ -1474,6 +1474,61 @@ export const prismaRepository: DataRepository = {
     }
   },
 
+  // --- Cierres de mes y de año ----------------------------------------------
+
+  async getPeriodClosing(period) {
+    return prisma.periodClosing.findUnique({ where: { period } });
+  },
+
+  async listPeriodClosings(year) {
+    return prisma.periodClosing.findMany({
+      where: { period: { startsWith: year } },
+      orderBy: { period: 'asc' },
+    });
+  },
+
+  async savePeriodClosing({ userId, userName, period, ...foto }) {
+    try {
+      const datos = { ...foto, closedByUserId: userId, closedByName: userName, closedAt: new Date() };
+      const guardado = await prisma.periodClosing.upsert({
+        where: { period },
+        create: { period, ...datos },
+        update: datos,
+        select: { id: true },
+      });
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'period_closing.closed',
+          entityType: 'PeriodClosing',
+          entityId: guardado.id,
+          after: { period, incomeCents: foto.incomeCents, expenseCents: foto.expenseCents },
+        },
+      });
+      return { ok: true, data: guardado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async deletePeriodClosing({ period, userId }) {
+    try {
+      const borrado = await prisma.periodClosing.delete({ where: { period }, select: { id: true } });
+      await prisma.auditLog.create({
+        data: {
+          userId,
+          action: 'period_closing.reopened',
+          entityType: 'PeriodClosing',
+          entityId: borrado.id,
+          before: { period },
+        },
+      });
+      return { ok: true, data: borrado };
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
   async listDentistLedgerEntries({ dentistId }) {
     const filas = await prisma.dentistLedgerEntry.findMany({
       where: { dentistId, deletedAt: null },

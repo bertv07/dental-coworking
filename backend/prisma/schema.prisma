@@ -1919,3 +1919,38 @@ model DentistLedgerEntry {
   @@index([dentistId, deletedAt, date])
   @@map("dentist_ledger_entries")
 }
+
+/// ===========================================================================
+///  Cierre mensual y anual de Administración
+/// ===========================================================================
+///  La FOTO de un mes («2026-09») o de un año («2026») en el momento en que
+///  alguien lo dio por cerrado: cuánto entró, cuánto salió y cuánto se ganó.
+///
+///  Es una foto, no un candado: el libro se puede seguir corrigiendo después
+///  —una fila que faltaba, un importe mal escrito—, y entonces la pantalla
+///  enseña que los números de hoy ya no son los del cierre. Bloquear el mes
+///  obligaría a reabrirlo por cada errata, y lo que se quiere guardar es qué
+///  se dio por bueno y cuándo.
+model PeriodClosing {
+  id String @id @default(cuid())
+
+  /// 'YYYY-MM' (cierre mensual) o 'YYYY' (cierre anual).
+  period String @unique @db.VarChar(7)
+
+  /// Ingresos y egresos del libro general, con los gastos de la clínica.
+  incomeCents  Int
+  expenseCents Int
+  /// Lo cobrado de verdad en Caja en el periodo.
+  collectedCents Int @default(0)
+  /// Saldo de caja chica al final del periodo.
+  pettyCashCents Int @default(0)
+
+  notes String?
+
+  closedByUserId String
+  /// El nombre tal como era al cerrar: es un registro, no una relación viva.
+  closedByName String
+  closedAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("period_closings")
+}

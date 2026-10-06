@@ -9,6 +9,7 @@ import type {
   Dentist,
   DentistAgendaItem,
   DentistLedgerEntry,
+  PeriodClosing,
   Expense,
   ExpenseRecurrence,
   ExpenseScope,
@@ -1656,6 +1657,30 @@ export interface DataRepository {
     filas: AdminLedgerEntryInput[];
     userId: string;
   }): Promise<WriteResult<{ creadas: number }>>;
+
+  // --- Cierres de mes y de año ----------------------------------------------
+
+  getPeriodClosing(period: string): Promise<PeriodClosing | null>;
+
+  /** Los cierres de un año: sus doce meses y el anual. */
+  listPeriodClosings(year: string): Promise<PeriodClosing[]>;
+
+  /**
+   * Guarda la foto del periodo. Cerrar otra vez un periodo ya cerrado la
+   * REEMPLAZA: es la forma de actualizar el cierre tras corregir el libro.
+   */
+  savePeriodClosing(params: {
+    period: string;
+    incomeCents: number;
+    expenseCents: number;
+    collectedCents: number;
+    pettyCashCents: number;
+    notes: string | null;
+    userId: string;
+    userName: string;
+  }): Promise<WriteResult<{ id: string }>>;
+
+  deletePeriodClosing(params: { period: string; userId: string }): Promise<WriteResult<{ id: string }>>;
 
   /** Sólo las suyas: cada odontóloga tiene su propio libro. */
   listDentistLedgerEntries(params: { dentistId: string }): Promise<DentistLedgerEntry[]>;
