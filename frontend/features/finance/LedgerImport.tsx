@@ -97,6 +97,8 @@ export function LedgerImport({
     if (!vista?.destino || aGuardar.length === 0) return;
     const destinoGuardado = vista.destino;
     const etiqueta = vista.destinoLabel ?? '';
+    // El libro se ve por mes: se abre el de lo que se acaba de cargar.
+    const mesCargado = aGuardar[0]?.date.slice(0, 7) ?? '';
 
     startTransition(async () => {
       const r = await applyLedgerImportAction(destinoGuardado, aGuardar);
@@ -113,7 +115,7 @@ export function LedgerImport({
       setExcluidas(new Set());
       formRef.current?.reset();
       // A la pestaña donde acaban de caer, con la carga todavía abierta.
-      router.push(`/administracion?tab=${destinoGuardado}&cargar=1`);
+      router.push(`/administracion?tab=${destinoGuardado}${mesCargado ? `&mes=${mesCargado}` : ''}&cargar=1`);
       router.refresh();
     });
   }

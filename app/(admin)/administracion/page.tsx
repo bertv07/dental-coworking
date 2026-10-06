@@ -10,7 +10,7 @@ import { DentistLedgerManager } from '@/frontend/features/finance/DentistLedgerM
 import { PeriodClosingReport } from '@/frontend/features/finance/PeriodClosingReport';
 import { esPeriodoValido, obtenerCierre } from '@/backend/services/cierre.service';
 import { LedgerImport } from '@/frontend/features/finance/LedgerImport';
-import { IconClose, IconDownload } from '@/frontend/components/ui/icons';
+import { IconChevronLeft, IconChevronRight, IconClose, IconDownload } from '@/frontend/components/ui/icons';
 
 /**
  * ===========================================================================
@@ -33,17 +33,50 @@ import { IconClose, IconDownload } from '@/frontend/components/ui/icons';
  * ===========================================================================
  */
 
+/**
+ * Qué mes enseñar de un libro, y entre cuáles se puede pasar.
+ *
+ * El libro se ve POR MES, como la hoja de cálculo (una hoja por mes): la
+ * lista entera crece sin fin y el Total General de «todo» no es el que nadie
+ * va a comparar con su Excel.
+ *
+ * Sin elegir, el mes en curso — salvo que esté vacío y haya otros con filas:
+ * entonces el último que tenga. «todo» sigue disponible para ver la lista
+ * completa.
+ */
+function elegirMes(fechas: string[], pedido: string | undefined, mesActual: string) {
+  // Los meses con filas, más el actual: es por donde pasan Anterior/Siguiente.
+  const meses = [...new Set([...fechas.map((f) => f.slice(0, 7)), mesActual])].sort();
+  const conFilas = new Set(fechas.map((f) => f.slice(0, 7)));
+  let mes: string;
+  if (pedido === 'todo') mes = 'todo';
+  else if (pedido && /^\d{4}-(0[1-9]|1[0-2])$/.test(pedido)) mes = pedido;
+  else mes = conFilas.has(mesActual) || conFilas.size === 0 ? mesActual : [...conFilas].sort().at(-1)!;
+  return {
+    mes,
+    anterior: mes === 'todo' ? null : (meses.filter((m) => m < mes).at(-1) ?? null),
+    siguiente: mes === 'todo' ? null : (meses.find((m) => m > mes) ?? null),
+  };
+}
+
+function nombreDelMes(mes: string): string {
+  const nombre = new Intl.DateTimeFormat('es-VE', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    .format(new Date(`${mes}-15T12:00:00Z`));
+  return nombre.charAt(0).toUpperCase() + nombre.slice(1);
+}
+
 export const metadata = { title: 'Administración' };
 export const dynamic = 'force-dynamic';
 
 export default async function AdministracionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string; cargar?: string; periodo?: string }>;
+  searchParams: Promise<{ tab?: string; cargar?: string; periodo?: string; mes?: string }>;
 }) {
   await requireRole('SUPER_ADMIN');
 
-  const { tab, cargar, periodo } = await searchParams;
+  const { tab, cargar, periodo, mes: mesPedido } = await searchParams;
+  const mesActual = clinicDayKey(new Date()).slice(0, 7);
   const pestañaActual = tab ?? 'gastos';
   // En la URL, como las pestañas: recargar no cierra la carga a medias.
   const esCierre = pestañaActual === 'cierre';
@@ -61,10 +94,13 @@ export default async function AdministracionPage({
   if (!esCierre && !PESTAÑAS.some((p) => p.id === pestañaActual)) redirect('/administracion');
 
   let contenido: React.ReactNode;
+  /** El mes que se está viendo en el libro; `null` en el cierre. */
+  let vista: ReturnType<typeof elegirMes> | null = null;
+  const delMes = <F extends { date: string }>(filas: F[], mes: string) =>
+    mes === 'todo' ? filas : filas.filter((f) => f.date.startsWith(mes));
 
   if (esCierre) {
     // Por defecto el mes en curso; `?periodo=2026` es el cierre anual.
-    const mesActual = clinicDayKey(new Date()).slice(0, 7);
     const period = esPeriodoValido(periodo) ? periodo : mesActual;
     const [datos, closings] = await Promise.all([
       obtenerCierre(period),
@@ -80,10 +116,26 @@ export default async function AdministracionPage({
     );
   } else if (pestañaActual === 'gastos') {
     const filas = await repository.listAdminLedgerEntries({ book: 'GASTOS_ADMIN' });
-    contenido = <AdminLedgerManager book="GASTOS_ADMIN" filas={filas} saldoLabel="Total General" />;
+    vista = elegirMes(filas.map((f) => f.date), mesPedido, mesActual);
+    contenido = <AdminLedgerManager book="GASTOS_ADMIN" filas={delMes(filas, vista.mes)} saldoLabel="Total General" />;
   } else if (pestañaActual === 'caja-chica') {
     const filas = await repository.listAdminLedgerEntries({ book: 'CAJA_CHICA' });
-    contenido = <AdminLedgerManager book="CAJA_CHICA" filas={filas} saldoLabel="Saldo" />;
+    vista = elegirMes(filas.map((f) => f.date), mesPedido, mesActual);
+    const mes = vista.mes;
+    // La caja chica no empieza de cero cada mes: lo que quedó de los meses
+    // anteriores es con lo que se abre éste.
+    const saldoAnteriorCents =
+      mes === 'todo'
+        ? undefined
+        : filas.filter((f) => f.date < `${mes}-01`).reduce((s, f) => s + f.incomeCents - f.expenseCents, 0);
+    contenido = (
+      <AdminLedgerManager
+        book="CAJA_CHICA"
+        filas={delMes(filas, mes)}
+        saldoLabel="Saldo"
+        saldoAnteriorCents={saldoAnteriorCents}
+      />
+    );
   } else {
     const dentistId = pestañaActual.slice('dr-'.length);
     const dentist = dentists.find((d) => d.id === dentistId);
@@ -94,10 +146,21 @@ export default async function AdministracionPage({
       // consulta a mano sin volver a escribir el nombre.
       repository.listPatientsOfDentist(dentistId),
     ]);
+    vista = elegirMes(filas.map((f) => f.date), mesPedido, mesActual);
     contenido = (
-      <DentistLedgerManager dentistId={dentistId} dentistName={dentist.fullName} filas={filas} pacientes={pacientes} />
+      <DentistLedgerManager
+        dentistId={dentistId}
+        dentistName={dentist.fullName}
+        filas={delMes(filas, vista.mes)}
+        pacientes={pacientes}
+      />
     );
   }
+
+  // El mes elegido A MANO viaja de una pestaña a otra: quien mira septiembre
+  // en Gastos quiere septiembre al pasar a una doctora. El elegido solo, no.
+  const conMes = mesPedido ? `&mes=${vista?.mes ?? mesPedido}` : '';
+  const urlDelMes = (mes: string) => `/administracion?tab=${pestañaActual}&mes=${mes}${cargando ? '&cargar=1' : ''}`;
 
   return (
     <div className="page-body">
@@ -107,11 +170,11 @@ export default async function AdministracionPage({
           subtitle="El libro de la clínica, por pestañas — igual que en la hoja de cálculo"
           actions={
             esCierre ? null : cargando ? (
-              <Link href={`/administracion?tab=${pestañaActual}`} className="btn btn--ghost">
+              <Link href={`/administracion?tab=${pestañaActual}${conMes}`} className="btn btn--ghost">
                 <IconClose size={16} /> Cerrar carga
               </Link>
             ) : (
-              <Link href={`/administracion?tab=${pestañaActual}&cargar=1`} className="btn btn--primary">
+              <Link href={`/administracion?tab=${pestañaActual}${conMes}&cargar=1`} className="btn btn--primary">
                 <IconDownload size={16} /> Cargar Excel
               </Link>
             )
@@ -132,7 +195,7 @@ export default async function AdministracionPage({
         {[...PESTAÑAS, { id: 'cierre', label: 'Cierre mensual y anual' }].map((p) => (
           <Link
             key={p.id}
-            href={`/administracion?tab=${p.id}${cargando ? '&cargar=1' : ''}`}
+            href={`/administracion?tab=${p.id}${p.id === 'cierre' ? '' : conMes}${cargando ? '&cargar=1' : ''}`}
             role="tab"
             aria-selected={p.id === pestañaActual}
             className={`admin-tabs__item ${p.id === pestañaActual ? 'admin-tabs__item--activa' : ''}`}
@@ -141,6 +204,39 @@ export default async function AdministracionPage({
           </Link>
         ))}
       </div>
+
+      {/* --- Qué mes se está viendo ------------------------------------- */}
+      {vista && (
+        <div className="row row--between row--wrap" style={{ gap: '0.75rem', marginBottom: 'var(--space-4)' }}>
+          <div className="row" style={{ gap: '0.5rem' }}>
+            {vista.anterior ? (
+              <Link href={urlDelMes(vista.anterior)} className="btn btn--ghost btn--sm">
+                <IconChevronLeft size={15} /> {nombreDelMes(vista.anterior)}
+              </Link>
+            ) : (
+              <span />
+            )}
+            <strong>{vista.mes === 'todo' ? 'Todos los meses' : nombreDelMes(vista.mes)}</strong>
+            {vista.siguiente && (
+              <Link href={urlDelMes(vista.siguiente)} className="btn btn--ghost btn--sm">
+                {nombreDelMes(vista.siguiente)} <IconChevronRight size={15} />
+              </Link>
+            )}
+          </div>
+          <div className="row" style={{ gap: '0.5rem' }}>
+            {vista.mes !== mesActual && (
+              <Link href={urlDelMes(mesActual)} className="btn btn--ghost btn--sm">
+                Este mes
+              </Link>
+            )}
+            {vista.mes !== 'todo' && (
+              <Link href={urlDelMes('todo')} className="btn btn--ghost btn--sm">
+                Ver todo
+              </Link>
+            )}
+          </div>
+        </div>
+      )}
 
       <FadeIn delay={0.06}>{contenido}</FadeIn>
     </div>

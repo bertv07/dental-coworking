@@ -108,7 +108,7 @@ export function DentistLedgerManager({
       >
         {error && <Notice tone="danger">{error}</Notice>}
         {filas.length === 0 ? (
-          <EmptyState>Sin consultas registradas todavía.</EmptyState>
+          <EmptyState>Sin consultas en este periodo.</EmptyState>
         ) : (
           <div className="table-wrap">
             <table className="table table--cards">

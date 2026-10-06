@@ -26,11 +26,17 @@ export function AdminLedgerManager({
   book,
   filas,
   saldoLabel,
+  saldoAnteriorCents,
 }: {
   book: 'GASTOS_ADMIN' | 'CAJA_CHICA';
   filas: AdminLedgerEntry[];
   /** "Total General" en Gastos, "Saldo" en Caja Chica: mismo cálculo, otro nombre. */
   saldoLabel: string;
+  /**
+   * Lo que venía de antes del periodo que se enseña. Sólo en Caja Chica y
+   * viendo un mes: su saldo es acumulado, no empieza de cero cada mes.
+   */
+  saldoAnteriorCents?: number;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -41,7 +47,7 @@ export function AdminLedgerManager({
 
   const totalIngreso = filas.reduce((s, f) => s + f.incomeCents, 0);
   const totalEgreso = filas.reduce((s, f) => s + f.expenseCents, 0);
-  const saldo = totalIngreso - totalEgreso;
+  const saldo = (saldoAnteriorCents ?? 0) + totalIngreso - totalEgreso;
 
   function abrir(f: AdminLedgerEntry | null) {
     setEditando(f);
@@ -92,7 +98,10 @@ export function AdminLedgerManager({
       >
         {error && <Notice tone="danger">{error}</Notice>}
         {filas.length === 0 ? (
-          <EmptyState>Sin filas todavía. Añade la primera.</EmptyState>
+          <EmptyState>
+            Sin filas en este periodo.
+            {saldoAnteriorCents !== undefined && <> Saldo: <strong>{formatCents(saldoAnteriorCents)}</strong>.</>}
+          </EmptyState>
         ) : (
           <div className="table-wrap">
             <table className="table table--cards">
@@ -146,6 +155,13 @@ export function AdminLedgerManager({
                   <td />
                   <td />
                 </tr>
+                {saldoAnteriorCents !== undefined && (
+                  <tr>
+                    <td colSpan={2} style={{ textAlign: 'right' }}>Saldo anterior</td>
+                    <td colSpan={2} className="table__num mono">{formatCents(saldoAnteriorCents)}</td>
+                    <td /><td />
+                  </tr>
+                )}
                 <tr>
                   <td colSpan={2} style={{ fontWeight: 700, textAlign: 'right' }}>{saldoLabel}</td>
                   <td colSpan={2} className="table__num mono" style={{ fontWeight: 700, color: saldo < 0 ? 'var(--color-danger)' : 'var(--color-success)' }}>
