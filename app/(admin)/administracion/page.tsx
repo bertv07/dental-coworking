@@ -86,7 +86,7 @@ export default async function AdministracionPage({
   const dentists = await repository.listDentists();
 
   const PESTAÑAS = [
-    { id: 'gastos', label: 'Gastos Administrativos' },
+    { id: 'gastos', label: 'Gastos General' },
     { id: 'caja-chica', label: 'Caja Chica' },
     ...dentists.map((d) => ({ id: `dr-${d.id}`, label: d.fullName })),
   ];
