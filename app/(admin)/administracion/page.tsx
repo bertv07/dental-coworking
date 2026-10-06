@@ -88,8 +88,15 @@ export default async function AdministracionPage({
     const dentistId = pestañaActual.slice('dr-'.length);
     const dentist = dentists.find((d) => d.id === dentistId);
     if (!dentist) redirect('/administracion');
-    const filas = await repository.listDentistLedgerEntries({ dentistId });
-    contenido = <DentistLedgerManager dentistId={dentistId} dentistName={dentist.fullName} filas={filas} />;
+    const [filas, pacientes] = await Promise.all([
+      repository.listDentistLedgerEntries({ dentistId }),
+      // Sus pacientes ya registrados en el sistema, para anotarles una
+      // consulta a mano sin volver a escribir el nombre.
+      repository.listPatientsOfDentist(dentistId),
+    ]);
+    contenido = (
+      <DentistLedgerManager dentistId={dentistId} dentistName={dentist.fullName} filas={filas} pacientes={pacientes} />
+    );
   }
 
   return (

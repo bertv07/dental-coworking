@@ -1682,6 +1682,12 @@ export interface DataRepository {
 
   deletePeriodClosing(params: { period: string; userId: string }): Promise<WriteResult<{ id: string }>>;
 
+  /**
+   * Los pacientes de una odontóloga: los que tienen cita o factura con ella,
+   * o la eligieron como su odontóloga de preferencia. Por nombre.
+   */
+  listPatientsOfDentist(dentistId: string): Promise<Array<{ id: string; fullName: string }>>;
+
   /** Sólo las suyas: cada odontóloga tiene su propio libro. */
   listDentistLedgerEntries(params: { dentistId: string }): Promise<DentistLedgerEntry[]>;
 

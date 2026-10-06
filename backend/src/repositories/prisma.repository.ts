@@ -1529,6 +1529,21 @@ export const prismaRepository: DataRepository = {
     }
   },
 
+  async listPatientsOfDentist(dentistId) {
+    return prisma.patient.findMany({
+      where: {
+        deletedAt: null,
+        OR: [
+          { preferredDentistId: dentistId },
+          { appointments: { some: { dentistId, deletedAt: null } } },
+          { invoices: { some: { dentistId } } },
+        ],
+      },
+      select: { id: true, fullName: true },
+      orderBy: { fullName: 'asc' },
+    });
+  },
+
   async listDentistLedgerEntries({ dentistId }) {
     const filas = await prisma.dentistLedgerEntry.findMany({
       where: { dentistId, deletedAt: null },

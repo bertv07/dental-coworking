@@ -707,6 +707,7 @@ export const mockRepository: DataRepository = {
   async listPeriodClosings() { return []; },
   async savePeriodClosing({ period }) { return { ok: true, data: { id: period } }; },
   async deletePeriodClosing({ period }) { return { ok: true, data: { id: period } }; },
+  async listPatientsOfDentist() { return []; },
   async listDentistLedgerEntries() { return []; },
   async saveDentistLedgerEntry({ id }) { return { ok: true, data: { id: id ?? newId('dle') } }; },
   async deleteDentistLedgerEntry({ id }) { return { ok: true, data: { id } }; },

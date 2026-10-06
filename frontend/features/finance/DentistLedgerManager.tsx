@@ -31,10 +31,13 @@ export function DentistLedgerManager({
   dentistId,
   dentistName,
   filas,
+  pacientes,
 }: {
   dentistId: string;
   dentistName: string;
   filas: DentistLedgerEntry[];
+  /** Sus pacientes registrados: con cita o factura con ella, o que la prefieren. */
+  pacientes: Array<{ id: string; fullName: string }>;
 }) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
@@ -180,7 +183,19 @@ export function DentistLedgerManager({
       >
         {error && <Notice tone="danger">{error}</Notice>}
         <form id="dentist-ledger-form" action={guardar} className="form-grid" key={editando?.id ?? 'nuevo'}>
-          <TextField label="Paciente" name="patientName" required full defaultValue={editando?.patientName ?? ''} error={errorDe('patientName')} />
+          <TextField
+            label="Paciente"
+            name="patientName"
+            required
+            full
+            // Al escribir se ofrecen sus pacientes, pero se puede poner
+            // cualquier nombre: el libro también lleva gente que no está
+            // registrada en el sistema.
+            suggestions={pacientes.map((p) => p.fullName)}
+            hint={pacientes.length > 0 ? 'Empieza a escribir y elige de sus pacientes, o pon otro nombre.' : undefined}
+            defaultValue={editando?.patientName ?? ''}
+            error={errorDe('patientName')}
+          />
           <TextField label="Fecha" name="date" type="date" required defaultValue={editando?.date ?? new Date().toISOString().slice(0, 10)} error={errorDe('date')} />
 
           {/* Checkbox controlado a mano: sólo decide qué campos se muestran,
