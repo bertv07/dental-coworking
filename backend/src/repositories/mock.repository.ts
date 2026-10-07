@@ -1073,6 +1073,10 @@ export const mockRepository: DataRepository = {
     return { ok: true, data: { invoiceId, clinicPercent } };
   },
 
+  async setInvoiceDentist({ invoiceId }) {
+    return { ok: true, data: { invoiceId } };
+  },
+
   async getInvoice() {
     return null;
   },

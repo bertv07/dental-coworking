@@ -295,6 +295,11 @@ export interface InvoicePayment {
   method: PaymentMethod;
   methodLabel: string | null;
   paidAt: Date;
+  /**
+   * La parte de la odontóloga de este cobro ya se le entregó. A partir de
+   * ahí ni el reparto ni la odontóloga de la factura se pueden cambiar.
+   */
+  liquidado: boolean;
 }
 
 /**

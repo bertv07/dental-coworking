@@ -153,7 +153,8 @@ export function RegisterBackdatedSale({
             startTransition(async () => {
               const result = await createBackdatedInvoiceAction({
                 patientId: chosen.id,
-                dentistId: fd.get('dentistId'),
+                // «ninguno» es la venta sin odontólogo elegida A PROPÓSITO.
+                dentistId: fd.get('dentistId') === 'ninguno' ? '' : fd.get('dentistId'),
                 fecha: fd.get('fecha'),
                 /*
                  * `?? undefined`, NO el `null` que da `fd.get()`.
@@ -223,14 +224,25 @@ export function RegisterBackdatedSale({
             <label className="field__label" htmlFor="dentistId">
               Odontólogo
             </label>
-            <select id="dentistId" name="dentistId" className="select" defaultValue="">
-              <option value="">— Venta directa, sin odontólogo —</option>
+            {/*
+              Sin valor por defecto, y obligatorio: antes salía «sin
+              odontólogo» ya puesto y bastaba no tocarlo para que la factura
+              naciera sin doctora y sin reparto.
+            */}
+            <select id="dentistId" name="dentistId" className="select" defaultValue="" required>
+              <option value="" disabled>
+                Elige quién atendió…
+              </option>
               {dentists.map((d) => (
                 <option key={d.id} value={d.id}>
                   {d.fullName}
                 </option>
               ))}
+              <option value="ninguno">Nadie — venta directa, sin odontólogo</option>
             </select>
+            <span className="field__hint">
+              Sin odontólogo no hay reparto: todo queda para la clínica.
+            </span>
           </div>
 
           <div className="field">

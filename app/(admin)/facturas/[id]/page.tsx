@@ -27,13 +27,15 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
   const invoice = await repository.getInvoice(id);
   if (!invoice) notFound();
 
-  const [treatments, paymentMethods, settings, promotions] = await Promise.all([
+  const [treatments, paymentMethods, settings, promotions, dentists] = await Promise.all([
     repository.listTreatments(),
     repository.listPaymentMethods(),
     repository.getClinicSettings(),
     // Sólo las vigentes ahora mismo: no tiene sentido ofrecer aplicar una
     // promoción caducada o que todavía no ha empezado.
     repository.listPromotions({ soloVigentes: true }),
+    // Para poder poner o corregir la odontóloga de una venta directa.
+    repository.listDentists(),
   ]);
 
   const rateSource = resolveRateSource(settings.preferredRateSource);
@@ -71,6 +73,7 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
           exchangeRate={rate?.rate ?? null}
           rateSource={rateSource}
           promotions={promotions}
+          dentists={dentists.map((d) => ({ id: d.id, fullName: d.fullName }))}
           isSuperAdmin={user.role === 'SUPER_ADMIN'}
           todayKey={clinicDayKey(new Date())}
         />

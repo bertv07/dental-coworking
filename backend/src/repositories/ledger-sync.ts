@@ -78,6 +78,9 @@ export async function sincronizarLibroDePago(
       sourcePaymentId: pago.id,
     },
     update: {
+      // También la odontóloga: una factura cargada a quien no era se puede
+      // corregir, y la fila tiene que irse al libro de la que sí.
+      dentistId: dentist.id,
       date: fecha,
       patientName,
       budgetCents: pago.amountCents,

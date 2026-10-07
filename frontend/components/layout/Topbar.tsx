@@ -3,6 +3,7 @@ import type { UserRole } from '@/backend/domain/types';
 import { UserMenu } from '@/frontend/components/layout/UserMenu';
 import { GlobalSearch } from '@/frontend/components/layout/GlobalSearch';
 import { NotificationsMenu, type NotificationItem } from '@/frontend/components/layout/TopbarMenus';
+import { HelpButton } from '@/frontend/components/layout/HelpButton';
 
 /**
  * Barra superior: buscador, avisos e identidad del usuario.
@@ -57,6 +58,9 @@ export function Topbar({
       <div className="topbar__actions">
         {/* Sin el icono de chats ni el de reglas de Meta: se fueron con el
             monitor de WhatsApp, que la clínica no usa desde el panel. */}
+        {/* En la barra, y no en cada página: así está en TODAS, en el mismo
+            sitio, y enseña la ayuda de la pantalla en la que se esté. */}
+        <HelpButton userRole={userRole} />
         {notifications && <NotificationsMenu items={notifications} />}
         <UserMenu userName={userName} subtitle={userEmail ?? ROLE_LABEL[userRole]} />
       </div>

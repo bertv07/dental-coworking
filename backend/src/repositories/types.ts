@@ -925,16 +925,35 @@ export interface DataRepository {
    * Fija el reparto de TODA la factura: qué porcentaje se queda la clínica
    * (el resto es del odontólogo). 60/40, 50/50, 40/60 o lo que se pacte.
    *
-   * Reescribe el reparto de cada línea y recalcula. Sólo mientras no haya
-   * ningún cobro: un pago ya repartió su dinero entre los dos y cambiar el
-   * porcentaje después dejaría la caja diciendo una cosa y la factura otra.
-   * `DUPLICATE` en `payments` = ya hay cobros; en `status` = está anulada.
+   * Reescribe el reparto de cada línea y recalcula. Si ya hay cobros, los
+   * vuelve a repartir con el porcentaje nuevo y actualiza el libro: así un
+   * porcentaje mal puesto se corrige sin reversar el cobro.
+   *
+   * El tope es la LIQUIDACIÓN: si la parte de algún cobro ya se le entregó a
+   * la odontóloga, no se toca. `DUPLICATE` en `payments` = ya liquidada; en
+   * `status` = está anulada.
    */
   setInvoiceSplit(params: {
     invoiceId: string;
     clinicPercent: number;
     userId: string;
   }): Promise<WriteResult<{ invoiceId: string; clinicPercent: number }>>;
+
+  /**
+   * Pone, cambia o quita la odontóloga de una factura SIN cita (venta
+   * directa). Recalcula el reparto de cada línea con el porcentaje de ella
+   * —o todo para la clínica si queda sin odontóloga—, vuelve a repartir los
+   * cobros ya hechos y mueve sus filas del libro.
+   *
+   * `DUPLICATE` en `appointmentId` = la factura viene de una cita, y ahí
+   * manda la odontóloga de la cita; en `payments` = ya liquidada; en
+   * `status` = anulada.
+   */
+  setInvoiceDentist(params: {
+    invoiceId: string;
+    dentistId: string | null;
+    userId: string;
+  }): Promise<WriteResult<{ invoiceId: string }>>;
 
   /** Añade una línea. El precio y la comisión los decide el SERVIDOR. */
   addInvoiceLine(params: {

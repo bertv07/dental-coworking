@@ -12,6 +12,7 @@ import {
   registerInvoicePaymentAction,
   voidInvoiceAction,
   reverseInvoiceAction,
+  setInvoiceDentistAction,
   deleteInvoicePermanentlyAction,
   applyPromotionAction,
   applyPatientCreditAction,
@@ -52,6 +53,8 @@ interface InvoiceEditorProps {
   rateSource: string;
   /** Sólo las vigentes ahora mismo: el servidor ya filtró fecha y `isActive`. */
   promotions: Promotion[];
+  /** Las odontólogas activas, para poner o corregir la de una venta directa. */
+  dentists: Array<{ id: string; fullName: string }>;
   /** Sólo Super Admin ve el botón para reversar una venta ya cobrada. */
   isSuperAdmin: boolean;
   /** 'YYYY-MM-DD' de hoy EN CARACAS, calculado en el servidor. Tope del selector de fecha del cobro. */
@@ -71,6 +74,7 @@ export function InvoiceEditor({
   exchangeRate,
   rateSource,
   promotions,
+  dentists,
   isSuperAdmin,
   todayKey,
 }: InvoiceEditorProps) {
@@ -161,10 +165,31 @@ export function InvoiceEditor({
     invoice.totalCents > 0
       ? Math.round((invoice.clinicShareCents / invoice.totalCents) * 100)
       : null;
-  // Sólo antes del primer cobro, con odontólogo y con algo que repartir.
-  const puedeCambiarReparto =
-    !anulada && invoice.payments.length === 0 && invoice.dentistId !== null && invoice.totalCents > 0;
+  /*
+   * Una factura se puede CORREGIR —su odontóloga, su reparto— hasta que la
+   * parte de la doctora se le haya entregado. Antes del primer cobro lo hace
+   * recepción; con cobros ya registrados, sólo administración, porque es
+   * mover dinero de un lado a otro.
+   */
+  const liquidada = invoice.payments.some((p) => p.liquidado);
+  const cobrada = invoice.payments.length > 0;
+  const puedeCorregir = !anulada && !liquidada && (!cobrada || isSuperAdmin);
+  const puedeCambiarReparto = puedeCorregir && invoice.dentistId !== null && invoice.totalCents > 0;
+  // La odontóloga de una factura CON cita es la de la cita.
+  const puedeCambiarOdontologa = puedeCorregir && invoice.appointmentId === null;
+  const [odontologaElegida, setOdontologaElegida] = useState(invoice.dentistId ?? '');
   const [repartoLibre, setRepartoLibre] = useState('');
+
+  /** Cambiar el reparto de una factura ya cobrada mueve dinero: se pregunta. */
+  function confirmarSiCobrada(): boolean {
+    return (
+      !cobrada ||
+      window.confirm(
+        'Esta factura ya está cobrada. Al cambiar el reparto se vuelve a repartir lo cobrado y se ' +
+          'corrige el libro de Administración. ¿Seguir?',
+      )
+    );
+  }
 
   function fijarReparto(clinicPercent: number) {
     run(() => setInvoiceSplitAction({ invoiceId: invoice.id, clinicPercent }));
@@ -358,6 +383,73 @@ export function InvoiceEditor({
           Los números son siempre CLÍNICA / ODONTÓLOGO, en ese orden, y se
           escribe así al lado para que nadie tenga que acordarse.
         */}
+        {/*
+          LA ODONTÓLOGA de una venta directa, corregible aquí mismo. Es el
+          arreglo de «la cargué y se me olvidó marcar a la doctora»: antes
+          no había dónde ponerla después, y sin ella tampoco salía el reparto.
+        */}
+        {puedeCambiarOdontologa && (
+          <div
+            style={{
+              borderTop: '1px solid var(--color-border)',
+              paddingTop: '0.75rem',
+              marginTop: '0.75rem',
+            }}
+          >
+            {invoice.dentistId === null && (
+              <Notice tone="warning">
+                Esta factura no tiene odontóloga: todo lo cobrado queda para la clínica. Si la atendió
+                una doctora, márcala aquí.
+              </Notice>
+            )}
+            <div className="row row--wrap" style={{ gap: '0.4rem', alignItems: 'center' }}>
+              <span className="muted text-sm">Odontóloga</span>
+              <select
+                className="select"
+                style={{ flex: '1 1 12rem' }}
+                value={odontologaElegida}
+                onChange={(e) => setOdontologaElegida(e.target.value)}
+                disabled={isPending}
+                aria-label="Odontóloga de la factura"
+              >
+                <option value="">— Sin odontóloga (venta directa) —</option>
+                {dentists.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.fullName}
+                  </option>
+                ))}
+                {/* La que tiene, aunque ya no esté activa. */}
+                {invoice.dentistId && !dentists.some((d) => d.id === invoice.dentistId) && (
+                  <option value={invoice.dentistId}>{invoice.dentistName}</option>
+                )}
+              </select>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={isPending || odontologaElegida === (invoice.dentistId ?? '')}
+                onClick={() => {
+                  if (
+                    cobrada &&
+                    !window.confirm(
+                      'Esta factura ya está cobrada. Al cambiar la odontóloga se vuelve a repartir lo cobrado ' +
+                        'y se corrige el libro de Administración. ¿Seguir?',
+                    )
+                  ) {
+                    return;
+                  }
+                  run(() => setInvoiceDentistAction({ invoiceId: invoice.id, dentistId: odontologaElegida }));
+                }}
+              >
+                {invoice.dentistId === null ? 'Poner odontóloga' : 'Cambiar'}
+              </button>
+            </div>
+            <div className="text-xs subtle" style={{ marginTop: '0.3rem' }}>
+              Al cambiarla, el reparto vuelve al porcentaje habitual de esa odontóloga. Ajústalo abajo si
+              esta vez fue otro.
+            </div>
+          </div>
+        )}
+
         {invoice.dentistId !== null && repartoActual !== null && (
           <div
             style={{
@@ -385,7 +477,7 @@ export function InvoiceEditor({
                     key={clinica}
                     type="button"
                     className={`btn btn--sm ${repartoActual === clinica ? 'btn--primary' : 'btn--ghost'}`}
-                    onClick={() => fijarReparto(clinica)}
+                    onClick={() => confirmarSiCobrada() && fijarReparto(clinica)}
                     disabled={isPending || repartoActual === clinica}
                     title={`Clínica ${clinica}% · Odontólogo ${100 - clinica}%`}
                   >
@@ -398,7 +490,7 @@ export function InvoiceEditor({
                   onSubmit={(e) => {
                     e.preventDefault();
                     const n = Number(repartoLibre);
-                    if (Number.isInteger(n) && n >= 0 && n <= 100) {
+                    if (Number.isInteger(n) && n >= 0 && n <= 100 && confirmarSiCobrada()) {
                       fijarReparto(n);
                       setRepartoLibre('');
                     }
@@ -426,9 +518,16 @@ export function InvoiceEditor({
                 </form>
               </div>
             )}
-            {!puedeCambiarReparto && invoice.payments.length > 0 && !anulada && (
+            {puedeCambiarReparto && cobrada && (
               <div className="text-xs subtle" style={{ marginTop: '0.4rem' }}>
-                Con cobros registrados el reparto ya no se cambia.
+                Ya está cobrada: al cambiar el reparto se corrigen también el cobro y el libro.
+              </div>
+            )}
+            {!puedeCambiarReparto && cobrada && !anulada && (
+              <div className="text-xs subtle" style={{ marginTop: '0.4rem' }}>
+                {liquidada
+                  ? 'A la odontóloga ya se le pagó su parte: el reparto ya no se cambia.'
+                  : 'Con cobros registrados, el reparto sólo lo corrige administración.'}
               </div>
             )}
           </div>

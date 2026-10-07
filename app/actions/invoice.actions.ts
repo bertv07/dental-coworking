@@ -61,6 +61,39 @@ async function autorizar() {
   return { ok: true as const, userId: authorization.user.id };
 }
 
+/**
+ * Corregir una factura que YA tiene cobros —su odontóloga o su reparto— es
+ * mover dinero entre la clínica y una doctora: sólo Super Admin. Antes del
+ * primer cobro lo hace recepción, como hasta ahora.
+ */
+async function autorizarCorreccion(invoiceId: string) {
+  const authorization = await checkApiRole('ASSISTANT');
+  if (!authorization.authorized) {
+    return {
+      ok: false as const,
+      result: {
+        ok: false,
+        error:
+          authorization.status === 401
+            ? 'Tu sesión expiró. Vuelve a iniciar sesión.'
+            : 'No tienes permiso para facturar.',
+      } satisfies ActionResult,
+    };
+  }
+  const factura = await repository.getInvoice(invoiceId);
+  if (!factura) return { ok: false as const, result: { ok: false, error: 'Esa factura ya no existe.' } };
+  if (factura.payments.length > 0 && authorization.user.role !== 'SUPER_ADMIN') {
+    return {
+      ok: false as const,
+      result: {
+        ok: false,
+        error: 'Esta factura ya tiene cobros: corregirla ahora sólo lo puede hacer administración.',
+      } satisfies ActionResult,
+    };
+  }
+  return { ok: true as const, userId: authorization.user.id };
+}
+
 /** Abre la factura de una cita, creándola con sus líneas si no existe. */
 export async function openInvoiceAction(appointmentId: string): Promise<ActionResult> {
   const auth = await autorizar();
@@ -345,15 +378,15 @@ const repartoSchema = z.object({
  * reparto calculado, que jamás. Queda en auditoría con quién lo hizo.
  */
 export async function setInvoiceSplitAction(input: unknown): Promise<ActionResult> {
-  const auth = await autorizar();
-  if (!auth.ok) return auth.result;
-
   const validation = repartoSchema.safeParse(input);
   if (!validation.success) {
     const issue = validation.error.issues[0];
     return { ok: false, error: issue?.message ?? 'Datos inválidos', field: issue?.path.join('.') };
   }
   const d = validation.data;
+
+  const auth = await autorizarCorreccion(d.invoiceId);
+  if (!auth.ok) return auth.result;
 
   const result = await repository.setInvoiceSplit({
     invoiceId: d.invoiceId,
@@ -367,7 +400,7 @@ export async function setInvoiceSplitAction(input: unknown): Promise<ActionResul
         ok: false,
         error:
           result.field === 'payments'
-            ? 'Esta factura ya tiene cobros: el reparto se fija antes de cobrar. Reversa el cobro si hace falta cambiarlo.'
+            ? 'A la odontóloga ya se le pagó su parte de esta factura: el reparto ya no se puede cambiar.'
             : 'Esa factura está anulada.',
       };
     }
@@ -375,6 +408,59 @@ export async function setInvoiceSplitAction(input: unknown): Promise<ActionResul
   }
 
   revalidatePath(`/facturas/${d.invoiceId}`);
+  // Si ya estaba cobrada, cambiaron la caja, el libro y lo que se le debe.
+  revalidatePath('/caja');
+  revalidatePath('/administracion');
+  return { ok: true };
+}
+
+/**
+ * Pone, cambia o quita la odontóloga de una venta directa.
+ *
+ * Es la corrección de «la cargué y se me olvidó marcar a la doctora»: sin
+ * esto había que anular la factura y hacerla de nuevo, y la anulada se
+ * quedaba en la lista.
+ */
+export async function setInvoiceDentistAction(input: unknown): Promise<ActionResult> {
+  const validation = z
+    .object({
+      invoiceId: cuidSchema,
+      dentistId: z.union([cuidSchema, z.literal('')]).transform((v) => (v ? v : null)),
+    })
+    .safeParse(input);
+  if (!validation.success) {
+    return { ok: false, error: validation.error.issues[0]?.message ?? 'Datos inválidos' };
+  }
+  const d = validation.data;
+
+  const auth = await autorizarCorreccion(d.invoiceId);
+  if (!auth.ok) return auth.result;
+
+  const result = await repository.setInvoiceDentist({
+    invoiceId: d.invoiceId,
+    dentistId: d.dentistId,
+    userId: auth.userId,
+  });
+
+  if (!result.ok) {
+    if (result.reason === 'DUPLICATE') {
+      return {
+        ok: false,
+        error:
+          result.field === 'appointmentId'
+            ? 'Esta factura viene de una cita: la odontóloga es la de la cita y se cambia en la agenda.'
+            : result.field === 'payments'
+              ? 'A la odontóloga ya se le pagó su parte de esta factura: ya no se puede cambiar.'
+              : 'Esa factura está anulada.',
+      };
+    }
+    return { ok: false, error: 'Esa factura o esa odontóloga ya no existen.' };
+  }
+
+  revalidatePath(`/facturas/${d.invoiceId}`);
+  revalidatePath('/facturas');
+  revalidatePath('/caja');
+  revalidatePath('/administracion');
   return { ok: true };
 }
 

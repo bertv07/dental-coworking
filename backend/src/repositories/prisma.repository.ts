@@ -20,6 +20,7 @@ import { calcularComision, calcularPrecio, distribuirDescuento, repartirCobro } 
 import {
   recalcularFactura,
   repartirPago,
+  reasignarRepartoDePagos,
   totalLinea,
 } from '@/backend/repositories/invoice-helpers';
 import { sincronizarLibroDePago, borrarLibroDePagos } from '@/backend/repositories/ledger-sync';
@@ -170,6 +171,7 @@ const INVOICE_RELATIONS = {
       method: true,
       methodLabel: true,
       paidAt: true,
+      payoutId: true,
     },
     orderBy: { paidAt: 'asc' },
   },
@@ -218,6 +220,7 @@ function toInvoice(row: {
     method: 'CASH' | 'CARD' | 'TRANSFER' | 'INSURANCE' | 'CREDIT';
     methodLabel: string | null;
     paidAt: Date | null;
+    payoutId: string | null;
   }>;
 }) {
   const paidCents = row.payments.reduce((suma, p) => suma + p.amountCents, 0);
@@ -254,6 +257,7 @@ function toInvoice(row: {
       method: p.method,
       methodLabel: p.methodLabel,
       paidAt: p.paidAt!,
+      liquidado: p.payoutId !== null,
     })),
   };
 }
@@ -2990,15 +2994,15 @@ export const prismaRepository: DataRepository = {
             status: true,
             clinicShareCents: true,
             totalCents: true,
-            _count: { select: { payments: true } },
+            payments: { where: { status: 'PAID', payoutId: { not: null } }, select: { id: true } },
           },
         });
         if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
         if (factura.status === 'VOID') {
           return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
         }
-        // Con dinero ya repartido no se toca: ver el contrato en types.ts.
-        if (factura._count.payments > 0) {
+        // Ya se le entregó su parte a la odontóloga: ver el contrato en types.ts.
+        if (factura.payments.length > 0) {
           return { ok: false as const, reason: 'DUPLICATE' as const, field: 'payments' };
         }
 
@@ -3007,6 +3011,11 @@ export const prismaRepository: DataRepository = {
           data: { commissionPercent: clinicPercent },
         });
         await recalcularFactura(tx, invoiceId);
+
+        // Si ya estaba cobrada, los cobros y el libro pasan al reparto nuevo.
+        for (const paymentId of await reasignarRepartoDePagos(tx, invoiceId)) {
+          await sincronizarLibroDePago(tx, paymentId);
+        }
 
         await tx.auditLog.create({
           data: {
@@ -3025,6 +3034,95 @@ export const prismaRepository: DataRepository = {
         return { ok: true as const, data: { invoiceId, clinicPercent } };
       });
       return resultado;
+    } catch (error) {
+      return toWriteFailure(error);
+    }
+  },
+
+  async setInvoiceDentist({ invoiceId, dentistId, userId }) {
+    const porDefecto = await comisionPorDefectoDeLaClinica();
+    try {
+      return await prisma.$transaction(async (tx) => {
+        const factura = await tx.invoice.findUnique({
+          where: { id: invoiceId },
+          select: {
+            status: true,
+            dentistId: true,
+            appointmentId: true,
+            lines: {
+              select: { id: true, treatmentId: true, treatment: { select: { clinicKeepsAll: true } } },
+            },
+            payments: { where: { status: 'PAID' }, select: { id: true, payoutId: true } },
+          },
+        });
+        if (!factura) return { ok: false as const, reason: 'NOT_FOUND' as const };
+        if (factura.status === 'VOID') {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'status' };
+        }
+        // Con cita, la odontóloga es la de la cita: cambiarla sólo aquí
+        // dejaría la agenda diciendo una y la factura otra.
+        if (factura.appointmentId) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'appointmentId' };
+        }
+        if (factura.payments.some((p) => p.payoutId !== null)) {
+          return { ok: false as const, reason: 'DUPLICATE' as const, field: 'payments' };
+        }
+
+        const odontologa = dentistId
+          ? await tx.dentist.findFirst({
+              where: { id: dentistId, deletedAt: null },
+              select: { clinicCommissionPercent: true },
+            })
+          : null;
+        if (dentistId && !odontologa) return { ok: false as const, reason: 'NOT_FOUND' as const };
+
+        await tx.invoice.update({ where: { id: invoiceId }, data: { dentistId } });
+
+        // El reparto de cada línea, como si se hubiera añadido con ella
+        // puesta desde el principio. Sin odontóloga, todo es de la clínica.
+        for (const linea of factura.lines) {
+          let comision = 100;
+          if (dentistId && odontologa) {
+            const acuerdo = linea.treatmentId
+              ? await tx.dentistTreatment.findUnique({
+                  where: { dentistId_treatmentId: { dentistId, treatmentId: linea.treatmentId } },
+                  select: { customPriceCents: true, customCommissionPercent: true, status: true },
+                })
+              : null;
+            comision = calcularComision({
+              tratamiento: { clinicKeepsAll: linea.treatment?.clinicKeepsAll ?? false },
+              acuerdo: acuerdo?.status === 'APPROVED' ? acuerdo : null,
+              comisionOdontologo: odontologa.clinicCommissionPercent,
+              comisionPorDefecto: porDefecto ?? 60,
+            }).clinicPercent;
+          }
+          await tx.invoiceLine.update({ where: { id: linea.id }, data: { commissionPercent: comision } });
+        }
+
+        await recalcularFactura(tx, invoiceId);
+
+        const pagos = await reasignarRepartoDePagos(tx, invoiceId);
+        if (dentistId) {
+          for (const paymentId of pagos) await sincronizarLibroDePago(tx, paymentId);
+        } else {
+          // Sin odontóloga no hay «Pago Dra» que anotar: las filas que
+          // nacieron de estos cobros se van del libro.
+          await borrarLibroDePagos(tx, pagos);
+        }
+
+        await tx.auditLog.create({
+          data: {
+            userId,
+            action: 'invoice.dentist_changed',
+            entityType: 'Invoice',
+            entityId: invoiceId,
+            before: { dentistId: factura.dentistId },
+            after: { dentistId, cobrosReasignados: pagos.length },
+          },
+        });
+
+        return { ok: true as const, data: { invoiceId } };
+      });
     } catch (error) {
       return toWriteFailure(error);
     }
@@ -3058,7 +3156,12 @@ export const prismaRepository: DataRepository = {
 
         let descripcion = description ?? '';
         let precio = unitPriceCents ?? 0;
-        let comision = factura.dentist?.clinicCommissionPercent ?? 40;
+        /*
+         * Sin odontóloga, todo es de la clínica. Antes una venta directa
+         * repartía igual (40 % «para el odontólogo»), y ese dinero acababa
+         * como una deuda que no era de nadie.
+         */
+        let comision = factura.dentistId ? (factura.dentist?.clinicCommissionPercent ?? 40) : 100;
 
         if (treatmentId) {
           const tratamiento = await tx.treatment.findUnique({
@@ -3101,6 +3204,7 @@ export const prismaRepository: DataRepository = {
            */
           comisionPorDefecto: ajustesComision ?? 60,
           }).clinicPercent;
+          if (!factura.dentistId) comision = 100;
         }
 
         if (!descripcion.trim()) {

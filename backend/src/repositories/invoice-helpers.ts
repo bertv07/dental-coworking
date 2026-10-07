@@ -97,6 +97,67 @@ export async function recalcularFactura(
 }
 
 /**
+ * Vuelve a repartir los cobros YA hechos de una factura con su reparto de
+ * ahora, y devuelve sus ids para re-sincronizar el libro.
+ *
+ * Es lo que permite corregir una factura cobrada —se olvidó la odontóloga,
+ * o el porcentaje no era ése— sin reversar el cobro y volver a cargarlo:
+ * el dinero que entró no cambia, sólo de quién es cada parte.
+ *
+ * Se recorre en orden de cobro con la misma `repartirPago` que al cobrar,
+ * así que la suma de los pagos vuelve a cuadrar con la factura.
+ *
+ * Quien llama comprueba ANTES que ningún cobro esté liquidado: repartir de
+ * nuevo algo que ya se le pagó a la odontóloga dejaría el pago entregado
+ * diciendo una cifra y sus cobros otra.
+ */
+export async function reasignarRepartoDePagos(
+  tx: Prisma.TransactionClient,
+  invoiceId: string,
+): Promise<string[]> {
+  const factura = await tx.invoice.findUnique({
+    where: { id: invoiceId },
+    select: {
+      totalCents: true,
+      clinicShareCents: true,
+      payments: {
+        where: { status: 'PAID' },
+        select: { id: true, amountCents: true },
+        orderBy: { paidAt: 'asc' },
+      },
+    },
+  });
+  if (!factura) return [];
+
+  const porcentaje =
+    factura.totalCents === 0 ? 0 : Math.round((factura.clinicShareCents / factura.totalCents) * 100);
+
+  let yaCobradoCents = 0;
+  let yaAsignadoClinicaCents = 0;
+  for (const pago of factura.payments) {
+    const reparto = repartirPago({
+      amountCents: pago.amountCents,
+      totalCents: factura.totalCents,
+      clinicShareCents: factura.clinicShareCents,
+      yaCobradoCents,
+      yaAsignadoClinicaCents,
+    });
+    await tx.payment.update({
+      where: { id: pago.id },
+      data: {
+        clinicShareCents: reparto.clinicShareCents,
+        dentistShareCents: reparto.dentistShareCents,
+        commissionPercentApplied: porcentaje,
+      },
+    });
+    yaCobradoCents += pago.amountCents;
+    yaAsignadoClinicaCents += reparto.clinicShareCents;
+  }
+
+  return factura.payments.map((p) => p.id);
+}
+
+/**
  * Cómo se reparte UN pago concreto entre clínica y odontólogo.
  *
  * Con pagos parciales el reparto no puede calcularse sobre el importe suelto:

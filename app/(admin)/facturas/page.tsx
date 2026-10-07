@@ -29,11 +29,11 @@ const ESTADO = {
 export default async function InvoicesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; todas?: string }>;
+  searchParams: Promise<{ q?: string; todas?: string; anuladas?: string }>;
 }) {
   await requireRole('ASSISTANT');
 
-  const { q, todas } = await searchParams;
+  const { q, todas, anuladas } = await searchParams;
   const busqueda = (q ?? '').trim().toLowerCase();
   /*
    * Por defecto las últimas 100: es lo que cabe en una pantalla y lo que se
@@ -49,9 +49,25 @@ export default async function InvoicesPage({
 
   // El filtro va sobre lo traído: son cien filas, o todas si se pidió, y el
   // nombre del paciente ya viene en cada una. No hace falta otra consulta.
-  const invoices = busqueda
+  const encontradas = busqueda
     ? emitidas.filter((i) => i.patientName.toLowerCase().includes(busqueda))
     : emitidas;
+  /*
+   * Las anuladas no salen en la lista de trabajo: son facturas que ya no
+   * valen y sólo estorban entre las que sí. No se borran ni se esconden del
+   * todo — «Ver anuladas» las enseña, con cuántas hay a la vista.
+   */
+  const verAnuladas = anuladas === '1';
+  const cuantasAnuladas = encontradas.filter((i) => i.status === 'VOID').length;
+  const invoices = verAnuladas ? encontradas : encontradas.filter((i) => i.status !== 'VOID');
+  const urlLista = (cambios: { todas?: boolean; anuladas?: boolean }) => {
+    const p = new URLSearchParams();
+    if (q) p.set('q', q);
+    if (cambios.todas ?? verTodas) p.set('todas', '1');
+    if (cambios.anuladas ?? verAnuladas) p.set('anuladas', '1');
+    const texto = p.toString();
+    return texto ? `/facturas?${texto}` : '/facturas';
+  };
   const pendientes = invoices.filter((i) => i.status === 'OPEN');
   const porCobrar = pendientes.reduce((suma, i) => suma + i.balanceCents, 0);
 
@@ -100,24 +116,23 @@ export default async function InvoicesPage({
               aria-label="Buscar facturas por paciente"
             />
             {verTodas && <input type="hidden" name="todas" value="1" />}
+            {verAnuladas && <input type="hidden" name="anuladas" value="1" />}
             <button type="submit" className="btn btn--primary">
               Buscar
             </button>
             {busqueda && (
-              <Link href={verTodas ? '/facturas?todas=1' : '/facturas'} className="btn btn--ghost">
+              <Link href={`/facturas${verTodas ? '?todas=1' : ''}${verAnuladas ? `${verTodas ? '&' : '?'}anuladas=1` : ''}`} className="btn btn--ghost">
                 Limpiar
               </Link>
             )}
-            <Link
-              href={
-                verTodas
-                  ? `/facturas${q ? `?q=${encodeURIComponent(q)}` : ''}`
-                  : `/facturas?todas=1${q ? `&q=${encodeURIComponent(q)}` : ''}`
-              }
-              className="btn btn--ghost"
-            >
+            <Link href={urlLista({ todas: !verTodas })} className="btn btn--ghost">
               {verTodas ? 'Ver sólo las últimas 100' : 'Ver todas'}
             </Link>
+            {(cuantasAnuladas > 0 || verAnuladas) && (
+              <Link href={urlLista({ anuladas: !verAnuladas })} className="btn btn--ghost">
+                {verAnuladas ? 'Ocultar anuladas' : `Ver anuladas (${cuantasAnuladas})`}
+              </Link>
+            )}
           </form>
         </Card>
       </FadeIn>

@@ -297,3 +297,13 @@ export function IconClock(props: IconProps) {
     </svg>
   );
 }
+
+export function IconHelp(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.7.4-1.1 1-1.1 1.8" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}
