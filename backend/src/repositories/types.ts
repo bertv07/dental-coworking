@@ -111,6 +111,8 @@ export interface TreatmentInput {
   basePriceCents: number;
   durationMinutes: number;
   bufferMinutes: number;
+  /** % de la clínica propio de este tratamiento; `null` = el habitual. */
+  clinicCommissionPercent: number | null;
   isActive: boolean;
 }
 

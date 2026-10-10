@@ -258,7 +258,7 @@ export function FinanceDashboard({
                       <td className="table__num">
                         {/* Comisión no estándar → se resalta, para detectar
                             de un vistazo los acuerdos especiales. */}
-                        <Badge tone={row.commissionPercent === 40 ? 'neutral' : 'warning'}>
+                        <Badge tone={row.commissionPercent === 60 ? 'neutral' : 'warning'}>
                           {row.commissionPercent}%
                         </Badge>
                       </td>

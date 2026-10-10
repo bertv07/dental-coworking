@@ -25,8 +25,9 @@ import { splitCents } from '@/backend/domain/money';
  *   1. Ajuste manual de recepción en caja  (el 50/50 puntual)
  *   2. `clinicKeepsAll` del tratamiento    → 100 % clínica, sin excepción
  *   3. Comisión pactada odontólogo+tratamiento (APROBADA)
- *   4. Comisión general del odontólogo
- *   5. Comisión por defecto de la clínica
+ *   4. Comisión propia del tratamiento     (la que se pone en Precios)
+ *   5. Comisión general del odontólogo
+ *   6. Comisión por defecto de la clínica
  *
  *  El orden importa y no es arbitrario: lo más específico gana, salvo
  *  `clinicKeepsAll`, que está por encima de los acuerdos porque describe un
@@ -39,6 +40,8 @@ export interface ReglasTratamiento {
   basePriceCents: number;
   isPriceVariable: boolean;
   clinicKeepsAll: boolean;
+  /** % de la clínica propio de este tratamiento. `null` = no tiene. */
+  clinicCommissionPercent?: number | null;
 }
 
 /** Acuerdo específico entre un odontólogo y un tratamiento, ya aprobado. */
@@ -107,6 +110,7 @@ export interface ResultadoComision {
     | 'AJUSTE_MANUAL'
     | 'SIN_REPARTO'
     | 'ACUERDO_ODONTOLOGO'
+    | 'COMISION_TRATAMIENTO'
     | 'COMISION_ODONTOLOGO'
     | 'POR_DEFECTO';
 }
@@ -123,7 +127,7 @@ export interface ResultadoComision {
  * pero el motivo devuelto lo delata, y eso es lo que acaba en la auditoría.
  */
 export function calcularComision(params: {
-  tratamiento: Pick<ReglasTratamiento, 'clinicKeepsAll'>;
+  tratamiento: Pick<ReglasTratamiento, 'clinicKeepsAll' | 'clinicCommissionPercent'>;
   acuerdo: AcuerdoOdontologo | null;
   comisionOdontologo: number | null;
   comisionPorDefecto: number;
@@ -141,6 +145,16 @@ export function calcularComision(params: {
 
   if (params.acuerdo?.customCommissionPercent != null) {
     return { clinicPercent: params.acuerdo.customCommissionPercent, motivo: 'ACUERDO_ODONTOLOGO' };
+  }
+
+  /*
+   * El porcentaje propio del tratamiento va POR ENCIMA del general de la
+   * odontóloga: todas tienen uno general, así que debajo no se aplicaría
+   * nunca. Y por DEBAJO del acuerdo de ella para este tratamiento, que es
+   * más específico todavía.
+   */
+  if (params.tratamiento.clinicCommissionPercent != null) {
+    return { clinicPercent: params.tratamiento.clinicCommissionPercent, motivo: 'COMISION_TRATAMIENTO' };
   }
 
   if (params.comisionOdontologo != null) {

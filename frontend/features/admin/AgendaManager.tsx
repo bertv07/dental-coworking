@@ -461,8 +461,14 @@ export function AgendaManager({
         appointment={payingFor}
         exchangeRate={exchangeRate}
         rateSource={rateSource}
+        // El mismo orden que aplica el servidor al cobrar: 100 % clínica, el
+        // % propio del tratamiento, y si no, el de la odontóloga.
         commissionPercent={
-          payingFor ? (commissionByDentist[payingFor.dentistId] ?? 40) : 40
+          payingFor
+            ? payingFor.treatment.clinicKeepsAll
+              ? 100
+              : (payingFor.treatment.clinicCommissionPercent ?? commissionByDentist[payingFor.dentistId] ?? 60)
+            : 60
         }
         paymentMethods={paymentMethods}
         onClose={() => setPayingFor(null)}

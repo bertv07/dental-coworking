@@ -284,6 +284,7 @@ export const MOCK_TREATMENTS: Treatment[] = TREATMENT_SEED.map((seed, index) => 
   // La radiografía la hace el equipo de la clínica, no el odontólogo: no hay
   // reparto que hacer.
   clinicKeepsAll: seed.code === 'RX',
+  clinicCommissionPercent: null,
   category: seed.category,
   basePriceCents: seed.price * 100, // dólares → centavos de USD
   durationMinutes: seed.duration,

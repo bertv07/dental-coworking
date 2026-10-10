@@ -183,6 +183,8 @@ function hydrateAppointment(appointment: Appointment): AppointmentWithRelations 
       id: treatment?.id ?? '',
       name: treatment?.name ?? '—',
       durationMinutes: treatment?.durationMinutes ?? 0,
+      clinicKeepsAll: treatment?.clinicKeepsAll ?? false,
+      clinicCommissionPercent: treatment?.clinicCommissionPercent ?? null,
     },
     addons: addons.filter((addon) => addon.appointmentId === appointment.id),
   };
@@ -983,7 +985,7 @@ export const mockRepository: DataRepository = {
       // que de verdad cambia el dinero, que es la del 100 % de la clínica.
       commissionPercent: treatment.clinicKeepsAll
         ? 100
-        : (dentist?.clinicCommissionPercent ?? 40),
+        : (treatment.clinicCommissionPercent ?? dentist?.clinicCommissionPercent ?? 60),
       notes,
       createdAt: new Date(),
     };
@@ -1033,6 +1035,7 @@ export const mockRepository: DataRepository = {
           id: newId('trmt'),
           isPriceVariable: false,
           clinicKeepsAll: false,
+      clinicCommissionPercent: null,
           isActive: true,
           ...fila,
         });

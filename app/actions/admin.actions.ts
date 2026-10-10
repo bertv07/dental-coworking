@@ -630,6 +630,7 @@ function toTreatmentInput(data: z.infer<typeof treatmentFormSchema>) {
     basePriceCents: data.priceInPesos,
     durationMinutes: data.durationMinutes,
     bufferMinutes: data.bufferMinutes,
+    clinicCommissionPercent: data.clinicCommissionPercent,
     isActive: data.isActive,
   };
 }
@@ -717,6 +718,8 @@ export async function updateTreatmentPriceAction(input: {
       basePriceCents: Math.round(parsed.data.priceUsd * 100),
       durationMinutes: actual.durationMinutes,
       bufferMinutes: actual.bufferMinutes,
+      // Aquí sólo cambia el precio: el porcentaje propio se conserva.
+      clinicCommissionPercent: actual.clinicCommissionPercent,
       isActive: actual.isActive,
     },
     authorization.user.id,

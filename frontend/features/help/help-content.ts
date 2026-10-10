@@ -579,7 +579,17 @@ export const AYUDA: AyudaDePantalla[] = [
         puntos: [
           'Añadir un tratamiento con su código, nombre, categoría, precio en dólares, duración y minutos de margen entre citas.',
           'Editar un precio o poner un tratamiento inactivo.',
+          'Ponerle a un tratamiento su propio porcentaje de la clínica, si no es el habitual.',
           'Cargar toda la lista de precios desde un Excel.',
+        ],
+      },
+      {
+        titulo: 'Cómo cambiar el porcentaje de un tratamiento',
+        puntos: [
+          'Toca «Editar» en el tratamiento y escribe en «Comisión de la clínica (%)» lo que se queda la clínica. El resto es de la odontóloga.',
+          'Déjalo vacío para que use el habitual.',
+          'En la tabla, cada tratamiento muestra su porcentaje; sale resaltado cuando no es el estándar.',
+          'Si una odontóloga tiene un acuerdo aprobado para ese tratamiento, manda el acuerdo. Y el reparto que se ajuste en una factura concreta manda sobre todo.',
         ],
       },
       {
@@ -595,7 +605,8 @@ export const AYUDA: AyudaDePantalla[] = [
         puntos: [
           'Cambiar un precio no cambia las citas ya agendadas ni las facturas ya hechas.',
           'El código de un tratamiento es con lo que lo reconoce el bot: no conviene cambiarlo.',
-          'El reparto con las odontólogas no se fija aquí, sino en Odontólogos y en cada factura.',
+          'Cambiar el porcentaje de un tratamiento vale para los cobros nuevos: lo ya cobrado no se mueve.',
+          'Un tratamiento marcado como 100 % de la clínica no se reparte, y ahí no se puede poner porcentaje.',
         ],
       },
     ],

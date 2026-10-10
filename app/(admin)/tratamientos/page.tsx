@@ -1,6 +1,5 @@
 import { requireRole } from '@/backend/auth/guards';
 import { repository } from '@/backend/repositories';
-import { env } from '@/backend/config/env';
 import { formatCents } from '@/backend/domain/money';
 import { PageHead } from '@/frontend/components/layout/Topbar';
 import { Stat } from '@/frontend/components/ui/primitives';
@@ -39,7 +38,17 @@ export const dynamic = 'force-dynamic';
 export default async function TreatmentsPage() {
   await requireRole('ASSISTANT');
 
-  const treatments = await repository.listTreatments({ includeInactive: true });
+  const [treatments, settings] = await Promise.all([
+    repository.listTreatments({ includeInactive: true }),
+    repository.getClinicSettings(),
+  ]);
+  /*
+   * La comisión estándar sale de CONFIGURACIÓN, la misma que se usa al
+   * cobrar. Antes se leía de una variable del servidor que seguía en 40:
+   * esta pantalla enseñaba 40 clínica / 60 odontólogo cuando la clínica
+   * cobra 60 / 40, y todo el reparto de la tabla salía al revés.
+   */
+  const comisionClinica = settings.defaultCommissionPercent;
   const active = treatments.filter((treatment) => treatment.isActive);
 
   // Se calcula sobre los ACTIVOS: incluir tratamientos retirados distorsiona
@@ -100,8 +109,8 @@ export default async function TreatmentsPage() {
           <HoverCard>
             <Stat
               label="Comisión estándar"
-              value={`${env.DEFAULT_CLINIC_COMMISSION_PERCENT}%`}
-              meta={`clínica / ${100 - env.DEFAULT_CLINIC_COMMISSION_PERCENT}% odontólogo`}
+              value={`${comisionClinica}%`}
+              meta={`clínica / ${100 - comisionClinica}% odontólogo`}
             />
           </HoverCard>
         </StaggerItem>
@@ -110,7 +119,7 @@ export default async function TreatmentsPage() {
       <FadeIn delay={0.12}>
         <TreatmentsManager
           treatments={treatments}
-          defaultCommissionPercent={env.DEFAULT_CLINIC_COMMISSION_PERCENT}
+          defaultCommissionPercent={comisionClinica}
         />
 
       <FadeIn delay={0.16}>

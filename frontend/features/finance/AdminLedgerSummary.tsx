@@ -78,7 +78,7 @@ export function AdminLedgerSummary({ resumen }: { resumen: LedgerSummary }) {
 
       <div className="grid-2">
         <FadeIn delay={0.14}>
-          <Card title="Libro por mes" subtitle="Gastos Administrativos — toca un mes para verlo arriba" flush>
+          <Card title="Libro por mes" subtitle="Gastos Generales — toca un mes para verlo arriba" flush>
             {resumen.months.every((m) => m.incomeCents === 0 && m.expenseCents === 0) ? (
               <EmptyState>El libro todavía no tiene filas.</EmptyState>
             ) : (

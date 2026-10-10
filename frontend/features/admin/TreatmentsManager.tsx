@@ -94,10 +94,12 @@ export function TreatmentsManager({
                       // Se usa la MISMA función que producción, así que la
                       // previsualización coincide exactamente con lo que se
                       // registrará al cobrar.
-                      const split = splitCents(
-                        treatment.basePriceCents,
-                        defaultCommissionPercent,
-                      );
+                      // El % de ESTE tratamiento: todo para la clínica, el
+                      // suyo propio si lo tiene, o el estándar.
+                      const porcentaje = treatment.clinicKeepsAll
+                        ? 100
+                        : (treatment.clinicCommissionPercent ?? defaultCommissionPercent);
+                      const split = splitCents(treatment.basePriceCents, porcentaje);
 
                       return (
                         <MotionRow key={treatment.id} index={index}>
@@ -122,6 +124,14 @@ export function TreatmentsManager({
                             style={{ color: 'var(--color-primary)' }}
                           >
                             {formatCents(split.clinicShareCents)}
+                            {/* El porcentaje al lado del importe, y resaltado
+                                si no es el estándar: se ve de un vistazo qué
+                                tratamientos van con otro reparto. */}
+                            <div>
+                              <Badge tone={porcentaje === defaultCommissionPercent ? 'neutral' : 'warning'}>
+                                {porcentaje}%
+                              </Badge>
+                            </div>
                           </td>
                           <td className="table__num mono text-xs muted">
                             {formatCents(split.dentistShareCents)}
@@ -239,6 +249,27 @@ export function TreatmentsManager({
             defaultValue={editing?.bufferMinutes ?? 10}
             error={errorFor('bufferMinutes')}
           />
+          {editing?.clinicKeepsAll ? (
+            <div className="field">
+              <span className="field__label">Comisión de la clínica (%)</span>
+              <span className="field__hint">
+                Este tratamiento es 100 % de la clínica: no se reparte con la odontóloga.
+              </span>
+            </div>
+          ) : (
+            <TextField
+              label="Comisión de la clínica (%)"
+              name="clinicCommissionPercent"
+              type="number"
+              min={0}
+              max={100}
+              step={1}
+              placeholder={`${defaultCommissionPercent} (el estándar)`}
+              hint={`Vacío = el habitual (${defaultCommissionPercent} % clínica / ${100 - defaultCommissionPercent} % odontóloga). El resto es de la odontóloga.`}
+              defaultValue={editing?.clinicCommissionPercent ?? ''}
+              error={errorFor('clinicCommissionPercent')}
+            />
+          )}
           <CheckboxField
             label="Tratamiento activo"
             name="isActive"

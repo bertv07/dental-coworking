@@ -179,6 +179,15 @@ export const treatmentFormSchema = z.object({
   /** Minutos de limpieza entre citas: bloquean la sala pero no se cobran. */
   bufferMinutes: z.coerce.number().int().min(0).max(120).default(10),
 
+  /**
+   * % de la clínica propio de este tratamiento. Vacío = no tiene: se usa el
+   * habitual de la odontóloga. `''` y ausente son lo mismo: `null`.
+   */
+  clinicCommissionPercent: z
+    .union([z.literal(''), z.coerce.number().int('Sin decimales').min(0, 'Mínimo 0').max(100, 'Máximo 100')])
+    .optional()
+    .transform((v) => (v === '' || v === undefined ? null : v)),
+
   isActive: z.coerce.boolean().default(true),
 });
 

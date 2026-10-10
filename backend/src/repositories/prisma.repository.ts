@@ -96,7 +96,15 @@ const APPOINTMENT_RELATIONS = {
   patient: { select: { id: true, fullName: true, phoneE164: true } },
   dentist: { select: { id: true, fullName: true } },
   room: { select: { id: true, name: true, code: true } },
-  treatment: { select: { id: true, name: true, durationMinutes: true } },
+  treatment: {
+    select: {
+      id: true,
+      name: true,
+      durationMinutes: true,
+      clinicKeepsAll: true,
+      clinicCommissionPercent: true,
+    },
+  },
   addons: {
     select: {
       id: true,
@@ -1238,7 +1246,7 @@ export const prismaRepository: DataRepository = {
           where: { id: data.appointmentId },
           include: {
             dentist: { select: { id: true, clinicCommissionPercent: true } },
-            treatment: { select: { id: true, clinicKeepsAll: true } },
+            treatment: { select: { id: true, clinicKeepsAll: true, clinicCommissionPercent: true } },
             // Lista, no uno: una factura puede pagarse en dos partes.
             payments: { where: { status: 'PAID' }, select: { amountCents: true } },
             // Los procedimientos añadidos durante la consulta: cada uno con su
@@ -2203,7 +2211,7 @@ export const prismaRepository: DataRepository = {
             id: true,
             basePriceCents: true,
             isPriceVariable: true,
-            clinicKeepsAll: true,
+            clinicKeepsAll: true, clinicCommissionPercent: true,
           },
         });
 
@@ -2876,7 +2884,7 @@ export const prismaRepository: DataRepository = {
             dentistId: true,
             agreedPriceCents: true,
             dentist: { select: { clinicCommissionPercent: true } },
-            treatment: { select: { id: true, name: true, clinicKeepsAll: true } },
+            treatment: { select: { id: true, name: true, clinicKeepsAll: true, clinicCommissionPercent: true } },
             addons: {
               select: {
                 treatmentId: true,
@@ -2915,7 +2923,7 @@ export const prismaRepository: DataRepository = {
             unitPriceCents: cita.agreedPriceCents,
             commissionPercent: cita.treatment.clinicKeepsAll
               ? 100
-              : cita.dentist.clinicCommissionPercent,
+              : (cita.treatment.clinicCommissionPercent ?? cita.dentist.clinicCommissionPercent),
             sortOrder: 0,
           },
         });
@@ -3050,7 +3058,7 @@ export const prismaRepository: DataRepository = {
             dentistId: true,
             appointmentId: true,
             lines: {
-              select: { id: true, treatmentId: true, treatment: { select: { clinicKeepsAll: true } } },
+              select: { id: true, treatmentId: true, treatment: { select: { clinicKeepsAll: true, clinicCommissionPercent: true } } },
             },
             payments: { where: { status: 'PAID' }, select: { id: true, payoutId: true } },
           },
@@ -3090,7 +3098,10 @@ export const prismaRepository: DataRepository = {
                 })
               : null;
             comision = calcularComision({
-              tratamiento: { clinicKeepsAll: linea.treatment?.clinicKeepsAll ?? false },
+              tratamiento: {
+                clinicKeepsAll: linea.treatment?.clinicKeepsAll ?? false,
+                clinicCommissionPercent: linea.treatment?.clinicCommissionPercent ?? null,
+              },
               acuerdo: acuerdo?.status === 'APPROVED' ? acuerdo : null,
               comisionOdontologo: odontologa.clinicCommissionPercent,
               comisionPorDefecto: porDefecto ?? 60,
@@ -3169,7 +3180,7 @@ export const prismaRepository: DataRepository = {
             select: {
               name: true,
               basePriceCents: true,
-              clinicKeepsAll: true,
+              clinicKeepsAll: true, clinicCommissionPercent: true,
               isPriceVariable: true,
             },
           });
@@ -3789,7 +3800,7 @@ export const prismaRepository: DataRepository = {
         async function agregarLineaDeTratamiento(treatmentId: string) {
           const tratamiento = await tx.treatment.findUnique({
             where: { id: treatmentId },
-            select: { name: true, basePriceCents: true, clinicKeepsAll: true, isPriceVariable: true },
+            select: { name: true, basePriceCents: true, clinicKeepsAll: true, clinicCommissionPercent: true, isPriceVariable: true },
           });
           if (!tratamiento) return null;
 

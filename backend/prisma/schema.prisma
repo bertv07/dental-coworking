@@ -611,6 +611,14 @@ model Treatment {
   /// odontólogo. Repartir 40/60 ahí sería pagarle por un trabajo que no hizo.
   clinicKeepsAll Boolean @default(false)
 
+  /// Porcentaje que se queda la clínica en ESTE tratamiento, cuando no es el
+  /// habitual. `null` = sin porcentaje propio: manda el de la odontóloga.
+  ///
+  /// Se edita en Precios. Gana a la comisión general de la odontóloga, pero
+  /// no a un acuerdo aprobado de ella para este tratamiento ni al ajuste que
+  /// recepción haga en una factura concreta. Ver `domain/pricing.ts`.
+  clinicCommissionPercent Int?
+
   isActive Boolean @default(true)
 
   appointments     Appointment[]

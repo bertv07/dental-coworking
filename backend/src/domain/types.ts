@@ -170,6 +170,11 @@ export interface Treatment {
    * Es el caso de la radiografía, que la hace el equipo de la clínica.
    */
   clinicKeepsAll: boolean;
+  /**
+   * % de la clínica propio de este tratamiento. `null` = no tiene: manda el
+   * de la odontóloga o el de la clínica.
+   */
+  clinicCommissionPercent: number | null;
   isActive: boolean;
 }
 
@@ -476,7 +481,11 @@ export interface AppointmentWithRelations extends Appointment {
   patient: Pick<Patient, 'id' | 'fullName' | 'phoneE164'>;
   dentist: Pick<Dentist, 'id' | 'fullName'>;
   room: Pick<Room, 'id' | 'name' | 'code'>;
-  treatment: Pick<Treatment, 'id' | 'name' | 'durationMinutes'>;
+  /**
+   * Con sus dos reglas de reparto, para que la vista previa del cobro
+   * enseñe el mismo porcentaje que va a aplicar el servidor.
+   */
+  treatment: Pick<Treatment, 'id' | 'name' | 'durationMinutes' | 'clinicKeepsAll' | 'clinicCommissionPercent'>;
   /**
    * Procedimientos añadidos durante la consulta.
    *
