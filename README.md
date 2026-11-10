@@ -7,14 +7,20 @@ Gestión clínica odontológica con automatización de WhatsApp.
 
 ## 1. Credenciales de acceso
 
-Las contraseñas están **hasheadas con Argon2id en PostgreSQL**. Estas son las
-que genera el seed:
+Las contraseñas están **hasheadas con Argon2id en PostgreSQL** y **no se
+publican en este repositorio**. Hay tres roles:
 
-| Rol | Correo | Contraseña |
-|---|---|---|
-| Super Admin | `admin@dentalcoworking.com.ve` | `SuperAdmin2026!` |
-| Asistente | `recepcion@dentalcoworking.com.ve` | `Asistente2026!` |
-| Odontóloga | `gabriela.ferreira@dentalcoworking.com.ve` | `Odontologa2026!` |
+| Rol | Cuenta |
+|---|---|
+| Super Admin | la que crees con `ADMIN_EMAIL` / `ADMIN_PASSWORD` |
+| Asistente | la que crees con `ASSISTANT_EMAIL` / `ASSISTANT_PASSWORD` |
+| Odontólogo | la que crees con `DENTIST_EMAIL` / `DENTIST_PASSWORD` |
+
+En el servidor se crean con `scripts/crear-usuarios.mjs` (ver «Despliegue en
+EasyPanel»): el script exige que pases cada contraseña por variable de
+entorno, con un mínimo de 12 caracteres, y se niega a correr sin ellas.
+En local, el seed de desarrollo usa claves de prueba que sólo existen en tu
+máquina; nunca uses esas claves en un servidor.
 
 Cada rol aterriza en una pantalla distinta: Super Admin → `/dashboard`,
 Asistente → `/inicio`, Odontólogo → `/agenda`.
@@ -356,7 +362,10 @@ el sistema cuando el correo no existe en la base.
 Desde `panel` → Console:
 
 ```bash
-node scripts/crear-usuarios.mjs
+ADMIN_EMAIL="tu@correo.com" ADMIN_PASSWORD="una-contraseña-larga" ADMIN_NAME="Tu Nombre" \
+ASSISTANT_PASSWORD="otra-contraseña-larga" \
+DENTIST_PASSWORD="otra-contraseña-más" \
+  node scripts/crear-usuarios.mjs
 ```
 
 Crea las tres cuentas de la sección 1. Es **idempotente**: ejecutarlo otra vez
@@ -364,18 +373,12 @@ no duplica nada — actualiza la contraseña, desbloquea la cuenta y cierra las
 sesiones abiertas. Sirve igual para el primer arranque que para recuperar el
 acceso cuando alguien olvide su clave.
 
-Para poner tus propias credenciales desde el principio:
-
-```bash
-ADMIN_EMAIL="tu@correo.com" \
-ADMIN_PASSWORD="una-contraseña-larga" \
-ADMIN_NAME="Tu Nombre" \
-  node scripts/crear-usuarios.mjs
-```
-
-Acepta lo mismo con los prefijos `ASSISTANT_` y `DENTIST_`, y `*_PHONE` para
-el WhatsApp del personal — es lo que permite al bot reconocer quién le
-escribe. Mínimo 12 caracteres; con menos, el script se niega.
+**Las tres contraseñas son obligatorias** (`ADMIN_PASSWORD`,
+`ASSISTANT_PASSWORD`, `DENTIST_PASSWORD`): el script no trae ninguna por
+defecto y se niega a correr si falta alguna o tiene menos de 12 caracteres.
+Los correos y nombres sí tienen valores por defecto; cámbialos con los
+prefijos `ADMIN_`, `ASSISTANT_` y `DENTIST_`, y usa `*_PHONE` para el
+WhatsApp del personal — es lo que permite al bot reconocer quién le escribe.
 
 > **`npm run db:seed` no funciona en el servidor.** Ese seed está en
 > TypeScript y necesita `tsx`, que es dependencia de desarrollo y no viaja a

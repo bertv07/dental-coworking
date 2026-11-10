@@ -66,21 +66,24 @@ const ARGON2_OPTIONS = {
 const CUENTAS = [
   {
     email: process.env.ADMIN_EMAIL ?? 'admin@dentalcoworking.com.ve',
-    password: process.env.ADMIN_PASSWORD ?? 'SuperAdmin2026!',
+    password: process.env.ADMIN_PASSWORD,
+    passwordVar: 'ADMIN_PASSWORD',
     fullName: process.env.ADMIN_NAME ?? 'Administrador',
     role: 'SUPER_ADMIN',
     phoneE164: process.env.ADMIN_PHONE ?? null,
   },
   {
     email: process.env.ASSISTANT_EMAIL ?? 'recepcion@dentalcoworking.com.ve',
-    password: process.env.ASSISTANT_PASSWORD ?? 'Asistente2026!',
+    password: process.env.ASSISTANT_PASSWORD,
+    passwordVar: 'ASSISTANT_PASSWORD',
     fullName: process.env.ASSISTANT_NAME ?? 'Recepción',
     role: 'ASSISTANT',
     phoneE164: process.env.ASSISTANT_PHONE ?? null,
   },
   {
     email: process.env.DENTIST_EMAIL ?? 'odontologo@dentalcoworking.com.ve',
-    password: process.env.DENTIST_PASSWORD ?? 'Odontologo2026!',
+    password: process.env.DENTIST_PASSWORD,
+    passwordVar: 'DENTIST_PASSWORD',
     fullName: process.env.DENTIST_NAME ?? 'Odontólogo',
     role: 'DENTIST',
     phoneE164: process.env.DENTIST_PHONE ?? null,
@@ -140,6 +143,14 @@ async function main() {
   console.log('Creando cuentas de acceso…\n');
 
   for (const cuenta of CUENTAS) {
+    // Sin contraseña por defecto: una clave fija en el código es pública en
+    // cuanto el repositorio lo es, y cualquiera podría entrar al panel.
+    if (!cuenta.password) {
+      throw new Error(
+        `Falta la contraseña de ${cuenta.email}. Pásala en la variable ` +
+          `${cuenta.passwordVar} (mínimo 12 caracteres).`,
+      );
+    }
     if (cuenta.password.length < 12) {
       throw new Error(
         `La contraseña de ${cuenta.email} tiene ${cuenta.password.length} caracteres. ` +
