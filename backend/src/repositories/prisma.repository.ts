@@ -2132,11 +2132,46 @@ export const prismaRepository: DataRepository = {
 
   async updateAppointmentStatus({ id, status, cancellationReason }) {
     try {
-      const appointment = await prisma.appointment.update({
-        where: { id },
-        data: { status, cancellationReason },
+      return await prisma.$transaction(async (tx) => {
+        /*
+         * Cancelar o marcar «no asistió» significa que no hay nada que cobrar.
+         *
+         *  · Si ya entró dinero por esta cita (directo o por su factura), NO se
+         *    deja cancelar: la caja seguiría contando ese cobro en una cita
+         *    cancelada y el arqueo no cuadraría. Primero hay que devolverlo.
+         *  · Si tiene una factura abierta sin cobros, se anula aquí mismo, para
+         *    que no siga apareciendo como saldo pendiente del paciente.
+         */
+        if (status === 'CANCELLED' || status === 'NO_SHOW') {
+          const cobrado = await tx.payment.count({
+            where: {
+              status: 'PAID',
+              OR: [{ appointmentId: id }, { invoice: { appointmentId: id } }],
+            },
+          });
+          if (cobrado > 0) {
+            return { ok: false as const, reason: 'DUPLICATE' as const, field: 'payments' };
+          }
+
+          await tx.invoice.updateMany({
+            where: { appointmentId: id, status: 'OPEN' },
+            data: {
+              status: 'VOID',
+              voidedAt: new Date(),
+              voidReason:
+                status === 'CANCELLED'
+                  ? `Cita cancelada: ${cancellationReason ?? 'sin motivo'}`
+                  : 'El paciente no asistió',
+            },
+          });
+        }
+
+        const appointment = await tx.appointment.update({
+          where: { id },
+          data: { status, cancellationReason },
+        });
+        return { ok: true as const, data: appointment };
       });
-      return { ok: true, data: appointment };
     } catch (error) {
       return toWriteFailure(error);
     }

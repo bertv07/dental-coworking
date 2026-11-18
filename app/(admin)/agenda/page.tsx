@@ -16,6 +16,7 @@ import {
   addDays,
   clinicDayKey,
   clinicMinuteOfDay,
+  clinicWallClockToInstant,
   parseDayKey,
   startOfWeek,
   weekDays,
@@ -306,8 +307,13 @@ async function ClinicAgendaView({
       ? searchParams.paciente
       : null;
 
-  const from = new Date();
-  const to = new Date(from.getTime() + 14 * 24 * 60 * 60 * 1000);
+  // Desde las 00:00 de HOY (hora de la clínica), no desde «ahora»: si no, las
+  // citas de esta mañana que ya pasaron desaparecen de la agenda y no hay
+  // forma de marcarlas como «no asistió» o cancelarlas, aunque Caja sí las
+  // muestre como pendientes de cobro.
+  const todayKey = clinicDayKey(new Date());
+  const from = clinicWallClockToInstant(todayKey, 0);
+  const to = clinicWallClockToInstant(addDays(todayKey, 15), 0);
 
   // Los catálogos alimentan los desplegables del formulario. Se piden en
   // paralelo con las citas: son consultas independientes.

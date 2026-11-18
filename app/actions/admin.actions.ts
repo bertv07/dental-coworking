@@ -966,6 +966,8 @@ export async function setAppointmentStatusAction(input: unknown): Promise<Action
     input,
     revalidate: '/agenda',
     auditAction: 'appointment.status_changed',
+    conflictMessage:
+      'Esta cita ya tiene un cobro registrado. Para cancelarla, primero devuelve el pago desde Facturas.',
     handler: (data) =>
       repository.updateAppointmentStatus({
         id: data.id,
@@ -985,6 +987,10 @@ export async function setAppointmentStatusAction(input: unknown): Promise<Action
    * pregunta ni preguntarla cuando no toca.
    */
   if (resultado.ok) {
+    // La caja lista los cobros pendientes del día: una cita cancelada o
+    // «no asistió» tiene que desaparecer de ahí al instante.
+    revalidatePath('/caja');
+    revalidatePath('/facturas');
     const parsed = appointmentStatusSchema.safeParse(input);
     if (parsed.success && parsed.data.status === 'COMPLETED') {
       await preguntarPorOdontologoDePreferencia({ appointmentId: parsed.data.id });
